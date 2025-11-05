@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use baygraph::engine::errors::ExecError;
-use baygraph::engine::flow_exec::run_flow;
+use baygraph::engine::flow_exec::run_flow_with_builder;
 use baygraph::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, EdgePosterior, GaussianPosterior, NodeData, NodeId, EdgeId};
 use baygraph::frontend::ast::*;
 
@@ -17,23 +17,23 @@ fn phase4_exit_criteria_complete_flow_execution() {
     let program = build_complete_program();
 
     // Run the flow with a custom evidence builder
-    let result = run_flow(&program, "Demo", &build_evidence_graph).expect("flow execution succeeds");
+    let result = run_flow_with_builder(&program, "Demo", &build_evidence_graph, None).expect("flow execution succeeds");
 
     // VERIFY 1: Can produce a BeliefGraph from evidence
     let base_graph = result.graphs.get("base").expect("base graph exists");
-    assert_eq!(base_graph.nodes.len(), 3, "base graph has 3 nodes");
-    assert_eq!(base_graph.edges.len(), 3, "base graph has 3 edges initially");
+    assert_eq!(base_graph.nodes().len(), 3, "base graph has 3 nodes");
+    assert_eq!(base_graph.edges().len(), 3, "base graph has 3 edges initially");
 
     // VERIFY 2: Can apply transforms in a pipeline
     let cleaned_graph = result.graphs.get("cleaned").expect("cleaned graph exists");
-    assert_eq!(cleaned_graph.nodes.len(), 3, "nodes preserved through pipeline");
+    assert_eq!(cleaned_graph.nodes().len(), 3, "nodes preserved through pipeline");
 
     // VERIFY 3: Can verify structure - edges pruned correctly
-    assert!(cleaned_graph.edges.len() < base_graph.edges.len(), "edges were pruned");
-    assert_eq!(cleaned_graph.edges.len(), 1, "only high-probability edge remains");
+    assert!(cleaned_graph.edges().len() < base_graph.edges().len(), "edges were pruned");
+    assert_eq!(cleaned_graph.edges().len(), 1, "only high-probability edge remains");
 
     // VERIFY 4: Can verify beliefs - check edge probabilities
-    let remaining_edge = &cleaned_graph.edges[0];
+    let remaining_edge = &cleaned_graph.edges()[0];
     let prob = cleaned_graph.prob_mean(remaining_edge.id).expect("can read probability");
     assert!(prob > 0.8, "remaining edge has high probability ({})", prob);
 
@@ -44,7 +44,7 @@ fn phase4_exit_criteria_complete_flow_execution() {
 
     // VERIFY 6: Export works - graph available by alias
     let exported = result.exports.get("demo_output").expect("exported graph exists");
-    assert_eq!(exported.edges.len(), cleaned_graph.edges.len(), "exported graph matches cleaned graph");
+    assert_eq!(exported.edges().len(), cleaned_graph.edges().len(), "exported graph matches cleaned graph");
 
     println!("✓ Phase 4 Exit Criteria Met:");
     println!("  - Can run a simple flow");
@@ -247,28 +247,28 @@ fn build_evidence_graph(_evidence: &EvidenceDef) -> Result<BeliefGraph, ExecErro
 fn phase4_demonstrates_immutable_graph_transforms() {
     // Demonstrate that transforms create new graphs (immutability)
     let program = build_complete_program();
-    let result = run_flow(&program, "Demo", &build_evidence_graph).expect("flow succeeds");
+    let result = run_flow_with_builder(&program, "Demo", &build_evidence_graph, None).expect("flow succeeds");
 
     let base = result.graphs.get("base").expect("base exists");
     let cleaned = result.graphs.get("cleaned").expect("cleaned exists");
 
     // Base graph unchanged - has all original edges
-    assert_eq!(base.edges.len(), 3, "base graph unchanged");
+    assert_eq!(base.edges().len(), 3, "base graph unchanged");
 
     // Cleaned graph is different - edges removed
-    assert_eq!(cleaned.edges.len(), 1, "cleaned graph has fewer edges");
+    assert_eq!(cleaned.edges().len(), 1, "cleaned graph has fewer edges");
 
     // This demonstrates immutability between transforms
     println!("✓ Graph immutability demonstrated:");
-    println!("  - Base graph: {} edges", base.edges.len());
-    println!("  - Cleaned graph: {} edges", cleaned.edges.len());
+    println!("  - Base graph: {} edges", base.edges().len());
+    println!("  - Cleaned graph: {} edges", cleaned.edges().len());
 }
 
 #[test]
 fn phase4_demonstrates_multiple_transform_pipeline() {
     // Demonstrate that multiple transforms can be chained
     let program = build_complete_program();
-    let result = run_flow(&program, "Demo", &build_evidence_graph).expect("flow succeeds");
+    let result = run_flow_with_builder(&program, "Demo", &build_evidence_graph, None).expect("flow succeeds");
 
     let cleaned = result.graphs.get("cleaned").expect("cleaned exists");
 
@@ -278,7 +278,7 @@ fn phase4_demonstrates_multiple_transform_pipeline() {
     // 3. Prune edges (removes edges with prob < 0.01)
 
     // Result: only the high-prob edge remains
-    assert_eq!(cleaned.edges.len(), 1);
+    assert_eq!(cleaned.edges().len(), 1);
 
     println!("✓ Multi-transform pipeline demonstrated:");
     println!("  - from_evidence: 3 edges");

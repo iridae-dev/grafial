@@ -10,6 +10,8 @@ use crate::frontend::ast::ExprAst;
 pub enum GraphExprIR {
     /// Build a graph from named evidence.
     FromEvidence(String),
+    /// Import a graph exported from another flow.
+    FromGraph(String),
     /// Start from an existing named graph within the flow and apply transforms.
     Pipeline { start_graph: String, transforms: Vec<TransformIR> },
 }
@@ -19,6 +21,10 @@ pub enum GraphExprIR {
 pub enum TransformIR {
     /// Apply a rule by name (mode may be overridden in future phases).
     ApplyRule { rule: String, mode_override: Option<String> },
+    /// Apply multiple rules sequentially.
+    ApplyRuleset { rules: Vec<String> },
+    /// Save a snapshot of the current graph state.
+    Snapshot { name: String },
     /// Prune edges of a given type based on a predicate expression.
     PruneEdges { edge_type: String, predicate: ExprAst },
 }
@@ -49,12 +55,21 @@ impl From<&crate::frontend::ast::FlowDef> for FlowIR {
                     crate::frontend::ast::GraphExpr::FromEvidence { evidence } => {
                         GraphExprIR::FromEvidence(evidence.clone())
                     }
+                    crate::frontend::ast::GraphExpr::FromGraph { alias } => {
+                        GraphExprIR::FromGraph(alias.clone())
+                    }
                     crate::frontend::ast::GraphExpr::Pipeline { start, transforms } => {
                         let ts = transforms
                             .iter()
                             .map(|t| match t {
                                 crate::frontend::ast::Transform::ApplyRule { rule } => {
                                     TransformIR::ApplyRule { rule: rule.clone(), mode_override: None }
+                                }
+                                crate::frontend::ast::Transform::ApplyRuleset { rules } => {
+                                    TransformIR::ApplyRuleset { rules: rules.clone() }
+                                }
+                                crate::frontend::ast::Transform::Snapshot { name } => {
+                                    TransformIR::Snapshot { name: name.clone() }
                                 }
                                 crate::frontend::ast::Transform::PruneEdges { edge_type, predicate } => {
                                     TransformIR::PruneEdges { edge_type: edge_type.clone(), predicate: predicate.clone() }

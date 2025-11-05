@@ -142,6 +142,11 @@ pub fn eval_expr_core<C: ExprContext>(
             let r = eval_expr_core(right, graph, ctx)?;
             eval_binary_op(*op, l, r)
         }
+        ExprAst::Exists { .. } => {
+            // Exists subqueries are handled specially in rule execution
+            // This case should not be reached in normal evaluation
+            Err(ExecError::Internal("Exists subqueries must be handled by RuleExprContext".into()))
+        }
     }
 }
 

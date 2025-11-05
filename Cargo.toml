@@ -11,16 +11,18 @@ categories = ["science", "parsing"]
 [features]
 default = []
 tracing = ["dep:tracing"]
-serde = ["dep:serde", "dep:serde_json"]
+serde = ["dep:serde", "dep:serde_json", "dep:bincode"]
 rayon = ["dep:rayon"]
 
 [dependencies]
 thiserror = "1"
 pest = "2"
 pest_derive = "2"
+smallvec = "1.13"
 tracing = { version = "0.1", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
+bincode = { version = "1", optional = true }
 rayon = { version = "1", optional = true }
 
 [dev-dependencies]

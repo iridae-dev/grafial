@@ -94,6 +94,12 @@ pub fn eval_metric_expr(
     ctx: &MetricContext,
 ) -> Result<f64, ExecError> {
     match expr {
+        ExprAst::Exists { .. } => {
+            // Exists subqueries are not supported in metric expressions
+            return Err(ExecError::ValidationError(
+                "exists subqueries not supported in metric expressions".into()
+            ));
+        }
         ExprAst::Number(v) => Ok(*v),
         ExprAst::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
         ExprAst::Var(name) => ctx
@@ -155,7 +161,7 @@ impl MetricFn for CountNodes {
         let label = parse_label(args)?;
         let where_expr = args.named.get("where").copied();
         let mut count = 0usize;
-        for n in nodes_sorted_by_id(&graph.nodes) {
+        for n in nodes_sorted_by_id(graph.nodes()) {
             if n.label != label { continue; }
             if let Some(w) = where_expr {
                 let wv = eval_node_expr(w, graph, n.id, _ctx, None)?;
@@ -183,7 +189,8 @@ impl MetricFn for SumNodes {
         {
             // Phase 7: Parallel implementation with deterministic pairwise summation
             // See baygraph_design.md:518-521
-            let nodes: Vec<_> = nodes_sorted_by_id(&graph.nodes)
+            let nodes: Vec<_> = nodes_sorted_by_id(graph.nodes())
+                .into_iter()
                 .filter(|n| n.label == label)
                 .collect();
 
@@ -210,7 +217,7 @@ impl MetricFn for SumNodes {
             // See: Kahan, W. (1965). "Further remarks on reducing truncation errors"
             let mut sum = 0.0f64;
             let mut c = 0.0f64;  // Running compensation for lost low-order bits
-            for n in nodes_sorted_by_id(&graph.nodes) {
+            for n in nodes_sorted_by_id(graph.nodes()) {
                 if n.label != label { continue; }
                 let nid = n.id;
                 if let Some(w) = where_expr {
@@ -268,7 +275,7 @@ impl MetricFn for FoldNodes {
 
         // Collect candidate nodes (filtered), with order key
         let mut items: Vec<(NodeId, f64)> = Vec::new();
-        for n in nodes_sorted_by_id(&graph.nodes) {
+        for n in nodes_sorted_by_id(graph.nodes()) {
             if n.label != label { continue; }
             let nid = n.id;
             if let Some(w) = where_expr {
@@ -333,7 +340,7 @@ impl MetricFn for AvgDegree {
         let adj = graph.adjacency_outgoing_by_type();
         // Cache the key to avoid cloning edge_type for each node
         let key_template = (NodeId(0), edge_type.clone());
-        for n in nodes_sorted_by_id(&graph.nodes) {
+        for n in nodes_sorted_by_id(graph.nodes()) {
             if n.label != label { continue; }
             count_nodes += 1;
             let mut d = 0usize;
@@ -507,6 +514,13 @@ mod tests {
     use crate::engine::graph::{BeliefGraph, EdgeData, EdgeId, GaussianPosterior, NodeData, BetaPosterior};
 
     fn demo_graph() -> BeliefGraph {
+        let mut g = demo_graph_impl();
+        // Apply delta to ensure all items are in base for iteration
+        g.ensure_owned();
+        g
+    }
+    
+    fn demo_graph_impl() -> BeliefGraph {
         use std::collections::HashMap;
         let mut g = BeliefGraph::default();
         g.insert_node(NodeData {
@@ -872,6 +886,9 @@ mod tests {
             label: "Test".into(),
             attrs: HashMap::from([("x".into(), GaussianPosterior { mean: 2.0, precision: 1.0 })]),
         });
+        
+        // Apply delta to ensure all items are in base for iteration
+        g.ensure_owned();
 
         let reg = MetricRegistry::with_builtins();
         let ctx = MetricContext::default();

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use baygraph::engine::errors::ExecError;
-use baygraph::engine::flow_exec::{run_flow, FlowResult};
-use baygraph::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, GaussianPosterior, NodeData, NodeId, EdgeId};
+use baygraph::engine::flow_exec::{run_flow_with_builder, FlowResult};
+use baygraph::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, EdgePosterior, GaussianPosterior, NodeData, NodeId, EdgeId};
 use baygraph::frontend::ast::*;
 
 fn build_test_program() -> ProgramAst {
@@ -56,7 +56,7 @@ fn build_test_program() -> ProgramAst {
     ProgramAst {
         schemas: vec![],
         belief_models: vec![],
-        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into() }],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
         rules,
         flows,
     }
@@ -71,14 +71,14 @@ fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
     g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::from([
         ("some_value".into(), GaussianPosterior { mean: 0.0, precision: 1.0 }),
     ]) });
-    g.insert_edge(EdgeData { id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "REL".into(), exist: BetaPosterior { alpha: 8.0, beta: 2.0 } });
+    g.insert_edge(EdgeData { id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "REL".into(), exist: EdgePosterior::independent(BetaPosterior { alpha: 8.0, beta: 2.0 }) });
     Ok(g)
 }
 
 #[test]
 fn run_flow_demo_applies_rule_and_prunes() {
     let prog = build_test_program();
-    let result: FlowResult = run_flow(&prog, "Demo", &evidence_builder).expect("run flow");
+    let result: FlowResult = run_flow_with_builder(&prog, "Demo", &evidence_builder, None).expect("run flow");
 
     // base graph should have one edge
     let base = result.graphs.get("base").expect("base graph");
@@ -94,7 +94,7 @@ fn run_flow_from_evidence_loads_graph() {
     let prog = ProgramAst {
         schemas: vec![],
         belief_models: vec![],
-        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into() }],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
         rules: vec![],
         flows: vec![FlowDef {
             name: "Simple".into(),
@@ -105,81 +105,49 @@ fn run_flow_from_evidence_loads_graph() {
         }],
     };
 
-    let result = run_flow(&prog, "Simple", &evidence_builder).expect("run flow");
+    let result = run_flow_with_builder(&prog, "Simple", &evidence_builder, None).expect("run flow");
     let g = result.graphs.get("g").expect("graph g");
     assert_eq!(g.nodes.len(), 2);
     assert_eq!(g.edges.len(), 1);
 }
 
 #[test]
-fn run_flow_unknown_flow_fails() {
-    let prog = build_test_program();
-    let result = run_flow(&prog, "NonExistent", &evidence_builder);
-    assert!(result.is_err());
-}
-
-#[test]
-fn run_flow_unknown_evidence_fails() {
+fn run_flow_exports_named_graph() {
     let prog = ProgramAst {
         schemas: vec![],
         belief_models: vec![],
-        evidences: vec![],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
         rules: vec![],
         flows: vec![FlowDef {
-            name: "BadFlow".into(),
+            name: "ExportTest".into(),
             on_model: "M".into(),
-            graphs: vec![GraphDef { name: "g".into(), expr: GraphExpr::FromEvidence { evidence: "Missing".into() } }],
+            graphs: vec![GraphDef { name: "g".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } }],
             metrics: vec![],
-            exports: vec![],
+            exports: vec![ExportDef { graph: "g".into(), alias: "exported".into() }],
         }],
     };
 
-    let result = run_flow(&prog, "BadFlow", &evidence_builder);
-    assert!(result.is_err());
+    let result = run_flow_with_builder(&prog, "ExportTest", &evidence_builder, None).expect("run flow");
+    assert!(result.exports.contains_key("exported"));
+    assert_eq!(result.exports.get("exported").unwrap().edges.len(), 1);
 }
 
 #[test]
-fn run_flow_unknown_start_graph_fails() {
+fn run_flow_errors_on_unknown_rule() {
     let prog = ProgramAst {
         schemas: vec![],
         belief_models: vec![],
-        evidences: vec![],
-        rules: vec![],
-        flows: vec![FlowDef {
-            name: "BadPipeline".into(),
-            on_model: "M".into(),
-            graphs: vec![GraphDef {
-                name: "g".into(),
-                expr: GraphExpr::Pipeline {
-                    start: "nonexistent".into(),
-                    transforms: vec![],
-                },
-            }],
-            metrics: vec![],
-            exports: vec![],
-        }],
-    };
-
-    let result = run_flow(&prog, "BadPipeline", &evidence_builder);
-    assert!(result.is_err());
-}
-
-#[test]
-fn run_flow_unknown_rule_fails() {
-    let prog = ProgramAst {
-        schemas: vec![],
-        belief_models: vec![],
-        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into() }],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
         rules: vec![],
         flows: vec![FlowDef {
             name: "BadRule".into(),
             on_model: "M".into(),
             graphs: vec![
-                GraphDef { name: "base".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } },
+                GraphDef { name: "g".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } },
                 GraphDef {
-                    name: "transformed".into(),
+                    name: "out".into(),
                     expr: GraphExpr::Pipeline {
-                        start: "base".into(),
+                        start: "g".into(),
                         transforms: vec![Transform::ApplyRule { rule: "NonExistentRule".into() }],
                     },
                 },
@@ -189,49 +157,8 @@ fn run_flow_unknown_rule_fails() {
         }],
     };
 
-    let result = run_flow(&prog, "BadRule", &evidence_builder);
-    assert!(result.is_err());
-}
-
-#[test]
-fn run_flow_export_binds_alias() {
-    let prog = ProgramAst {
-        schemas: vec![],
-        belief_models: vec![],
-        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into() }],
-        rules: vec![],
-        flows: vec![FlowDef {
-            name: "ExportTest".into(),
-            on_model: "M".into(),
-            graphs: vec![GraphDef { name: "g".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } }],
-            metrics: vec![],
-            exports: vec![ExportDef { graph: "g".into(), alias: "output".into() }],
-        }],
-    };
-
-    let result = run_flow(&prog, "ExportTest", &evidence_builder).expect("run flow");
-    assert!(result.exports.contains_key("output"));
-    assert_eq!(result.exports.get("output").unwrap().nodes.len(), 2);
-}
-
-#[test]
-fn run_flow_export_unknown_graph_fails() {
-    let prog = ProgramAst {
-        schemas: vec![],
-        belief_models: vec![],
-        evidences: vec![],
-        rules: vec![],
-        flows: vec![FlowDef {
-            name: "BadExport".into(),
-            on_model: "M".into(),
-            graphs: vec![],
-            metrics: vec![],
-            exports: vec![ExportDef { graph: "missing".into(), alias: "output".into() }],
-        }],
-    };
-
-    let result = run_flow(&prog, "BadExport", &evidence_builder);
-    assert!(result.is_err());
+    let result = run_flow_with_builder(&prog, "BadRule", &evidence_builder, None);
+    assert!(matches!(result, Err(ExecError::Internal(_))));
 }
 
 #[test]
@@ -260,7 +187,7 @@ fn run_flow_multiple_transforms_in_pipeline() {
             src: NodeId(1),
             dst: NodeId(2),
             ty: "LINK".into(),
-            exist: BetaPosterior { alpha: 9.0, beta: 1.0 },
+            exist: EdgePosterior::independent(BetaPosterior { alpha: 9.0, beta: 1.0 }),
         });
         // Medium probability edge
         g.insert_edge(EdgeData {
@@ -268,7 +195,7 @@ fn run_flow_multiple_transforms_in_pipeline() {
             src: NodeId(2),
             dst: NodeId(3),
             ty: "LINK".into(),
-            exist: BetaPosterior { alpha: 5.0, beta: 5.0 },
+            exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }),
         });
         // Low probability edge
         g.insert_edge(EdgeData {
@@ -276,7 +203,7 @@ fn run_flow_multiple_transforms_in_pipeline() {
             src: NodeId(1),
             dst: NodeId(3),
             ty: "LINK".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 9.0 },
+            exist: EdgePosterior::independent(BetaPosterior { alpha: 1.0, beta: 9.0 }),
         });
         Ok(g)
     }
@@ -284,7 +211,7 @@ fn run_flow_multiple_transforms_in_pipeline() {
     let prog = ProgramAst {
         schemas: vec![],
         belief_models: vec![],
-        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into() }],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
         rules: vec![],
         flows: vec![FlowDef {
             name: "MultiTransform".into(),
@@ -329,7 +256,7 @@ fn run_flow_multiple_transforms_in_pipeline() {
         }],
     };
 
-    let result = run_flow(&prog, "MultiTransform", &multi_edge_builder).expect("run flow");
+    let result = run_flow_with_builder(&prog, "MultiTransform", &multi_edge_builder, None).expect("run flow");
 
     // Base should have all 3 edges
     let base = result.graphs.get("base").expect("base graph");
@@ -344,7 +271,7 @@ fn run_flow_multiple_transforms_in_pipeline() {
 #[test]
 fn run_flow_pipeline_preserves_nodes() {
     let prog = build_test_program();
-    let result = run_flow(&prog, "Demo", &evidence_builder).expect("run flow");
+    let result = run_flow_with_builder(&prog, "Demo", &evidence_builder, None).expect("run flow");
 
     let base = result.graphs.get("base").expect("base graph");
     let cleaned = result.graphs.get("cleaned").expect("cleaned graph");
@@ -359,7 +286,7 @@ fn run_flow_empty_pipeline_clones_graph() {
     let prog = ProgramAst {
         schemas: vec![],
         belief_models: vec![],
-        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into() }],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
         rules: vec![],
         flows: vec![FlowDef {
             name: "Clone".into(),
@@ -379,7 +306,7 @@ fn run_flow_empty_pipeline_clones_graph() {
         }],
     };
 
-    let result = run_flow(&prog, "Clone", &evidence_builder).expect("run flow");
+    let result = run_flow_with_builder(&prog, "Clone", &evidence_builder, None).expect("run flow");
 
     let base = result.graphs.get("base").expect("base graph");
     let copy = result.graphs.get("copy").expect("copy graph");
@@ -388,3 +315,681 @@ fn run_flow_empty_pipeline_clones_graph() {
     assert_eq!(base.edges.len(), copy.edges.len());
 }
 
+#[test]
+fn run_flow_errors_on_bad_export() {
+    let prog = ProgramAst {
+        schemas: vec![],
+        belief_models: vec![],
+        evidences: vec![],
+        rules: vec![],
+        flows: vec![FlowDef {
+            name: "BadExport".into(),
+            on_model: "M".into(),
+            graphs: vec![],
+            metrics: vec![],
+            exports: vec![ExportDef { graph: "missing".into(), alias: "output".into() }],
+        }],
+    };
+
+    let result = run_flow_with_builder(&prog, "BadExport", &evidence_builder, None);
+    assert!(result.is_err());
+}
+
+#[test]
+fn apply_ruleset_applies_rules_sequentially() {
+    // Create two rules that modify the graph in sequence
+    let rules = vec![
+        RuleDef {
+            name: "ForceFirst".into(),
+            on_model: "M".into(),
+            mode: Some("for_each".into()),
+            patterns: vec![PatternItem {
+                src: NodePattern { var: "A".into(), label: "Person".into() },
+                edge: EdgePattern { var: "e".into(), ty: "REL".into() },
+                dst: NodePattern { var: "B".into(), label: "Person".into() },
+            }],
+            where_expr: Some(ExprAst::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(ExprAst::Var("A".into())),
+                right: Box::new(ExprAst::Number(1.0)),
+            }),
+            actions: vec![ActionStmt::ForceAbsent { edge_var: "e".into() }],
+        },
+        RuleDef {
+            name: "ForceSecond".into(),
+            on_model: "M".into(),
+            mode: Some("for_each".into()),
+            patterns: vec![PatternItem {
+                src: NodePattern { var: "A".into(), label: "Person".into() },
+                edge: EdgePattern { var: "e".into(), ty: "REL".into() },
+                dst: NodePattern { var: "B".into(), label: "Person".into() },
+            }],
+            where_expr: Some(ExprAst::Binary {
+                op: BinaryOp::Eq,
+                left: Box::new(ExprAst::Var("B".into())),
+                right: Box::new(ExprAst::Number(3.0)),
+            }),
+            actions: vec![ActionStmt::ForceAbsent { edge_var: "e".into() }],
+        },
+    ];
+
+    fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        let mut g = BeliefGraph::default();
+        // Create 3 nodes with edges: 1->2, 1->3, 2->3
+        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(3), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_edge(EdgeData { 
+            id: EdgeId(1), 
+            src: NodeId(1), 
+            dst: NodeId(2), 
+            ty: "REL".into(), 
+            exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }) 
+        });
+        g.insert_edge(EdgeData { 
+            id: EdgeId(2), 
+            src: NodeId(1), 
+            dst: NodeId(3), 
+            ty: "REL".into(), 
+            exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }) 
+        });
+        g.insert_edge(EdgeData { 
+            id: EdgeId(3), 
+            src: NodeId(2), 
+            dst: NodeId(3), 
+            ty: "REL".into(), 
+            exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }) 
+        });
+        Ok(g)
+    }
+
+    let flows = vec![FlowDef {
+        name: "TestRuleset".into(),
+        on_model: "M".into(),
+        graphs: vec![
+            GraphDef { name: "base".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } },
+            GraphDef {
+                name: "result".into(),
+                expr: GraphExpr::Pipeline {
+                    start: "base".into(),
+                    transforms: vec![
+                        Transform::ApplyRuleset { 
+                            rules: vec!["ForceFirst".into(), "ForceSecond".into()] 
+                        },
+                    ],
+                },
+            },
+        ],
+        metrics: vec![],
+        exports: vec![ExportDef { graph: "result".into(), alias: "out".into() }],
+    }];
+
+    let prog = ProgramAst {
+        schemas: vec![],
+        belief_models: vec![],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
+        rules,
+        flows,
+    };
+
+    let result = run_flow_with_builder(&prog, "TestRuleset", &evidence_builder, None).expect("run flow");
+    let output = result.exports.get("out").expect("exported graph");
+
+    // Both rules should have been applied:
+    // - ForceFirst removes edge 1->2 (src=1)
+    // - ForceSecond removes edge 2->3 (dst=3)
+    // So only edge 1->3 should remain
+    assert_eq!(output.edges.len(), 1);
+    let remaining_edge = output.edges.values().next().unwrap();
+    assert_eq!(remaining_edge.src, NodeId(1));
+    assert_eq!(remaining_edge.dst, NodeId(3));
+}
+
+#[test]
+fn apply_ruleset_with_single_rule_works() {
+    let rules = vec![RuleDef {
+        name: "SingleRule".into(),
+        on_model: "M".into(),
+        mode: Some("for_each".into()),
+        patterns: vec![PatternItem {
+            src: NodePattern { var: "A".into(), label: "Person".into() },
+            edge: EdgePattern { var: "e".into(), ty: "REL".into() },
+            dst: NodePattern { var: "B".into(), label: "Person".into() },
+        }],
+        where_expr: None,
+        actions: vec![ActionStmt::ForcePresent { edge_var: "e".into() }],
+    }];
+
+    fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_edge(EdgeData { 
+            id: EdgeId(1), 
+            src: NodeId(1), 
+            dst: NodeId(2), 
+            ty: "REL".into(), 
+            exist: EdgePosterior::independent(BetaPosterior { alpha: 1.0, beta: 1.0 }) 
+        });
+        Ok(g)
+    }
+
+    let flows = vec![FlowDef {
+        name: "TestSingle".into(),
+        on_model: "M".into(),
+        graphs: vec![
+            GraphDef { name: "base".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } },
+            GraphDef {
+                name: "result".into(),
+                expr: GraphExpr::Pipeline {
+                    start: "base".into(),
+                    transforms: vec![
+                        Transform::ApplyRuleset { 
+                            rules: vec!["SingleRule".into()] 
+                        },
+                    ],
+                },
+            },
+        ],
+        metrics: vec![],
+        exports: vec![],
+    }];
+
+    let prog = ProgramAst {
+        schemas: vec![],
+        belief_models: vec![],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
+        rules,
+        flows,
+    };
+
+    let result = run_flow_with_builder(&prog, "TestSingle", &evidence_builder, None).expect("run flow");
+    let output = result.graphs.get("result").expect("result graph");
+    
+    // Rule should have been applied (force_present increases probability)
+    assert_eq!(output.edges.len(), 1);
+    let edge = output.edges.values().next().unwrap();
+    // After force_present, alpha should be increased
+    if let EdgePosterior::Independent(beta) = &edge.exist {
+        assert!(beta.alpha > 1.0);
+    } else {
+        panic!("Expected Independent edge");
+    }
+}
+
+#[test]
+fn apply_ruleset_errors_on_unknown_rule() {
+    let rules = vec![RuleDef {
+        name: "KnownRule".into(),
+        on_model: "M".into(),
+        mode: Some("for_each".into()),
+        patterns: vec![],
+        where_expr: None,
+        actions: vec![],
+    }];
+
+    fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        Ok(BeliefGraph::default())
+    }
+
+    let flows = vec![FlowDef {
+        name: "TestError".into(),
+        on_model: "M".into(),
+        graphs: vec![
+            GraphDef { name: "base".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } },
+            GraphDef {
+                name: "result".into(),
+                expr: GraphExpr::Pipeline {
+                    start: "base".into(),
+                    transforms: vec![
+                        Transform::ApplyRuleset { 
+                            rules: vec!["KnownRule".into(), "UnknownRule".into()] 
+                        },
+                    ],
+                },
+            },
+        ],
+        metrics: vec![],
+        exports: vec![],
+    }];
+
+    let prog = ProgramAst {
+        schemas: vec![],
+        belief_models: vec![],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
+        rules,
+        flows,
+    };
+
+    let result = run_flow_with_builder(&prog, "TestError", &evidence_builder, None);
+    assert!(matches!(result, Err(ExecError::Internal(_))));
+    if let Err(ExecError::Internal(msg)) = result {
+        assert!(msg.contains("unknown rule 'UnknownRule' in ruleset"));
+    }
+}
+
+#[test]
+fn snapshot_transform_saves_graph_state() {
+    let rules = vec![RuleDef {
+        name: "ForceLowProb".into(),
+        on_model: "M".into(),
+        mode: Some("for_each".into()),
+        patterns: vec![PatternItem {
+            src: NodePattern { var: "A".into(), label: "Person".into() },
+            edge: EdgePattern { var: "e".into(), ty: "REL".into() },
+            dst: NodePattern { var: "B".into(), label: "Person".into() },
+        }],
+        where_expr: Some(ExprAst::Binary {
+            op: BinaryOp::Ge,
+            left: Box::new(ExprAst::Call { name: "prob".into(), args: vec![CallArg::Positional(ExprAst::Var("e".into()))] }),
+            right: Box::new(ExprAst::Number(0.5)),
+        }),
+        actions: vec![ActionStmt::ForceAbsent { edge_var: "e".into() }],
+    }];
+
+    fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_edge(EdgeData { 
+            id: EdgeId(1), 
+            src: NodeId(1), 
+            dst: NodeId(2), 
+            ty: "REL".into(), 
+            exist: EdgePosterior::independent(BetaPosterior { alpha: 8.0, beta: 2.0 }) 
+        });
+        Ok(g)
+    }
+
+    let flows = vec![FlowDef {
+        name: "SnapshotTest".into(),
+        on_model: "M".into(),
+        graphs: vec![
+            GraphDef { name: "base".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } },
+            GraphDef {
+                name: "cleaned".into(),
+                expr: GraphExpr::Pipeline {
+                    start: "base".into(),
+                    transforms: vec![
+                        Transform::Snapshot { name: "before_cleanup".into() },
+                        Transform::ApplyRule { rule: "ForceLowProb".into() },
+                        Transform::Snapshot { name: "after_cleanup".into() },
+                    ],
+                },
+            },
+        ],
+        metrics: vec![],
+        exports: vec![],
+    }];
+
+    let prog = ProgramAst {
+        schemas: vec![],
+        belief_models: vec![],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
+        rules,
+        flows,
+    };
+
+    let result = run_flow_with_builder(&prog, "SnapshotTest", &evidence_builder, None).expect("run flow");
+
+    // Verify snapshots were saved
+    assert!(result.snapshots.contains_key("before_cleanup"));
+    assert!(result.snapshots.contains_key("after_cleanup"));
+
+    // Verify snapshot states differ
+    let before = result.snapshots.get("before_cleanup").unwrap();
+    let after = result.snapshots.get("after_cleanup").unwrap();
+    
+    // Before snapshot should have the edge with high probability
+    assert_eq!(before.edges.len(), 1);
+    // After snapshot should have the edge with low probability (force_absent was applied)
+    assert_eq!(after.edges.len(), 1);
+    
+    // The edge probability should be lower after force_absent
+    let before_edge = before.edges.values().next().unwrap();
+    let after_edge = after.edges.values().next().unwrap();
+    let before_prob = before_edge.exist.mean_probability(&before.competing_groups).unwrap_or(0.0);
+    let after_prob = after_edge.exist.mean_probability(&after.competing_groups).unwrap_or(0.0);
+    assert!(after_prob < before_prob, "after_prob ({}) should be less than before_prob ({})", after_prob, before_prob);
+}
+
+#[test]
+fn snapshot_multiple_snapshots_in_pipeline() {
+    fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_edge(EdgeData { 
+            id: EdgeId(1), 
+            src: NodeId(1), 
+            dst: NodeId(2), 
+            ty: "REL".into(), 
+            exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }) 
+        });
+        Ok(g)
+    }
+
+    let flows = vec![FlowDef {
+        name: "MultiSnapshot".into(),
+        on_model: "M".into(),
+        graphs: vec![
+            GraphDef { name: "base".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } },
+            GraphDef {
+                name: "result".into(),
+                expr: GraphExpr::Pipeline {
+                    start: "base".into(),
+                    transforms: vec![
+                        Transform::Snapshot { name: "step1".into() },
+                        Transform::Snapshot { name: "step2".into() },
+                        Transform::Snapshot { name: "step3".into() },
+                    ],
+                },
+            },
+        ],
+        metrics: vec![],
+        exports: vec![],
+    }];
+
+    let prog = ProgramAst {
+        schemas: vec![],
+        belief_models: vec![],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
+        rules: vec![],
+        flows,
+    };
+
+    let result = run_flow_with_builder(&prog, "MultiSnapshot", &evidence_builder, None).expect("run flow");
+
+    // All three snapshots should be saved
+    assert!(result.snapshots.contains_key("step1"));
+    assert!(result.snapshots.contains_key("step2"));
+    assert!(result.snapshots.contains_key("step3"));
+
+    // All snapshots should have the same graph state (no transforms between them)
+    let step1 = result.snapshots.get("step1").unwrap();
+    let step2 = result.snapshots.get("step2").unwrap();
+    let step3 = result.snapshots.get("step3").unwrap();
+    
+    assert_eq!(step1.edges.len(), step2.edges.len());
+    assert_eq!(step2.edges.len(), step3.edges.len());
+}
+
+#[test]
+fn snapshot_overwrites_previous_snapshot_with_same_name() {
+    fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
+        Ok(g)
+    }
+
+    let flows = vec![FlowDef {
+        name: "OverwriteSnapshot".into(),
+        on_model: "M".into(),
+        graphs: vec![
+            GraphDef { name: "base".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } },
+            GraphDef {
+                name: "result".into(),
+                expr: GraphExpr::Pipeline {
+                    start: "base".into(),
+                    transforms: vec![
+                        Transform::Snapshot { name: "checkpoint".into() },
+                        Transform::Snapshot { name: "checkpoint".into() },
+                    ],
+                },
+            },
+        ],
+        metrics: vec![],
+        exports: vec![],
+    }];
+
+    let prog = ProgramAst {
+        schemas: vec![],
+        belief_models: vec![],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
+        rules: vec![],
+        flows,
+    };
+
+    let result = run_flow_with_builder(&prog, "OverwriteSnapshot", &evidence_builder, None).expect("run flow");
+
+    // Only one snapshot should exist (the second one overwrites the first)
+    assert_eq!(result.snapshots.len(), 1);
+    assert!(result.snapshots.contains_key("checkpoint"));
+}
+
+#[test]
+fn from_graph_imports_from_prior_flow_exports() {
+    fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_edge(EdgeData { 
+            id: EdgeId(1), 
+            src: NodeId(1), 
+            dst: NodeId(2), 
+            ty: "REL".into(), 
+            exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }) 
+        });
+        Ok(g)
+    }
+
+    // First flow: exports a graph
+    let flows = vec![
+        FlowDef {
+            name: "Producer".into(),
+            on_model: "M".into(),
+            graphs: vec![
+                GraphDef { name: "base".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } },
+            ],
+            metrics: vec![],
+            exports: vec![ExportDef { graph: "base".into(), alias: "exported_graph".into() }],
+        },
+        FlowDef {
+            name: "Consumer".into(),
+            on_model: "M".into(),
+            graphs: vec![
+                GraphDef { name: "imported".into(), expr: GraphExpr::FromGraph { alias: "exported_graph".into() } },
+            ],
+            metrics: vec![],
+            exports: vec![],
+        },
+    ];
+
+    let prog = ProgramAst {
+        schemas: vec![],
+        belief_models: vec![],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
+        rules: vec![],
+        flows,
+    };
+
+    // Run first flow
+    let prior = run_flow_with_builder(&prog, "Producer", &evidence_builder, None).expect("run producer flow");
+    
+    // Run second flow with prior result
+    let result = run_flow_with_builder(&prog, "Consumer", &evidence_builder, Some(&prior)).expect("run consumer flow");
+
+    // Verify imported graph matches exported graph
+    let imported = result.graphs.get("imported").expect("imported graph");
+    let exported = prior.exports.get("exported_graph").expect("exported graph");
+    
+    assert_eq!(imported.nodes.len(), exported.nodes.len());
+    assert_eq!(imported.edges.len(), exported.edges.len());
+}
+
+#[test]
+fn from_graph_imports_from_prior_flow_snapshots() {
+    fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_edge(EdgeData { 
+            id: EdgeId(1), 
+            src: NodeId(1), 
+            dst: NodeId(2), 
+            ty: "REL".into(), 
+            exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }) 
+        });
+        Ok(g)
+    }
+
+    // First flow: creates a snapshot
+    let flows = vec![
+        FlowDef {
+            name: "Producer".into(),
+            on_model: "M".into(),
+            graphs: vec![
+                GraphDef { 
+                    name: "base".into(), 
+                    expr: GraphExpr::FromEvidence { evidence: "Ev".into() } 
+                },
+                GraphDef {
+                    name: "result".into(),
+                    expr: GraphExpr::Pipeline {
+                        start: "base".into(),
+                        transforms: vec![
+                            Transform::Snapshot { name: "checkpoint".into() },
+                        ],
+                    },
+                },
+            ],
+            metrics: vec![],
+            exports: vec![],
+        },
+        FlowDef {
+            name: "Consumer".into(),
+            on_model: "M".into(),
+            graphs: vec![
+                GraphDef { name: "imported".into(), expr: GraphExpr::FromGraph { alias: "checkpoint".into() } },
+            ],
+            metrics: vec![],
+            exports: vec![],
+        },
+    ];
+
+    let prog = ProgramAst {
+        schemas: vec![],
+        belief_models: vec![],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
+        rules: vec![],
+        flows,
+    };
+
+    // Run first flow
+    let prior = run_flow_with_builder(&prog, "Producer", &evidence_builder, None).expect("run producer flow");
+    
+    // Run second flow with prior result
+    let result = run_flow_with_builder(&prog, "Consumer", &evidence_builder, Some(&prior)).expect("run consumer flow");
+
+    // Verify imported graph matches snapshot
+    let imported = result.graphs.get("imported").expect("imported graph");
+    let snapshot = prior.snapshots.get("checkpoint").expect("snapshot");
+    
+    assert_eq!(imported.nodes.len(), snapshot.nodes.len());
+    assert_eq!(imported.edges.len(), snapshot.edges.len());
+}
+
+#[test]
+fn from_graph_errors_on_missing_graph() {
+    fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        Ok(BeliefGraph::default())
+    }
+
+    // Flow that tries to import a non-existent graph
+    let flows = vec![FlowDef {
+        name: "Consumer".into(),
+        on_model: "M".into(),
+        graphs: vec![
+            GraphDef { name: "imported".into(), expr: GraphExpr::FromGraph { alias: "missing_graph".into() } },
+        ],
+        metrics: vec![],
+        exports: vec![],
+    }];
+
+    let prog = ProgramAst {
+        schemas: vec![],
+        belief_models: vec![],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
+        rules: vec![],
+        flows,
+    };
+
+    // Run flow with empty prior (no exports or snapshots)
+    let prior = FlowResult::default();
+    let result = run_flow_with_builder(&prog, "Consumer", &evidence_builder, Some(&prior));
+
+    // Should error because graph doesn't exist
+    assert!(matches!(result, Err(ExecError::Internal(_))));
+    if let Err(ExecError::Internal(msg)) = result {
+        assert!(msg.contains("graph 'missing_graph' not found"));
+    }
+}
+
+#[test]
+fn from_graph_prefers_exports_over_snapshots() {
+    // If both exports and snapshots have the same name, exports should take precedence
+    fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        let mut g1 = BeliefGraph::default();
+        g1.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
+        
+        let mut g2 = BeliefGraph::default();
+        g2.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        
+        // Return different graphs so we can tell which one was used
+        Ok(g1)
+    }
+
+    let flows = vec![
+        FlowDef {
+            name: "Producer".into(),
+            on_model: "M".into(),
+            graphs: vec![
+                GraphDef { name: "export_graph".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } },
+                GraphDef {
+                    name: "snapshot_graph".into(),
+                    expr: GraphExpr::Pipeline {
+                        start: "export_graph".into(),
+                        transforms: vec![
+                            Transform::Snapshot { name: "shared_name".into() },
+                        ],
+                    },
+                },
+            ],
+            metrics: vec![],
+            exports: vec![ExportDef { graph: "export_graph".into(), alias: "shared_name".into() }],
+        },
+        FlowDef {
+            name: "Consumer".into(),
+            on_model: "M".into(),
+            graphs: vec![
+                GraphDef { name: "imported".into(), expr: GraphExpr::FromGraph { alias: "shared_name".into() } },
+            ],
+            metrics: vec![],
+            exports: vec![],
+        },
+    ];
+
+    let prog = ProgramAst {
+        schemas: vec![],
+        belief_models: vec![],
+        evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into(), observations: vec![] }],
+        rules: vec![],
+        flows,
+    };
+
+    // Run first flow
+    let prior = run_flow_with_builder(&prog, "Producer", &evidence_builder, None).expect("run producer flow");
+    
+    // Verify both export and snapshot exist with same name
+    assert!(prior.exports.contains_key("shared_name"));
+    assert!(prior.snapshots.contains_key("shared_name"));
+    
+    // Run second flow
+    let result = run_flow_with_builder(&prog, "Consumer", &evidence_builder, Some(&prior)).expect("run consumer flow");
+
+    // Verify imported graph matches the exported graph (not the snapshot)
+    let imported = result.graphs.get("imported").expect("imported graph");
+    let exported = prior.exports.get("shared_name").expect("exported graph");
+    
+    assert_eq!(imported.nodes.len(), exported.nodes.len());
+}

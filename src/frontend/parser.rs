@@ -645,20 +645,18 @@ fn build_graph_stmt(pair: pest::iterators::Pair<Rule>) -> Result<GraphDef, ExecE
                     .to_string();
                 expr_opt = Some(GraphExpr::FromEvidence { evidence: ev });
             }
+            Rule::from_graph_expr => {
+                let alias = p
+                    .into_inner()
+                    .find(|x| x.as_rule() == Rule::string)
+                    .ok_or_else(|| ExecError::ParseError("Missing graph alias in from_graph".to_string()))?
+                    .as_str();
+                // Remove quotes from string
+                let alias = alias.trim_matches('"').to_string();
+                expr_opt = Some(GraphExpr::FromGraph { alias });
+            }
             Rule::pipeline_expr => {
-                let mut pit = p.into_inner();
-                let start = pit.next()
-                    .ok_or_else(|| ExecError::ParseError("Missing start graph in pipeline".to_string()))?
-                    .as_str().to_string();
-                let mut transforms = Vec::new();
-                for t in pit {
-                    match t.as_rule() {
-                        Rule::pipe_op => {}
-                        Rule::apply_rule_tr | Rule::prune_edges_tr => transforms.push(build_transform(t)?),
-                        _ => {}
-                    }
-                }
-                expr_opt = Some(GraphExpr::Pipeline { start, transforms });
+                expr_opt = Some(build_pipeline_expr(p)?);
             }
             Rule::graph_expr => {
                 // Unwrap one level and handle inner expr
@@ -674,20 +672,18 @@ fn build_graph_stmt(pair: pest::iterators::Pair<Rule>) -> Result<GraphDef, ExecE
                                 .to_string();
                             expr_opt = Some(GraphExpr::FromEvidence { evidence: ev });
                         }
+                        Rule::from_graph_expr => {
+                            let alias = inner
+                                .into_inner()
+                                .find(|x| x.as_rule() == Rule::string)
+                                .ok_or_else(|| ExecError::ParseError("Missing graph alias in from_graph".to_string()))?
+                                .as_str();
+                            // Remove quotes from string
+                            let alias = alias.trim_matches('"').to_string();
+                            expr_opt = Some(GraphExpr::FromGraph { alias });
+                        }
                         Rule::pipeline_expr => {
-                            let mut pit = inner.into_inner();
-                            let start = pit.next()
-                                .ok_or_else(|| ExecError::ParseError("Missing start graph in pipeline".to_string()))?
-                                .as_str().to_string();
-                            let mut transforms = Vec::new();
-                            for t in pit {
-                                match t.as_rule() {
-                                    Rule::pipe_op => {}
-                                    Rule::apply_rule_tr | Rule::prune_edges_tr => transforms.push(build_transform(t)?),
-                                    _ => {}
-                                }
-                            }
-                            expr_opt = Some(GraphExpr::Pipeline { start, transforms });
+                            expr_opt = Some(build_pipeline_expr(inner)?);
                         }
                         _ => {}
                     }
@@ -700,6 +696,25 @@ fn build_graph_stmt(pair: pest::iterators::Pair<Rule>) -> Result<GraphDef, ExecE
     Ok(GraphDef { name, expr })
 }
 
+/// Build a pipeline expression from a Pest pair.
+fn build_pipeline_expr(pair: pest::iterators::Pair<Rule>) -> Result<GraphExpr, ExecError> {
+    let mut pit = pair.into_inner();
+    let start = pit.next()
+        .ok_or_else(|| ExecError::ParseError("Missing start graph in pipeline".to_string()))?
+        .as_str().to_string();
+    let mut transforms = Vec::new();
+    for t in pit {
+        match t.as_rule() {
+            Rule::pipe_op => {}
+            Rule::apply_rule_tr | Rule::apply_ruleset_tr | Rule::snapshot_tr | Rule::prune_edges_tr => {
+                transforms.push(build_transform(t)?);
+            }
+            _ => {}
+        }
+    }
+    Ok(GraphExpr::Pipeline { start, transforms })
+}
+
 fn build_transform(pair: pest::iterators::Pair<Rule>) -> Result<Transform, ExecError> {
     match pair.as_rule() {
         Rule::apply_rule_tr => {
@@ -710,6 +725,28 @@ fn build_transform(pair: pest::iterators::Pair<Rule>) -> Result<Transform, ExecE
                 .as_str()
                 .to_string();
             Ok(Transform::ApplyRule { rule: name })
+        }
+        Rule::apply_ruleset_tr => {
+            let mut rules = Vec::new();
+            for p in pair.into_inner() {
+                if p.as_rule() == Rule::ident {
+                    rules.push(p.as_str().to_string());
+                }
+            }
+            if rules.is_empty() {
+                return Err(ExecError::ParseError("apply_ruleset must have at least one rule".to_string()));
+            }
+            Ok(Transform::ApplyRuleset { rules })
+        }
+        Rule::snapshot_tr => {
+            let name = pair
+                .into_inner()
+                .find(|p| p.as_rule() == Rule::string)
+                .ok_or_else(|| ExecError::ParseError("Missing snapshot name in snapshot".to_string()))?
+                .as_str();
+            // Remove quotes from string
+            let name = name.trim_matches('"').to_string();
+            Ok(Transform::Snapshot { name })
         }
         Rule::prune_edges_tr => {
             let mut it = pair.into_inner();
@@ -791,8 +828,15 @@ fn build_metric_import_stmt(pair: pest::iterators::Pair<Rule>) -> Result<MetricI
 }
 
 fn build_expr(pair: pest::iterators::Pair<Rule>) -> ExprAst {
+    build_expr_result(pair).unwrap_or_else(|e| {
+        eprintln!("Warning: Failed to build expression: {:?}, using Number(0)", e);
+        ExprAst::Number(0.0)
+    })
+}
+
+fn build_expr_result(pair: pest::iterators::Pair<Rule>) -> Result<ExprAst, ExecError> {
     match pair.as_rule() {
-        Rule::expr => build_expr(pair.into_inner().next().unwrap()),
+        Rule::expr => Ok(build_expr(pair.into_inner().next().unwrap())),
         Rule::or_expr | Rule::and_expr | Rule::cmp_expr | Rule::add_expr | Rule::mul_expr => {
             let mut it = pair.into_inner();
             let mut node = build_expr(it.next().unwrap());
@@ -825,7 +869,7 @@ fn build_expr(pair: pest::iterators::Pair<Rule>) -> ExprAst {
                     }
                 }
             }
-            node
+            Ok(node)
         }
         Rule::unary_expr => {
             let mut it = pair.into_inner();
@@ -841,9 +885,9 @@ fn build_expr(pair: pest::iterators::Pair<Rule>) -> ExprAst {
                         }
                     };
                     let expr = build_expr(it.next().unwrap());
-                    ExprAst::Unary { op, expr: Box::new(expr) }
+                    Ok(ExprAst::Unary { op, expr: Box::new(expr) })
                 }
-                _ => build_expr(first),
+                _ => Ok(build_expr(first)),
             }
         }
         Rule::postfix => {
@@ -894,19 +938,41 @@ fn build_expr(pair: pest::iterators::Pair<Rule>) -> ExprAst {
                     _ => {}
                 }
             }
-            node
+            Ok(node)
         }
-        Rule::primary => build_expr(pair.into_inner().next().unwrap()),
-        Rule::paren_expr => build_expr(pair.into_inner().next().unwrap()),
+        Rule::primary => build_expr_result(pair.into_inner().next().unwrap()),
+        Rule::exists_expr => {
+            let mut it = pair.into_inner();
+            // Skip KW_exists, get pattern_item
+            let pattern_pair = it.find(|p| p.as_rule() == Rule::pattern_item)
+                .ok_or_else(|| ExecError::ParseError("Missing pattern in exists expression".to_string()))?;
+            let pattern = build_pattern_item(pattern_pair)?;
+            // Get optional where clause
+            let where_expr = it.find(|p| p.as_rule() == Rule::expr)
+                .map(|p| Box::new(build_expr(p)));
+            Ok(ExprAst::Exists { pattern, where_expr, negated: false })
+        }
+        Rule::not_exists_expr => {
+            let mut it = pair.into_inner();
+            // Skip KW_not and KW_exists, get pattern_item
+            let pattern_pair = it.find(|p| p.as_rule() == Rule::pattern_item)
+                .ok_or_else(|| ExecError::ParseError("Missing pattern in not exists expression".to_string()))?;
+            let pattern = build_pattern_item(pattern_pair)?;
+            // Get optional where clause
+            let where_expr = it.find(|p| p.as_rule() == Rule::expr)
+                .map(|p| Box::new(build_expr(p)));
+            Ok(ExprAst::Exists { pattern, where_expr, negated: true })
+        }
+        Rule::paren_expr => Ok(build_expr(pair.into_inner().next().unwrap())),
         Rule::e_bracket => {
             // E[Var.field] → Call("E", [Field(Var, field)])
             let mut it = pair.into_inner();
             let var = it.next().unwrap().as_str().to_string();
             let field = it.next().unwrap().as_str().to_string();
             let inner = ExprAst::Field { target: Box::new(ExprAst::Var(var)), field };
-            ExprAst::Call { name: "E".into(), args: vec![CallArg::Positional(inner)] }
+            Ok(ExprAst::Call { name: "E".into(), args: vec![CallArg::Positional(inner)] })
         }
-        Rule::ident => ExprAst::Var(pair.as_str().to_string()),
+        Rule::ident => Ok(ExprAst::Var(pair.as_str().to_string())),
         Rule::number => {
             let num_str = pair.as_str();
             let value = num_str.parse::<f64>()
@@ -914,9 +980,9 @@ fn build_expr(pair: pest::iterators::Pair<Rule>) -> ExprAst {
                     eprintln!("Warning: Failed to parse number '{}', using 0.0", num_str);
                     0.0
                 });
-            ExprAst::Number(value)
+            Ok(ExprAst::Number(value))
         }
-        Rule::boolean => match pair.as_str() { "true" => ExprAst::Bool(true), _ => ExprAst::Bool(false) },
+        Rule::boolean => Ok(match pair.as_str() { "true" => ExprAst::Bool(true), _ => ExprAst::Bool(false) }),
         _ => {
             // This should never happen if the grammar is correct
             // If it does, it indicates a grammar/Pest parser mismatch

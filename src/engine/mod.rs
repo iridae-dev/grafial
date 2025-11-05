@@ -13,4 +13,7 @@ pub mod expr_eval;
 pub mod expr_utils;
 pub mod rule_exec;
 pub mod flow_exec;
+pub mod evidence;
+pub mod snapshot;
+pub mod query_plan;
 

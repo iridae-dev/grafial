@@ -246,6 +246,8 @@ fn validate_flow(flow: &FlowDef) -> Result<(), ExecError> {
             for t in transforms {
                 match t {
                     Transform::ApplyRule { .. } => {}
+                    Transform::ApplyRuleset { .. } => {}
+                    Transform::Snapshot { .. } => {}
                     Transform::PruneEdges { predicate, .. } => {
                         validate_prune_predicate(predicate)?;
                     }

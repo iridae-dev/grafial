@@ -285,6 +285,11 @@ pub enum GraphExpr {
         /// The evidence name to load from
         evidence: String
     },
+    /// Import a graph exported from another flow
+    FromGraph {
+        /// The export alias or snapshot name to import
+        alias: String
+    },
     /// Apply a pipeline of transformations to a graph
     Pipeline {
         /// The starting graph variable
@@ -301,6 +306,16 @@ pub enum Transform {
     ApplyRule {
         /// The rule name to apply
         rule: String
+    },
+    /// Apply multiple rules sequentially
+    ApplyRuleset {
+        /// The rule names to apply in order
+        rules: Vec<String>
+    },
+    /// Save a snapshot of the current graph state
+    Snapshot {
+        /// The snapshot name (for later retrieval)
+        name: String
     },
     /// Remove edges matching a predicate
     PruneEdges {
@@ -414,6 +429,15 @@ pub enum ExprAst {
         left: Box<ExprAst>,
         /// The right operand
         right: Box<ExprAst>
+    },
+    /// Exists subquery: checks if a pattern exists in the graph
+    Exists {
+        /// The pattern to search for
+        pattern: PatternItem,
+        /// Optional where clause to filter matches
+        where_expr: Option<Box<ExprAst>>,
+        /// Whether this is negated (not exists)
+        negated: bool,
     },
 }
 

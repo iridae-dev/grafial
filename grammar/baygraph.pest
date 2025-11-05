@@ -84,13 +84,16 @@ flow_decl = { KW_flow ~ ident ~ KW_on ~ ident ~ "{" ~ flow_body ~ "}" }
 flow_body = { (COMMENT | graph_stmt | metric_stmt | export_stmt | metric_export_stmt | metric_import_stmt)* }
 
 graph_stmt = { KW_graph ~ ident ~ "=" ~ graph_expr }
-graph_expr = { from_evidence_expr | pipeline_expr }
+graph_expr = { from_evidence_expr | from_graph_expr | pipeline_expr }
 from_evidence_expr = { KW_from_evidence ~ ident }
+from_graph_expr = { KW_from_graph ~ string }
 pipeline_expr = { ident ~ (pipe_op ~ transform)+ }
 pipe_op = { "|>" }
 
-transform = _{ apply_rule_tr | prune_edges_tr }
+transform = _{ apply_rule_tr | apply_ruleset_tr | snapshot_tr | prune_edges_tr }
 apply_rule_tr = { KW_apply_rule ~ ident }
+apply_ruleset_tr = { KW_apply_ruleset ~ "{" ~ ident ~ ("," ~ ident)* ~ "}" }
+snapshot_tr = { KW_snapshot ~ string }
 prune_edges_tr = { KW_prune_edges ~ ident ~ KW_where ~ expr }
 
 metric_stmt = { KW_metric ~ ident ~ "=" ~ expr }
@@ -115,9 +118,11 @@ field_access = { "." ~ ident }
 call_suffix = { "(" ~ (arg ~ ("," ~ arg)*)? ~ ")" }
 arg = _{ named_arg | expr }
 named_arg = { ident ~ "=" ~ expr }
-primary = { number | boolean | e_bracket | ident | paren_expr }
+primary = { number | boolean | e_bracket | ident | paren_expr | exists_expr | not_exists_expr }
 paren_expr = { "(" ~ expr ~ ")" }
 e_bracket = { "E" ~ "[" ~ (ident ~ "." ~ ident) ~ "]" }
+exists_expr = { KW_exists ~ pattern_item ~ (KW_where ~ expr)? }
+not_exists_expr = { KW_not ~ KW_exists ~ pattern_item ~ (KW_where ~ expr)? }
 number = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 boolean = _{ KW_true | KW_false }
 
@@ -136,7 +141,10 @@ kw_mode_tok = @{ "mode" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_flow_tok = @{ "flow" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_graph_tok = @{ "graph" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_from_evidence_tok = @{ "from_evidence" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_from_graph_tok = @{ "from_graph" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_apply_rule_tok = @{ "apply_rule" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_apply_ruleset_tok = @{ "apply_ruleset" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_snapshot_tok = @{ "snapshot" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_prune_edges_tok = @{ "prune_edges" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_metric_tok = @{ "metric" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_export_tok = @{ "export" ~ !(ASCII_ALPHANUMERIC | "_") }
@@ -158,7 +166,10 @@ KW_mode = _{ kw_mode_tok }
 KW_flow = _{ kw_flow_tok }
 KW_graph = _{ kw_graph_tok }
 KW_from_evidence = _{ kw_from_evidence_tok }
+KW_from_graph = _{ kw_from_graph_tok }
 KW_apply_rule = _{ kw_apply_rule_tok }
+KW_apply_ruleset = _{ kw_apply_ruleset_tok }
+KW_snapshot = _{ kw_snapshot_tok }
 KW_prune_edges = _{ kw_prune_edges_tok }
 KW_metric = _{ kw_metric_tok }
 KW_export = _{ kw_export_tok }
@@ -168,6 +179,7 @@ KW_import_metric = _{ kw_import_metric_tok }
 kw_let_tok = @{ "let" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_set_expectation_tok = @{ "set_expectation" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_force_absent_tok = @{ "force_absent" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_exists_tok = @{ "exists" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_and_tok = @{ "and" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_or_tok = @{ "or" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_not_tok = @{ "not" ~ !(ASCII_ALPHANUMERIC | "_") }
@@ -182,3 +194,4 @@ KW_false = _{ kw_false_tok }
 KW_let = _{ kw_let_tok }
 KW_set_expectation = _{ kw_set_expectation_tok }
 KW_force_absent = _{ kw_force_absent_tok }
+KW_exists = _{ kw_exists_tok }

@@ -33,6 +33,9 @@
 //! ```
 
 use std::collections::HashMap;
+use std::sync::Arc;
+
+use smallvec::SmallVec;
 
 use crate::engine::errors::ExecError;
 
@@ -573,6 +576,7 @@ pub struct EdgeData {
 ///
 /// See baygraph_design.md:466-474 for the adjacency optimization strategy.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AdjacencyIndex {
     /// Maps (NodeId, EdgeType) to (start_offset, end_offset) in edge_ids
     ranges: HashMap<(NodeId, String), (usize, usize)>,
@@ -654,30 +658,130 @@ impl AdjacencyIndex {
 ///
 /// # Performance (Phase 7)
 ///
+/// Inner graph data structure that is shared via Arc for structural sharing.
+/// 
+/// This contains all the graph data. When wrapped in Arc, multiple BeliefGraph
+/// instances can share the same underlying data until modifications occur.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub(crate) struct BeliefGraphInner {
+    /// All nodes in the graph
+    pub(crate) nodes: Vec<NodeData>,
+    /// All edges in the graph
+    pub(crate) edges: Vec<EdgeData>,
+    /// Competing edge groups (for Dirichlet-Categorical posteriors)
+    pub(crate) competing_groups: HashMap<CompetingGroupId, CompetingEdgeGroup>,
+    /// Index mapping NodeId to position in nodes vector
+    pub(crate) node_index: HashMap<NodeId, usize>,
+    /// Index mapping EdgeId to position in edges vector
+    pub(crate) edge_index: HashMap<EdgeId, usize>,
+    /// Cached adjacency index for fast neighborhood queries (Phase 7)
+    pub(crate) adjacency: Option<AdjacencyIndex>,
+}
+
+/// Delta entry for tracking modifications in a graph view.
+/// 
+/// This represents a change to a node or edge that hasn't been committed
+/// to the base graph yet. Used for copy-on-write optimization.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub(crate) enum GraphDelta {
+    /// A node was added or modified
+    NodeChange { id: NodeId, node: NodeData },
+    /// An edge was added or modified
+    EdgeChange { id: EdgeId, edge: EdgeData },
+    /// A competing group was added or modified
+    CompetingGroupChange { id: CompetingGroupId, group: CompetingEdgeGroup },
+    /// A node was removed
+    NodeRemoved { id: NodeId },
+    /// An edge was removed
+    EdgeRemoved { id: EdgeId },
+}
+
 /// The graph uses Structure-of-Arrays (SoA) style organization for hot data:
 /// - Contiguous node/edge storage for cache efficiency
 /// - Precomputed adjacency index with offset ranges for O(1) neighborhood access
 /// - Stable IDs (NodeId, EdgeId) for deterministic iteration
+/// - Structural sharing via Arc for efficient cloning
 ///
 /// See baygraph_design.md:466-474 for optimization details.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BeliefGraph {
-    /// All nodes in the graph
-    pub nodes: Vec<NodeData>,
-    /// All edges in the graph
-    pub edges: Vec<EdgeData>,
-    /// Competing edge groups (for Dirichlet-Categorical posteriors)
-    pub competing_groups: HashMap<CompetingGroupId, CompetingEdgeGroup>,
-    /// Index mapping NodeId to position in nodes vector
-    node_index: HashMap<NodeId, usize>,
-    /// Index mapping EdgeId to position in edges vector
-    edge_index: HashMap<EdgeId, usize>,
-    /// Cached adjacency index for fast neighborhood queries (Phase 7)
-    adjacency: Option<AdjacencyIndex>,
+    /// Shared base graph data (Arc for structural sharing)
+    /// Note: Arc serializes by cloning the inner value (deserialization creates new Arc)
+    #[cfg_attr(feature = "serde", serde(with = "serde_helpers::serde_arc"))]
+    inner: Arc<BeliefGraphInner>,
+    /// Delta of modifications not yet committed to base
+    /// Using SmallVec for efficiency with small deltas (most transforms have few changes)
+    /// Note: For serialization, we convert to Vec since SmallVec doesn't have const-generic serde support
+    #[cfg_attr(feature = "serde", serde(serialize_with = "serde_helpers::serialize_delta", deserialize_with = "serde_helpers::deserialize_delta"))]
+    delta: SmallVec<[GraphDelta; 4]>,
 }
+
+#[cfg(feature = "serde")]
+mod serde_helpers {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use smallvec::SmallVec;
+    use std::sync::Arc;
+    use crate::engine::graph::GraphDelta;
+
+    pub mod serde_arc {
+        use super::*;
+
+        pub fn serialize<T, S>(arc: &Arc<T>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            T: Serialize,
+            S: Serializer,
+        {
+            (**arc).serialize(serializer)
+        }
+
+        pub fn deserialize<'de, T, D>(deserializer: D) -> Result<Arc<T>, D::Error>
+        where
+            T: Deserialize<'de>,
+            D: Deserializer<'de>,
+        {
+            T::deserialize(deserializer).map(Arc::new)
+        }
+    }
+
+    pub fn serialize_delta<S>(
+        delta: &SmallVec<[GraphDelta; 4]>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        delta.as_slice().serialize(serializer)
+    }
+
+    pub fn deserialize_delta<'de, D>(
+        deserializer: D,
+    ) -> Result<SmallVec<[GraphDelta; 4]>, D::Error>
+    where
+        D: Deserializer<'de>,
+        GraphDelta: Deserialize<'de>,
+    {
+        Vec::<GraphDelta>::deserialize(deserializer).map(|v| SmallVec::from_vec(v))
+    }
+}
+
+/// Threshold for delta size before we apply it lazily.
+/// When delta exceeds this size, we apply it to reduce memory overhead.
+const DELTA_THRESHOLD: usize = 32;
 
 impl Default for BeliefGraph {
     fn default() -> Self {
+        Self {
+            inner: Arc::new(BeliefGraphInner::new()),
+            delta: SmallVec::new(),
+        }
+    }
+}
+
+impl BeliefGraphInner {
+    fn new() -> Self {
         Self {
             nodes: Vec::new(),
             edges: Vec::new(),
@@ -690,7 +794,106 @@ impl Default for BeliefGraph {
 }
 
 impl BeliefGraph {
-    /// Looks up a node by ID.
+    /// Ensures this graph has exclusive ownership of its data and applies deltas if needed.
+    /// 
+    /// This is called when we need exclusive access (e.g., for serialization, or when
+    /// delta grows too large). If the inner data is shared, creates a copy and applies deltas.
+    pub(crate) fn ensure_owned(&mut self) {
+        if Arc::strong_count(&self.inner) > 1 {
+            // Clone the inner data to get exclusive ownership
+            let inner = Arc::try_unwrap(self.inner.clone()).unwrap_or_else(|arc| (*arc).clone());
+            self.inner = Arc::new(inner);
+        }
+        // Apply any pending deltas
+        if !self.delta.is_empty() {
+            self.apply_delta();
+        }
+    }
+
+    /// Checks if delta should be applied now (threshold-based or sharing required).
+    /// Returns true if we should apply deltas immediately.
+    fn should_apply_delta(&self) -> bool {
+        // Apply if delta is getting large (memory overhead)
+        if self.delta.len() >= DELTA_THRESHOLD {
+            return true;
+        }
+        // Apply if data is shared (need exclusive ownership for mutations)
+        if Arc::strong_count(&self.inner) > 1 {
+            return true;
+        }
+        false
+    }
+
+    /// Ensures ownership and applies delta if threshold is reached.
+    /// This is called before mutations when we want to defer delta application.
+    fn ensure_ready_for_delta(&mut self) {
+        if self.should_apply_delta() {
+            self.ensure_owned();
+        }
+    }
+
+    /// Gets a reference to the inner graph data.
+    fn inner(&self) -> &BeliefGraphInner {
+        &self.inner
+    }
+
+    /// Applies all pending deltas to the inner graph.
+    /// 
+    /// This commits changes from the delta to the base graph.
+    fn apply_delta(&mut self) {
+        if self.delta.is_empty() {
+            return;
+        }
+
+        // Get mutable access to inner (we know we have exclusive ownership)
+        let inner = Arc::get_mut(&mut self.inner).expect("ensure_owned should have been called");
+        
+        for change in self.delta.drain(..) {
+            match change {
+                GraphDelta::NodeChange { id, node } => {
+                    if let Some(idx) = inner.node_index.get(&id).copied() {
+                        inner.nodes[idx] = node;
+                    } else {
+                        let idx = inner.nodes.len();
+                        inner.nodes.push(node);
+                        inner.node_index.insert(id, idx);
+                    }
+                }
+                GraphDelta::EdgeChange { id, edge } => {
+                    if let Some(idx) = inner.edge_index.get(&id).copied() {
+                        inner.edges[idx] = edge;
+                    } else {
+                        let idx = inner.edges.len();
+                        inner.edges.push(edge);
+                        inner.edge_index.insert(id, idx);
+                    }
+                }
+                GraphDelta::CompetingGroupChange { id, group } => {
+                    inner.competing_groups.insert(id, group);
+                }
+                GraphDelta::NodeRemoved { id } => {
+                    if let Some(idx) = inner.node_index.remove(&id) {
+                        inner.nodes.swap_remove(idx);
+                        // Update index for swapped node
+                        if idx < inner.nodes.len() {
+                            inner.node_index.insert(inner.nodes[idx].id, idx);
+                        }
+                    }
+                }
+                GraphDelta::EdgeRemoved { id } => {
+                    if let Some(idx) = inner.edge_index.remove(&id) {
+                        inner.edges.swap_remove(idx);
+                        // Update index for swapped edge
+                        if idx < inner.edges.len() {
+                            inner.edge_index.insert(inner.edges[idx].id, idx);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Looks up a node by ID, checking delta first.
     ///
     /// # Arguments
     ///
@@ -701,22 +904,97 @@ impl BeliefGraph {
     /// * `Some(&NodeData)` - The node if it exists
     /// * `None` - If the node ID is not in the graph
     pub fn node(&self, id: NodeId) -> Option<&NodeData> {
-        self.node_index.get(&id).and_then(|&idx| self.nodes.get(idx))
+        // Check delta first for pending changes (most recent changes appear later)
+        // Iterate in reverse to get the most recent change
+        for change in self.delta.iter().rev() {
+            if let GraphDelta::NodeChange { id: delta_id, node } = change {
+                if *delta_id == id {
+                    return Some(node);
+                }
+            } else if let GraphDelta::NodeRemoved { id: delta_id } = change {
+                if *delta_id == id {
+                    return None;
+                }
+            }
+        }
+        // Fall back to base graph
+        self.inner.node_index.get(&id).and_then(|&idx| self.inner.nodes.get(idx))
     }
 
     /// Looks up a node by ID with mutable access.
     pub fn node_mut(&mut self, id: NodeId) -> Option<&mut NodeData> {
-        self.node_index.get(&id).and_then(|&idx| self.nodes.get_mut(idx))
+        self.ensure_owned();
+        let inner = Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
+        inner.node_index.get(&id).and_then(|&idx| inner.nodes.get_mut(idx))
     }
 
-    /// Looks up an edge by ID.
+    /// Looks up an edge by ID, checking delta first.
     pub fn edge(&self, id: EdgeId) -> Option<&EdgeData> {
-        self.edge_index.get(&id).and_then(|&idx| self.edges.get(idx))
+        // Check delta first for pending changes (most recent changes appear later)
+        // Iterate in reverse to get the most recent change
+        for change in self.delta.iter().rev() {
+            if let GraphDelta::EdgeChange { id: delta_id, edge } = change {
+                if *delta_id == id {
+                    return Some(edge);
+                }
+            } else if let GraphDelta::EdgeRemoved { id: delta_id } = change {
+                if *delta_id == id {
+                    return None;
+                }
+            }
+        }
+        // Fall back to base graph
+        self.inner.edge_index.get(&id).and_then(|&idx| self.inner.edges.get(idx))
     }
 
     /// Looks up an edge by ID with mutable access.
     pub fn edge_mut(&mut self, id: EdgeId) -> Option<&mut EdgeData> {
-        self.edge_index.get(&id).and_then(|&idx| self.edges.get_mut(idx))
+        self.ensure_owned();
+        let inner = Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
+        inner.edge_index.get(&id).and_then(|&idx| inner.edges.get_mut(idx))
+    }
+
+    /// Accessor for nodes vector (read-only).
+    /// 
+    /// Note: If delta is not empty, this will not include delta changes.
+    /// For delta-aware access, use `node(id)` for individual lookups, or call
+    /// `ensure_owned()` on a mutable reference to apply delta first.
+    pub fn nodes(&self) -> &[NodeData] {
+        &self.inner.nodes
+    }
+
+    /// Accessor for edges vector (read-only).
+    /// 
+    /// Note: If delta is not empty, this will not include delta changes.
+    /// For delta-aware access, use `edge(id)` for individual lookups, or call
+    /// `ensure_owned()` on a mutable reference to apply delta first.
+    pub fn edges(&self) -> &[EdgeData] {
+        &self.inner.edges
+    }
+
+    /// Returns a reference to the delta for iteration purposes.
+    /// This is a temporary solution until we have proper delta-aware iterators.
+    pub(crate) fn delta(&self) -> &SmallVec<[GraphDelta; 4]> {
+        &self.delta
+    }
+
+    /// Returns a reference to the inner for checking edge_index.
+    pub(crate) fn inner_ref(&self) -> &BeliefGraphInner {
+        &self.inner
+    }
+
+    /// Accessor for competing_groups (read-only).
+    pub fn competing_groups(&self) -> &HashMap<CompetingGroupId, CompetingEdgeGroup> {
+        &self.inner.competing_groups
+    }
+
+    /// Gets mutable access to competing_groups, ensuring exclusive ownership first.
+    /// 
+    /// This is public for testing purposes only.
+    pub fn competing_groups_mut(&mut self) -> &mut HashMap<CompetingGroupId, CompetingEdgeGroup> {
+        self.ensure_owned();
+        let inner = Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
+        &mut inner.competing_groups
     }
 
     /// Adds a new node to the graph and returns its ID.
@@ -732,25 +1010,43 @@ impl BeliefGraph {
     ///
     /// The newly assigned NodeId
     pub fn add_node(&mut self, label: String, attrs: HashMap<String, GaussianPosterior>) -> NodeId {
-        let id = NodeId(self.nodes.len() as u32);
-        let idx = self.nodes.len();
-        self.nodes.push(NodeData { id, label, attrs });
-        self.node_index.insert(id, idx);
+        self.ensure_ready_for_delta();
+        
+        // Calculate ID based on current state (base + delta)
+        let base_count = self.inner.nodes.len();
+        let delta_count = self.delta.iter()
+            .filter(|d| matches!(d, GraphDelta::NodeChange { .. }))
+            .count();
+        let id = NodeId((base_count + delta_count) as u32);
+        
+        let node = NodeData { id, label, attrs };
+        
+        // Add to delta instead of immediate mutation
+        self.delta.push(GraphDelta::NodeChange { id, node });
         id
     }
 
     /// Add an independent edge and update the index. Returns the EdgeId.
     pub fn add_edge(&mut self, src: NodeId, dst: NodeId, ty: String, exist: BetaPosterior) -> EdgeId {
-        let id = EdgeId(self.edges.len() as u32);
-        let idx = self.edges.len();
-        self.edges.push(EdgeData {
+        self.ensure_ready_for_delta();
+        
+        // Calculate ID based on current state (base + delta)
+        let base_count = self.inner.edges.len();
+        let delta_count = self.delta.iter()
+            .filter(|d| matches!(d, GraphDelta::EdgeChange { .. }))
+            .count();
+        let id = EdgeId((base_count + delta_count) as u32);
+        
+        let edge = EdgeData {
             id,
             src,
             dst,
             ty,
             exist: EdgePosterior::independent(exist),
-        });
-        self.edge_index.insert(id, idx);
+        };
+        
+        // Add to delta instead of immediate mutation
+        self.delta.push(GraphDelta::EdgeChange { id, edge });
         id
     }
 
@@ -761,9 +1057,9 @@ impl BeliefGraph {
     /// This is an internal API and should not be used in production code.
     /// Use `add_node()` instead for normal usage.
     pub fn insert_node(&mut self, node: NodeData) {
-        let idx = self.nodes.len();
-        self.node_index.insert(node.id, idx);
-        self.nodes.push(node);
+        self.ensure_ready_for_delta();
+        // Add to delta instead of immediate mutation
+        self.delta.push(GraphDelta::NodeChange { id: node.id, node });
     }
 
     /// Internal helper to add an edge with a specific ID and update the index.
@@ -773,9 +1069,9 @@ impl BeliefGraph {
     /// This is an internal API and should not be used in production code.
     /// Use `add_edge()` instead for normal usage.
     pub fn insert_edge(&mut self, edge: EdgeData) {
-        let idx = self.edges.len();
-        self.edge_index.insert(edge.id, idx);
-        self.edges.push(edge);
+        self.ensure_ready_for_delta();
+        // Add to delta instead of immediate mutation
+        self.delta.push(GraphDelta::EdgeChange { id: edge.id, edge });
     }
 
     /// Helper function for tests: creates an EdgeData with independent Beta posterior.
@@ -822,6 +1118,8 @@ impl BeliefGraph {
                 .clone();
             rebuilt.insert_edge(e);
         }
+        // Apply delta to ensure all items are in base for consistency
+        rebuilt.ensure_owned();
         Ok(rebuilt)
     }
 
@@ -835,22 +1133,40 @@ impl BeliefGraph {
     }
 
     pub fn set_expectation(&mut self, node: NodeId, attr: &str, value: f64) -> Result<(), ExecError> {
-        let n = self
-            .node_mut(node)
-            .ok_or_else(|| ExecError::Internal("missing node".into()))?;
+        self.ensure_ready_for_delta();
+        
+        // Get current node (check delta first, then base)
+        let mut n = self
+            .node(node)
+            .ok_or_else(|| ExecError::Internal("missing node".into()))?
+            .clone();
+        
+        // Apply mutation
         let g = n
             .attrs
             .get_mut(attr)
             .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
         g.set_expectation(value);
+        
+        // Add to delta
+        self.delta.push(GraphDelta::NodeChange { id: node, node: n });
         Ok(())
     }
 
     pub fn force_absent(&mut self, edge: EdgeId) -> Result<(), ExecError> {
-        let e = self
-            .edge_mut(edge)
-            .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
+        self.ensure_ready_for_delta();
+        
+        // Get current edge (check delta first, then base)
+        let mut e = self
+            .edge(edge)
+            .ok_or_else(|| ExecError::Internal("missing edge".into()))?
+            .clone();
+        
+        // Apply mutation
         e.exist.force_absent()?;
+        
+        // Add to delta
+        self.delta.push(GraphDelta::EdgeChange { id: edge, edge: e });
         Ok(())
     }
 
@@ -872,7 +1188,7 @@ impl BeliefGraph {
         let e = self
             .edge(edge)
             .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
-        e.exist.mean_probability(&self.competing_groups)
+        e.exist.mean_probability(&self.inner.competing_groups)
     }
 
     /// Counts outgoing edges from a node that meet a minimum probability threshold.
@@ -889,16 +1205,91 @@ impl BeliefGraph {
     ///
     /// Number of outgoing edges meeting the probability threshold
     pub fn degree_outgoing(&self, node: NodeId, min_prob: f64) -> usize {
-        self.edges
-            .iter()
-            .filter(|e| {
-                e.src == node
-                    && e.exist
-                        .mean_probability(&self.competing_groups)
-                        .unwrap_or(0.0)
-                        >= min_prob
-            })
-            .count()
+        // For iteration, we need to consider both base and delta
+        // Apply delta temporarily if needed (but we can't mutate self)
+        // Actually, we can iterate through known edge IDs and check each
+        let mut count = 0;
+        
+        // Check base edges
+        for e in &self.inner.edges {
+            if e.src == node {
+                let prob = e.exist
+                    .mean_probability(&self.inner.competing_groups)
+                    .unwrap_or(0.0);
+                if prob >= min_prob {
+                    count += 1;
+                }
+            }
+        }
+        
+        // Check delta edges (new or modified)
+        for change in &self.delta {
+            if let GraphDelta::EdgeChange { id, edge } = change {
+                if edge.src == node {
+                    // Check if this edge is in base (if so, we already counted it)
+                    let in_base = self.inner.edge_index.contains_key(id);
+                    if !in_base {
+                        // New edge from delta
+                        let prob = edge.exist
+                            .mean_probability(&self.inner.competing_groups)
+                            .unwrap_or(0.0);
+                        if prob >= min_prob {
+                            count += 1;
+                        }
+                    } else {
+                        // Modified edge - need to recalculate
+                        // Remove old count, add new count
+                        // For now, just check the new version
+                        let prob = edge.exist
+                            .mean_probability(&self.inner.competing_groups)
+                            .unwrap_or(0.0);
+                        if prob >= min_prob {
+                            // Find the old edge to see if we counted it
+                            if let Some(&old_idx) = self.inner.edge_index.get(id) {
+                                if let Some(old_e) = self.inner.edges.get(old_idx) {
+                                    let old_prob = old_e.exist
+                                        .mean_probability(&self.inner.competing_groups)
+                                        .unwrap_or(0.0);
+                                    if old_prob < min_prob {
+                                        count += 1; // Wasn't counted before, should be now
+                                    }
+                                    // else: was counted before, still should be (no change)
+                                }
+                            }
+                        } else {
+                            // New version doesn't meet threshold
+                            // Check if old version did
+                            if let Some(&old_idx) = self.inner.edge_index.get(id) {
+                                if let Some(old_e) = self.inner.edges.get(old_idx) {
+                                    let old_prob = old_e.exist
+                                        .mean_probability(&self.inner.competing_groups)
+                                        .unwrap_or(0.0);
+                                    if old_prob >= min_prob {
+                                        count -= 1; // Was counted before, shouldn't be now
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if let GraphDelta::EdgeRemoved { id } = change {
+                // Check if this edge was in our count
+                if let Some(&idx) = self.inner.edge_index.get(id) {
+                    if let Some(e) = self.inner.edges.get(idx) {
+                        if e.src == node {
+                            let prob = e.exist
+                                .mean_probability(&self.inner.competing_groups)
+                                .unwrap_or(0.0);
+                            if prob >= min_prob {
+                                count -= 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        count
     }
 
     /// Gets the competing edge group for a node and edge type.
@@ -914,12 +1305,23 @@ impl BeliefGraph {
     ///
     /// The competing group if it exists
     pub fn get_competing_group(&self, node: NodeId, edge_type: &str) -> Option<&CompetingEdgeGroup> {
-        // Find an edge from this node with this type
-        let edge = self.edges.iter().find(|e| e.src == node && e.ty == edge_type)?;
+        // Check delta first for recent changes
+        for change in &self.delta {
+            if let GraphDelta::EdgeChange { id, edge } = change {
+                if edge.src == node && edge.ty == edge_type {
+                    if let EdgePosterior::Competing { group_id, .. } = &edge.exist {
+                        return self.inner.competing_groups.get(group_id);
+                    }
+                }
+            }
+        }
+        
+        // Find an edge from this node with this type in base
+        let edge = self.inner.edges.iter().find(|e| e.src == node && e.ty == edge_type)?;
         
         // Check if it's a competing edge
         if let EdgePosterior::Competing { group_id, .. } = &edge.exist {
-            self.competing_groups.get(group_id)
+            self.inner.competing_groups.get(group_id)
         } else {
             None
         }
@@ -1006,14 +1408,20 @@ impl BeliefGraph {
     ///
     /// Call after bulk graph modifications. The index is cached until invalidated.
     /// Building is O(E log E) due to sorting; subsequent queries are O(1).
+    /// Applies delta first to ensure index includes all edges.
     pub fn build_adjacency(&mut self) {
-        self.adjacency = Some(AdjacencyIndex::from_edges(&self.edges));
+        self.ensure_owned(); // Applies delta
+        let inner = Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
+        inner.adjacency = Some(AdjacencyIndex::from_edges(&inner.edges));
     }
 
     /// Ensures adjacency index is built, building it lazily if needed.
+    /// Applies delta first to ensure index includes all edges.
     fn ensure_adjacency(&mut self) {
-        if self.adjacency.is_none() {
-            self.build_adjacency();
+        self.ensure_owned(); // Applies delta
+        let inner = Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
+        if inner.adjacency.is_none() {
+            inner.adjacency = Some(AdjacencyIndex::from_edges(&inner.edges));
         }
     }
 
@@ -1023,7 +1431,7 @@ impl BeliefGraph {
     /// in deterministic sorted order.
     pub fn get_outgoing_edges(&mut self, node: NodeId, edge_type: &str) -> Vec<EdgeId> {
         self.ensure_adjacency();
-        self.adjacency
+        self.inner.adjacency
             .as_ref()
             .unwrap()
             .get_edges(node, edge_type)
@@ -1033,19 +1441,53 @@ impl BeliefGraph {
     pub fn adjacency_outgoing_by_type(&self) -> std::collections::HashMap<(NodeId, String), Vec<EdgeId>> {
         // Build on demand. Could use cached adjacency index if available.
         let mut map: std::collections::HashMap<(NodeId, String), Vec<EdgeId>> = std::collections::HashMap::new();
-        for e in &self.edges {
+        
+        // Include base edges
+        for e in &self.inner.edges {
             map.entry((e.src, e.ty.clone())).or_default().push(e.id);
         }
+        
+        // Include delta edges (new or modified)
+        for change in &self.delta {
+            if let GraphDelta::EdgeChange { id, edge } = change {
+                // Check if this replaces an existing edge
+                let existing = self.inner.edge_index.contains_key(id);
+                if !existing {
+                    // New edge
+                    map.entry((edge.src, edge.ty.clone())).or_default().push(*id);
+                }
+                // Modified edges already have their IDs in the map from base
+            } else if let GraphDelta::EdgeRemoved { id } = change {
+                // Remove from map if present
+                if let Some(&idx) = self.inner.edge_index.get(id) {
+                    if let Some(e) = self.inner.edges.get(idx) {
+                        if let Some(edges) = map.get_mut(&(e.src, e.ty.clone())) {
+                            edges.retain(|&eid| eid != *id);
+                        }
+                    }
+                }
+            }
+        }
+        
         // Keep deterministic order by stable EdgeId
         for v in map.values_mut() { v.sort(); }
         map
     }
 
     pub fn observe_edge(&mut self, edge: EdgeId, present: bool) -> Result<(), ExecError> {
-        let e = self
-            .edge_mut(edge)
-            .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
+        self.ensure_ready_for_delta();
+        
+        // Get current edge (check delta first, then base)
+        let mut e = self
+            .edge(edge)
+            .ok_or_else(|| ExecError::Internal("missing edge".into()))?
+            .clone();
+        
+        // Apply mutation
         e.exist.observe(present)?;
+        
+        // Add to delta
+        self.delta.push(GraphDelta::EdgeChange { id: edge, edge: e });
         Ok(())
     }
 
@@ -1055,6 +1497,8 @@ impl BeliefGraph {
     ///
     /// * `edge` - The edge ID to observe
     pub fn observe_edge_chosen(&mut self, edge: EdgeId) -> Result<(), ExecError> {
+        self.ensure_ready_for_delta();
+        
         let (group_id, category_index) = {
             let e = self
                 .edge(edge)
@@ -1070,7 +1514,12 @@ impl BeliefGraph {
             }
         };
         
-        let group = self.competing_groups
+        // Get current competing group (may need to check delta, but competing groups are in base for now)
+        // For now, we'll apply delta if needed, then update group
+        // TODO: Add competing group to delta tracking if we modify it
+        self.ensure_owned();
+        let inner = Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
+        let group = inner.competing_groups
             .get_mut(&group_id)
             .ok_or_else(|| ExecError::Internal("missing competing group".into()))?;
         group.posterior.observe_chosen(category_index);
@@ -1083,6 +1532,8 @@ impl BeliefGraph {
     ///
     /// * `edge` - The edge ID to observe
     pub fn observe_edge_unchosen(&mut self, edge: EdgeId) -> Result<(), ExecError> {
+        self.ensure_ready_for_delta();
+        
         let (group_id, category_index) = {
             let e = self
                 .edge(edge)
@@ -1098,7 +1549,10 @@ impl BeliefGraph {
             }
         };
         
-        let group = self.competing_groups
+        // Update competing group (apply delta if needed)
+        self.ensure_owned();
+        let inner = Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
+        let group = inner.competing_groups
             .get_mut(&group_id)
             .ok_or_else(|| ExecError::Internal("missing competing group".into()))?;
         group.posterior.observe_unchosen(category_index);
@@ -1111,6 +1565,8 @@ impl BeliefGraph {
     ///
     /// * `edge` - The edge ID to force
     pub fn observe_edge_forced_choice(&mut self, edge: EdgeId) -> Result<(), ExecError> {
+        self.ensure_ready_for_delta();
+        
         let (group_id, category_index) = {
             let e = self
                 .edge(edge)
@@ -1126,7 +1582,10 @@ impl BeliefGraph {
             }
         };
         
-        let group = self.competing_groups
+        // Update competing group (apply delta if needed)
+        self.ensure_owned();
+        let inner = Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
+        let group = inner.competing_groups
             .get_mut(&group_id)
             .ok_or_else(|| ExecError::Internal("missing competing group".into()))?;
         group.posterior.force_choice(category_index);
@@ -1134,34 +1593,61 @@ impl BeliefGraph {
     }
 
     pub fn force_edge_present(&mut self, edge: EdgeId) -> Result<(), ExecError> {
-        let e = self
-            .edge_mut(edge)
-            .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
+        self.ensure_ready_for_delta();
+        
+        // Get current edge (check delta first, then base)
+        let mut e = self
+            .edge(edge)
+            .ok_or_else(|| ExecError::Internal("missing edge".into()))?
+            .clone();
+        
+        // Apply mutation
         e.exist.force_present()?;
+        
+        // Add to delta
+        self.delta.push(GraphDelta::EdgeChange { id: edge, edge: e });
         Ok(())
     }
 
     pub fn observe_attr(&mut self, node: NodeId, attr: &str, x: f64, tau_obs: f64) -> Result<(), ExecError> {
-        let n = self
-            .node_mut(node)
-            .ok_or_else(|| ExecError::Internal("missing node".into()))?;
+        self.ensure_ready_for_delta();
+        
+        // Get current node (check delta first, then base)
+        let mut n = self
+            .node(node)
+            .ok_or_else(|| ExecError::Internal("missing node".into()))?
+            .clone();
+        
+        // Apply mutation
         let g = n
             .attrs
             .get_mut(attr)
             .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
         g.update(x, tau_obs);
+        
+        // Add to delta
+        self.delta.push(GraphDelta::NodeChange { id: node, node: n });
         Ok(())
     }
 
     pub fn force_attr_value(&mut self, node: NodeId, attr: &str, x: f64) -> Result<(), ExecError> {
-        let n = self
-            .node_mut(node)
-            .ok_or_else(|| ExecError::Internal("missing node".into()))?;
+        self.ensure_ready_for_delta();
+        
+        // Get current node (check delta first, then base)
+        let mut n = self
+            .node(node)
+            .ok_or_else(|| ExecError::Internal("missing node".into()))?
+            .clone();
+        
+        // Apply mutation
         let g = n
             .attrs
             .get_mut(attr)
             .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
         g.force_value(x);
+        
+        // Add to delta
+        self.delta.push(GraphDelta::NodeChange { id: node, node: n });
         Ok(())
     }
 
@@ -1180,7 +1666,7 @@ impl BeliefGraph {
         let mut warnings = Vec::new();
 
         // Check node attributes
-        for node in &self.nodes {
+        for node in &self.inner.nodes {
             for (attr_name, attr) in &node.attrs {
                 // Check for NaN/Inf
                 if !attr.mean.is_finite() {
@@ -1205,7 +1691,7 @@ impl BeliefGraph {
                 }
 
                 // Warn on extreme outliers (|x - μ| > 10σ would be unusual)
-                let std_dev = (1.0 / attr.precision).sqrt();
+                let std_dev = (1.0_f64 / attr.precision).sqrt();
                 // This check is more for data quality than numerical stability
                 if std_dev.is_finite() {
                     let z_score = attr.mean.abs() / std_dev;
@@ -1220,7 +1706,7 @@ impl BeliefGraph {
         }
 
         // Check edge posteriors
-        for edge in &self.edges {
+        for edge in &self.inner.edges {
             match &edge.exist {
                 EdgePosterior::Independent(beta) => {
                     // Check for NaN/Inf in Beta parameters
@@ -1251,7 +1737,7 @@ impl BeliefGraph {
                     }
                 }
                 EdgePosterior::Competing { group_id, category_index } => {
-                    if let Some(group) = self.competing_groups.get(group_id) {
+                    if let Some(group) = self.inner.competing_groups.get(group_id) {
                         // Check Dirichlet parameters
                         for (i, &alpha) in group.posterior.concentrations.iter().enumerate() {
                             if !alpha.is_finite() {
@@ -1449,8 +1935,8 @@ mod tests {
     #[test]
     fn belief_graph_default_is_empty() {
         let g = BeliefGraph::default();
-        assert_eq!(g.nodes.len(), 0);
-        assert_eq!(g.edges.len(), 0);
+        assert_eq!(g.nodes().len(), 0);
+        assert_eq!(g.edges().len(), 0);
     }
 
     #[test]

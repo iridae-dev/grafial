@@ -174,6 +174,9 @@ pub fn build_graph_from_evidence(
     // Group by target for deterministic ordering, then process batches in parallel
     apply_observations_parallel(&mut graph, edge_observations, attr_observations)?;
     
+    // Apply any pending deltas before returning to ensure nodes() and edges() work correctly
+    graph.ensure_owned();
+    
     Ok(graph)
 }
 
@@ -320,18 +323,19 @@ fn create_edge_with_posterior(
                     existing_group.category_index.insert(dst, category_index);
                     
                     // Update Dirichlet posterior to include new category
-                    // For uniform prior: redistribute to maintain uniform distribution
+                    // For uniform prior: add new category with its prior concentration,
+                    // preserving existing posterior concentrations (Bayesian principle)
                     let old_concentrations = existing_group.posterior.concentrations.clone();
                     let new_concentrations = if let CategoricalPrior::Uniform { pseudo_count } = prior {
-                        // Redistribute existing total to all categories (including new one)
-                        let total_alpha: f64 = old_concentrations.iter().sum();
-                        let new_alpha_per_category = total_alpha / (old_concentrations.len() + 1) as f64;
-                        let mut new = vec![new_alpha_per_category; old_concentrations.len() + 1];
-                        // Ensure total is still pseudo_count (for consistency)
-                        let scale = pseudo_count / total_alpha;
-                        for new_alpha in &mut new {
-                            *new_alpha *= scale;
-                        }
+                        // Correct Bayesian approach: preserve existing posteriors, add new category with prior
+                        // For uniform prior with K existing categories: prior per category was pseudo_count / K
+                        // For new category (K+1): prior concentration is pseudo_count / (K+1)
+                        // However, we want to be consistent with the original uniform allocation
+                        let k_old = old_concentrations.len();
+                        let prior_alpha_new = pseudo_count / (k_old + 1) as f64;
+
+                        let mut new = old_concentrations.clone();
+                        new.push(prior_alpha_new);
                         new
                     } else {
                         // For explicit prior, we can't add new categories dynamically

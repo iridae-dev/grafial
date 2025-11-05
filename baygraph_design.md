@@ -143,19 +143,68 @@ These are numerically stable approximations to degenerate beliefs; they avoid in
 
 #### Categorical Posterior (Dirichlet–Categorical)
 
-For mutually exclusive choices among K alternatives (e.g., “one outgoing edge must be chosen” per source), use a `CategoricalPosterior` with a Dirichlet prior over category probabilities π ∈ Δ^{K−1}.
+For mutually exclusive choices among K alternatives (e.g., "one outgoing edge must be chosen" per source), use a `CategoricalPosterior` with a Dirichlet prior over category probabilities π ∈ Δ^{K−1}.
+
+**When to use:**
+- Routing: one outgoing path per packet
+- Resource allocation: one task assignment per worker
+- State machines: one transition per state
+- Tournament brackets: one winner per match
+
+**When NOT to use:**
+- Social networks (users can follow multiple people) → use independent Bernoulli
+- Multi-label classification (multiple labels can apply) → use independent Bernoulli
+
+**Syntax:**
 
 ```bayscript
-CategoricalPosterior(
-  prior = [α₁, α₂, ..., α_K]  // α_k > 0
-)
+belief_model NetworkBeliefs on NetworkSchema {
+  edge ROUTES_TO {
+    exist ~ CategoricalPosterior(
+      group_by = "source",           // Required: partition by "source" or "destination"
+      prior = uniform,                // Keyword: uniform Dirichlet (all α_k equal)
+      pseudo_count = 3.0              // Total Σ α_k = pseudo_count
+    )
+  }
+}
 ```
 
-Given counts c_k from observations of category k, the posterior parameters are:
-- α_k,new = α_k,old + c_k
-- Posterior mean: E[π_k] = α_k / Σ_j α_j
+**Explicit prior per category** (when categories known statically):
 
-When modeling “competing” edges (e.g., exactly one destination per source), prefer `CategoricalPosterior` grouped by source over renormalizing independent Bernoulli probabilities, which is not Bayesian.
+```bayscript
+belief_model WorkflowBeliefs on WorkflowSchema {
+  edge ASSIGNS {
+    exist ~ CategoricalPosterior(
+      group_by = "source",
+      prior = [2.0, 3.0, 5.0],       // Biased: α = [2, 3, 5], favors third option
+      categories = ["Task_A", "Task_B", "Task_C"]  // Optional: for validation
+    )
+  }
+}
+```
+
+**Mathematical foundation:**
+- Edges from source u form a group with shared belief: π ~ Dirichlet(α_1, ..., α_K)
+- Constraint: Σ_k π_k = 1 (exactly one choice)
+- Evidence about choosing edge (u, v_k) increments α_k
+
+**Bayesian update** (Dirichlet–Categorical conjugacy):
+- Observe category k: α_k,new = α_k,old + 1
+- Posterior mean: E[π_k] = α_k / Σ_j α_j
+- Posterior variance: Var[π_k] = (α_k (α_0 - α_k)) / (α_0² (α_0 + 1)) where α_0 = Σ_j α_j
+
+**Forcing a choice** (via deterministic evidence):
+- `force_choice` for category k: α_k = 10⁶, α_j = 1.0 for j ≠ k
+- This is a numerically stable approximation to a degenerate distribution
+
+**Validation rules:**
+- `group_by` must be "source" or "destination"
+- If `prior = uniform`, must specify `pseudo_count`
+- If `prior = [...]` (array), pseudo_count is sum of array
+- All values in `prior` array must be > 0 (proper Dirichlet)
+- Enforce α_k ≥ 0.01 for all k to prevent improper priors
+
+When modeling "competing" edges (e.g., exactly one destination per source), prefer `CategoricalPosterior` grouped by source over renormalizing independent Bernoulli probabilities, which is not Bayesian.
 
 ---
 
@@ -229,6 +278,8 @@ edge FRAUD {
 
 ### 3.3 Evidence
 
+**Independent edges** (Bernoulli posterior):
+
 ```bayscript
 evidence SocialEvidence on SocialBeliefs {
   observe edge REL(Person["Alice"], Person["Bob"]) present
@@ -239,7 +290,33 @@ evidence SocialEvidence on SocialBeliefs {
 }
 ```
 
-Evidence updates posteriors (Bayesian update or forced states).
+**Competing edges** (Categorical posterior):
+
+```bayscript
+evidence NetworkEvidence on NetworkBeliefs {
+  // Competing edges: explicit choices
+  observe edge ROUTES_TO(Server["S1"], Server["S2"]) chosen
+  observe edge ROUTES_TO(Server["S3"], Server["S5"]) chosen
+
+  // Negative evidence (rarely used)
+  observe edge ROUTES_TO(Server["S7"], Server["S8"]) unchosen
+
+  // Deterministic choice
+  observe edge ROUTES_TO(Server["S9"], Server["S10"]) forced_choice
+}
+```
+
+**Evidence modes and semantics:**
+
+| Edge Type | Statement | Posterior Update | Notes |
+|-----------|-----------|------------------|-------|
+| Independent | `observe edge E(A,B) present` | Beta: α += 1 | "Edge exists" |
+| Independent | `observe edge E(A,B) absent` | Beta: β += 1 | "Edge doesn't exist" |
+| Competing | `observe edge E(A,B) chosen` | Dirichlet: α_B += 1 | "A chose B from all options" |
+| Competing | `observe edge E(A,B) unchosen` | Dirichlet: α_k += 1/(K-1) for k≠B | "A didn't choose B" (rare usage) |
+| Competing | `observe edge E(A,B) forced_choice` | Dirichlet: α_B = 1e6, others = 1.0 | "A deterministically chose B" |
+
+Evidence updates posteriors (Bayesian update or forced states). The evidence mode must match the edge posterior type (independent vs. competing); type checking occurs at runtime (or compile-time if evidence is static).
 
 ---
 
@@ -281,6 +358,45 @@ Semantics:
 - `where` filters by posterior probabilities or expectations.  
 - `action` mutates belief summaries deterministically: for Gaussian posteriors, `set_expectation X = v` sets the posterior mean μ := v while leaving precision τ unchanged; for Bernoulli, force operations set near‑deterministic Beta parameters as specified above.  
 - `mode` defines iteration behavior (`for_each`, `fixpoint`).
+
+**Query functions for competing edges:**
+
+The following functions work with both independent and competing edges, with semantics that adapt to the edge type:
+
+- **`prob(edge)`**: For independent edges, returns E[p] = α / (α + β). For competing edges, returns E[π_k] = α_k / Σ_j α_j.
+- **`degree(node, edge_type, min_prob)`**: For independent edges, counts edges with E[p] ≥ threshold. For competing edges, counts categories with E[π_k] ≥ threshold. Since Σ π_k = 1 for competing edges, at most one category can exceed 0.5 (unless K=2 and both ≈ 0.5).
+
+**Competing-edge-specific query functions:**
+
+- **`winner(node, edge_type, direction="outgoing", epsilon=0.01)`**: Returns the edge with maximum E[π_k], or `null` if tied within `epsilon`. Useful for deterministic routing decisions.
+
+```bayscript
+rule CheckWinner on NetworkBeliefs {
+  pattern
+    (A:Server)
+  where
+    winner(A, outgoing=ROUTES_TO) == B
+    // B is the clear winner (max E[π_k] with no ties)
+  action { /* ... */ }
+}
+```
+
+- **`entropy(node, edge_type, direction="outgoing")`**: Returns Shannon entropy H(π) = -Σ π_k log(π_k) in nats. Range: [0, log(K)] where K = number of categories. H = 0 means deterministic (one π_k ≈ 1), H = log(K) means uniform (all π_k ≈ 1/K). Useful for detecting high-uncertainty routing decisions.
+
+```bayscript
+rule UncertainRoute on NetworkBeliefs {
+  pattern
+    (A:Server)
+  where
+    entropy(A, outgoing=ROUTES_TO) > 1.5
+    // High uncertainty: no clear winner
+  action {
+    // Flag for manual review or collect more evidence
+  }
+}
+```
+
+- **`prob_vector(node, edge_type, direction="outgoing")`**: Returns [E[π_1], E[π_2], ..., E[π_K]] for all categories. Primarily for metrics and export, not pattern matching.
 
 ---
 
@@ -513,7 +629,32 @@ impl BetaPosterior     { pub fn observe(&mut self, present: bool) { /* as spec *
 impl DirichletPosterior{ pub fn observe(&mut self, k: usize) { /* increment α_k */ } }
 ```
 
-Force operations set large‑finite precision/concentration as specified in Section 3.2.1; provide explicit methods `force_value`, `force_present`, `force_absent`.
+Force operations set large‑finite precision/concentration as specified in Section 3.2.1; provide explicit methods `force_value`, `force_present`, `force_absent`, `force_choice`.
+
+**Competing edges data structures:**
+
+For competing edges, store references to shared Dirichlet groups:
+
+```rust
+pub enum EdgePosterior {
+    Independent(BetaPosterior),
+    Competing(CompetingEdgeRef),
+}
+
+pub struct CompetingEdgeRef {
+    group_id: GroupId,
+    category_index: usize,
+}
+
+pub struct DirichletGroupPosterior {
+    source_node: NodeId,
+    edge_type: EdgeTypeId,
+    categories: Vec<NodeId>,        // destination nodes
+    concentrations: Vec<f64>,       // α_k parameters
+}
+```
+
+Groups are indexed by (source_node, edge_type, direction) for O(1) lookup. The `prob()` function for competing edges retrieves the group and computes E[π_k] = α_k / Σ_j α_j.
 
 ---
 
@@ -626,7 +767,12 @@ Design never adds new top-level constructs unless absolutely necessary — new c
    - Immutable graph pipelines, snapshots, exports  
 4. **v1 Python Binding**  
    - PyO3 + `maturin` build; expose compile/run/inspect  
-5. **v2 UI**  
+5. **v2 Competing Edges** (Phase 7+)
+   - CategoricalPosterior with Dirichlet groups
+   - Evidence modes: `chosen`, `unchosen`, `forced_choice`
+   - Query functions: `winner()`, `entropy()`, `prob_vector()`
+   - Python API: `graph.competing_groups()`
+6. **v2 UI**  
    - Structured editor for schema/rule/flow/metric  
    - Graph + belief visualizations  
 
@@ -683,11 +829,113 @@ print(ctx.metrics["final_value"])
 
 ---
 
+## 11. Example: Competing Edges (Network Packet Routing)
+
+### Scenario: Network Packet Routing
+
+**Schema:**
+```bayscript
+schema Network {
+  node Server {
+    load: Real
+  }
+
+  edge ROUTES_TO { }
+}
+```
+
+**Belief Model:**
+```bayscript
+belief_model NetworkBeliefs on Network {
+  node Server {
+    load ~ GaussianPosterior(prior_mean = 0.0, prior_precision = 0.01)
+  }
+
+  edge ROUTES_TO {
+    exist ~ CategoricalPosterior(
+      group_by = "source",
+      prior = uniform,
+      pseudo_count = 5.0
+    )
+  }
+}
+```
+
+**Evidence:**
+```bayscript
+evidence Observations on NetworkBeliefs {
+  // Observed routing choices
+  observe edge ROUTES_TO(Server["S1"], Server["S2"]) chosen
+  observe edge ROUTES_TO(Server["S1"], Server["S2"]) chosen
+  observe edge ROUTES_TO(Server["S1"], Server["S3"]) chosen
+
+  // Server loads
+  observe Server["S2"].load = 0.7
+  observe Server["S3"].load = 0.3
+}
+```
+
+**Rule: Load Balancing Alert**
+```bayscript
+rule LoadBalanceAlert on NetworkBeliefs {
+  pattern
+    (A:Server)
+
+  where
+    entropy(A, outgoing=ROUTES_TO) < 0.5
+    and exists (A)-[ax:ROUTES_TO]->(X)
+      where prob(ax) >= 0.6 and E[X.load] > 0.6
+    // A routes mostly to one destination X, and X is overloaded
+
+  action {
+    // Flag for rebalancing
+  }
+}
+```
+
+**Flow:**
+```bayscript
+flow AnalyzeRouting on NetworkBeliefs {
+  graph base = from_evidence Observations
+
+  graph flagged = base
+    |> apply_rule LoadBalanceAlert
+
+  metric total_entropy = sum_nodes(
+    label = Server,
+    contrib = entropy(node, outgoing=ROUTES_TO)
+  )
+
+  export_metric total_entropy as "routing_diversity"
+  export flagged as "result"
+}
+```
+
+**Python usage:**
+```python
+import baygraph
+
+prog = baygraph.compile(open("network.bg").read())
+ctx = baygraph.run_flow(prog, "AnalyzeRouting")
+
+print(f"Total routing diversity: {ctx.metrics['routing_diversity']:.2f}")
+
+graph = ctx.graphs["result"]
+for group in graph.competing_groups(type="ROUTES_TO"):
+    if group.entropy < 0.5:
+        print(f"Warning: {group.source_node} has low routing diversity")
+        winner_edge = group.winner
+        print(f"  Dominant route: {winner_edge.dst_node} ({winner_edge.prob:.1%})")
+```
+
+---
+
 ### This document defines:
 
 - Core semantics  
 - Complete syntax surface  
 - Engine + interop architecture  
-- Extensibility model
+- Extensibility model  
+- Competing edges (CategoricalPosterior) design and semantics
 
 Use it as the foundation for the initial Rust prototype (`baygraph_core`).
