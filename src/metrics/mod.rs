@@ -338,14 +338,15 @@ impl MetricFn for AvgDegree {
 
         // Build adjacency by type for efficient lookup (once)
         let adj = graph.adjacency_outgoing_by_type();
-        // Cache the key to avoid cloning edge_type for each node
-        let key_template = (NodeId(0), edge_type.clone());
+        // Cache the key to avoid cloning edge_type for each node (convert to Arc<str> once)
+        use std::sync::Arc;
+        let edge_type_arc: Arc<str> = Arc::from(edge_type);
         for n in nodes_sorted_by_id(graph.nodes()) {
             if n.label != label { continue; }
             count_nodes += 1;
             let mut d = 0usize;
-            // Clone String only once per loop, not per HashMap lookup
-            let key = (n.id, key_template.1.clone());
+            // Clone Arc<str> only once per loop (cheap, just reference count increment)
+            let key = (n.id, edge_type_arc.clone());
             if let Some(edges) = adj.get(&key) {
                 for &eid in edges {
                     let p = graph.prob_mean(eid)?;

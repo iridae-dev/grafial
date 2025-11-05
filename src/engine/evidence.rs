@@ -7,6 +7,7 @@
 //! - Managing competing edge groups for categorical posteriors
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
@@ -383,7 +384,7 @@ fn create_edge_with_posterior(
                 id: edge_id,
                 src,
                 dst,
-                ty: edge_type.clone(),
+                ty: Arc::from(edge_type.clone()),
                 exist: EdgePosterior::Competing {
                     group_id,
                     category_index: category_idx,

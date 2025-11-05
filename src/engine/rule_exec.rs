@@ -645,9 +645,10 @@ fn find_candidate_edges<'a>(
     // First, collect all edge IDs we've seen (to avoid duplicates)
     let mut seen_ids = std::collections::HashSet::new();
     
+    // Arc<str> implements PartialEq with &str, so we can compare directly using .as_ref()
     // Add edges from base graph
     for edge in graph.edges() {
-        if edge.ty == edge_type {
+        if edge.ty.as_ref() == edge_type {
             seen_ids.insert(edge.id);
             candidates.push(edge);
         }
@@ -656,7 +657,7 @@ fn find_candidate_edges<'a>(
     // Add edges from delta (checking for duplicates)
     for change in graph.delta() {
         if let crate::engine::graph::GraphDelta::EdgeChange { id, edge } = change {
-            if edge.ty == edge_type && !seen_ids.contains(id) {
+            if edge.ty.as_ref() == edge_type && !seen_ids.contains(id) {
                 seen_ids.insert(*id);
                 candidates.push(edge);
             }
@@ -1119,13 +1120,13 @@ mod tests {
         let n3 = g.add_node("Person".into(), HashMap::new());
         
         // High probability chain
-        let e1 = g.add_edge(n1, n2, "REL".into(), BetaPosterior { alpha: 9.0, beta: 1.0 });
-        let e2 = g.add_edge(n2, n3, "REL".into(), BetaPosterior { alpha: 8.0, beta: 2.0 });
+        let _e1 = g.add_edge(n1, n2, "REL".to_string(), BetaPosterior { alpha: 9.0, beta: 1.0 });
+        let e2 = g.add_edge(n2, n3, "REL".to_string(), BetaPosterior { alpha: 8.0, beta: 2.0 });
         
         // Low probability chain (should not match)
         let n4 = g.add_node("Person".into(), HashMap::new());
-        let _e3 = g.add_edge(n1, n4, "REL".into(), BetaPosterior { alpha: 1.0, beta: 9.0 });
-        let e4 = g.add_edge(n4, n3, "REL".into(), BetaPosterior { alpha: 2.0, beta: 8.0 });
+        let _e3 = g.add_edge(n1, n4, "REL".to_string(), BetaPosterior { alpha: 1.0, beta: 9.0 });
+        let e4 = g.add_edge(n4, n3, "REL".to_string(), BetaPosterior { alpha: 2.0, beta: 8.0 });
         
         // Apply delta to ensure all items are in base for iteration
         g.ensure_owned();

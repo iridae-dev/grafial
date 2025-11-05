@@ -78,7 +78,7 @@ fn analyze_pattern_selectivity(
     let edges = graph.edges();
     let matching_edges: usize = edges
         .iter()
-        .filter(|e| e.ty == pattern.edge.ty)
+        .filter(|e| e.ty.as_ref() == pattern.edge.ty.as_str())
         .count();
 
     // Estimate node label filtering: count nodes with matching labels and approximate

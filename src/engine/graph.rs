@@ -565,7 +565,8 @@ pub struct EdgeData {
     /// The destination node ID
     pub dst: NodeId,
     /// The edge type (e.g., "KNOWS", "LIKES")
-    pub ty: String,
+    /// Using Arc<str> for cheap cloning (reference count increment, not allocation)
+    pub ty: Arc<str>,
     /// Posterior for edge existence (independent or competing)
     pub exist: EdgePosterior,
 }
@@ -580,7 +581,8 @@ pub struct EdgeData {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AdjacencyIndex {
     /// Maps (NodeId, EdgeType) to (start_offset, end_offset) in edge_ids
-    ranges: HashMap<(NodeId, String), (usize, usize)>,
+    /// Using Arc<str> to avoid String allocations on lookup
+    ranges: HashMap<(NodeId, Arc<str>), (usize, usize)>,
     /// Contiguous sorted array of EdgeIds
     edge_ids: Vec<EdgeId>,
 }
@@ -598,8 +600,9 @@ impl AdjacencyIndex {
     ///
     /// Groups edges by (src, type) and stores them in sorted order for determinism.
     pub fn from_edges(edges: &[EdgeData]) -> Self {
-        let mut map: HashMap<(NodeId, String), Vec<EdgeId>> = HashMap::new();
+        let mut map: HashMap<(NodeId, Arc<str>), Vec<EdgeId>> = HashMap::new();
         for e in edges {
+            // Arc clone is cheap (just reference count increment)
             map.entry((e.src, e.ty.clone())).or_default().push(e.id);
         }
 
@@ -625,7 +628,9 @@ impl AdjacencyIndex {
     ///
     /// Returns an empty slice if no edges exist.
     pub fn get_edges(&self, node: NodeId, edge_type: &str) -> &[EdgeId] {
-        if let Some(&(start, end)) = self.ranges.get(&(node, edge_type.to_string())) {
+        // Convert &str to Arc<str> for lookup (creates Arc but doesn't allocate new string)
+        let key = (node, Arc::from(edge_type));
+        if let Some(&(start, end)) = self.ranges.get(&key) {
             &self.edge_ids[start..end]
         } else {
             &[]
@@ -1029,6 +1034,7 @@ impl BeliefGraph {
 
     /// Add an independent edge and update the index. Returns the EdgeId.
     pub fn add_edge(&mut self, src: NodeId, dst: NodeId, ty: String, exist: BetaPosterior) -> EdgeId {
+        let ty = Arc::from(ty);  // Convert to Arc<str> once
         self.ensure_ready_for_delta();
         
         // Calculate ID based on current state (base + delta)
@@ -1042,7 +1048,7 @@ impl BeliefGraph {
             id,
             src,
             dst,
-            ty,
+            ty,  // Already Arc<str>
             exist: EdgePosterior::independent(exist),
         };
         
@@ -1088,7 +1094,7 @@ impl BeliefGraph {
             id,
             src,
             dst,
-            ty,
+            ty: Arc::from(ty),
             exist: EdgePosterior::independent(beta),
         }
     }
@@ -1329,7 +1335,7 @@ impl BeliefGraph {
         // Check delta first for recent changes
         for change in &self.delta {
             if let GraphDelta::EdgeChange { id, edge } = change {
-                if edge.src == node && edge.ty == edge_type {
+                if edge.src == node && edge.ty.as_ref() == edge_type {
                     if let EdgePosterior::Competing { group_id, .. } = &edge.exist {
                         return self.inner.competing_groups.get(group_id);
                     }
@@ -1338,7 +1344,7 @@ impl BeliefGraph {
         }
         
         // Find an edge from this node with this type in base
-        let edge = self.inner.edges.iter().find(|e| e.src == node && e.ty == edge_type)?;
+        let edge = self.inner.edges.iter().find(|e| e.src == node && e.ty.as_ref() == edge_type)?;
         
         // Check if it's a competing edge
         if let EdgePosterior::Competing { group_id, .. } = &edge.exist {
@@ -1459,11 +1465,11 @@ impl BeliefGraph {
             .to_vec()
     }
 
-    pub fn adjacency_outgoing_by_type(&self) -> std::collections::HashMap<(NodeId, String), Vec<EdgeId>> {
+    pub fn adjacency_outgoing_by_type(&self) -> std::collections::HashMap<(NodeId, Arc<str>), Vec<EdgeId>> {
         // Build on demand. Could use cached adjacency index if available.
-        let mut map: std::collections::HashMap<(NodeId, String), Vec<EdgeId>> = std::collections::HashMap::new();
+        let mut map: std::collections::HashMap<(NodeId, Arc<str>), Vec<EdgeId>> = std::collections::HashMap::new();
         
-        // Include base edges
+        // Include base edges (Arc clone is cheap)
         for e in &self.inner.edges {
             map.entry((e.src, e.ty.clone())).or_default().push(e.id);
         }
@@ -1474,15 +1480,16 @@ impl BeliefGraph {
                 // Check if this replaces an existing edge
                 let existing = self.inner.edge_index.contains_key(id);
                 if !existing {
-                    // New edge
+                    // New edge (Arc clone is cheap)
                     map.entry((edge.src, edge.ty.clone())).or_default().push(*id);
                 }
                 // Modified edges already have their IDs in the map from base
             } else if let GraphDelta::EdgeRemoved { id } = change {
                 // Remove from map if present
                 if let Some(&idx) = self.inner.edge_index.get(id) {
-                    if let Some(e) = self.inner.edges.get(idx) {
-                        if let Some(edges) = map.get_mut(&(e.src, e.ty.clone())) {
+                        if let Some(e) = self.inner.edges.get(idx) {
+                            // Arc clone is cheap
+                            if let Some(edges) = map.get_mut(&(e.src, e.ty.clone())) {
                             edges.retain(|&eid| eid != *id);
                         }
                     }

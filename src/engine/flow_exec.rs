@@ -335,7 +335,7 @@ fn prune_edges(input: &BeliefGraph, edge_type: &str, predicate: &ExprAst) -> Res
     let mut seen_edge_ids: std::collections::HashSet<EdgeId> = std::collections::HashSet::new();
     for e in input.edges() {
         seen_edge_ids.insert(e.id);
-        if e.ty != edge_type {
+        if e.ty.as_ref() != edge_type {
             keep.push(e.id);
         } else {
             candidates.push(e.id);
@@ -348,7 +348,7 @@ fn prune_edges(input: &BeliefGraph, edge_type: &str, predicate: &ExprAst) -> Res
             if !seen_edge_ids.contains(id) {
                 // New edge from delta (not in base)
                 seen_edge_ids.insert(*id);
-                if edge.ty != edge_type {
+                if edge.ty.as_ref() != edge_type {
                     keep.push(*id);
                 } else {
                     candidates.push(*id);
@@ -359,7 +359,7 @@ fn prune_edges(input: &BeliefGraph, edge_type: &str, predicate: &ExprAst) -> Res
                 keep.retain(|&eid| eid != *id);
                 candidates.retain(|&eid| eid != *id);
                 // Add to appropriate list based on new type
-                if edge.ty != edge_type {
+                if edge.ty.as_ref() != edge_type {
                     keep.push(*id);
                 } else {
                     candidates.push(*id);
@@ -588,7 +588,8 @@ mod tests {
         let result = prune_edges(&g, "REL", &predicate).unwrap();
         // Should keep OTHER edge
         assert_eq!(result.edges().len(), 1);
-        assert_eq!(result.edges()[0].ty, "OTHER");
+        use std::sync::Arc;
+        assert_eq!(result.edges()[0].ty.as_ref(), "OTHER");
     }
 
     #[test]
