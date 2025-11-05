@@ -252,11 +252,9 @@ pub fn execute_actions(
 /// The maximum absolute difference across all attributes and probabilities.
 /// Returns 0.0 if graphs are identical or if either graph is empty.
 ///
-/// # Phase 7
-///
 /// See baygraph_design.md:527-529 for fixpoint convergence strategy.
 fn compute_max_change(old: &BeliefGraph, new: &BeliefGraph) -> f64 {
-    let mut max_delta = 0.0;
+    let mut max_delta: f64 = 0.0;
 
     // Compare node attributes
     for (old_node, new_node) in old.nodes.iter().zip(new.nodes.iter()) {
@@ -278,8 +276,8 @@ fn compute_max_change(old: &BeliefGraph, new: &BeliefGraph) -> f64 {
             // Graph structure changed, return large delta
             return f64::INFINITY;
         }
-        let old_prob = old_edge.exist.alpha / (old_edge.exist.alpha + old_edge.exist.beta);
-        let new_prob = new_edge.exist.alpha / (new_edge.exist.alpha + new_edge.exist.beta);
+        let old_prob = old_edge.exist.mean_probability();
+        let new_prob = new_edge.exist.mean_probability();
         let delta = (old_prob - new_prob).abs();
         max_delta = max_delta.max(delta);
     }
@@ -289,55 +287,21 @@ fn compute_max_change(old: &BeliefGraph, new: &BeliefGraph) -> f64 {
 
 /// Executes a rule in "for_each" mode over all matching patterns.
 ///
-/// This is the core rule execution function. It:
-/// 1. Finds all graph patterns matching the rule's pattern
-/// 2. Evaluates the optional `where` clause for each match
-/// 3. Applies actions to a working copy for each successful match
-/// 4. Returns the modified graph
-///
-/// # Performance (Phase 7)
-///
-/// The matcher has been optimized with:
-/// - Indexed query plans using adjacency lists for fast edge iteration
-/// - Deterministic iteration over sorted EdgeIds for reproducibility
-/// - Expression hoisting to avoid redundant `where` clause evaluation
-///
-/// See baygraph_design.md:524-527 for the execution model and optimization strategy.
+/// Finds all graph patterns matching the rule, evaluates the optional `where` clause,
+/// and applies actions to a working copy for each successful match.
 ///
 /// # Current Limitations
 ///
 /// - Supports exactly one pattern item (no multi-pattern rules yet)
-/// - Only "for_each" execution mode
 ///
-/// # Arguments
-///
-/// * `input` - The input belief graph (read-only)
-/// * `rule` - The rule definition to execute
-///
-/// # Returns
-///
-/// * `Ok(BeliefGraph)` - The transformed graph after applying all matches
-/// * `Err(ExecError)` - Validation error or execution failure
-///
-/// # Example
-///
-/// ```rust,ignore
-/// // Rule: for each KNOWS edge with prob >= 0.5, force it absent
-/// let output = run_rule_for_each(&graph, &rule)?;
-/// ```
+/// See baygraph_design.md:524-527 for the execution model.
 pub fn run_rule_for_each(input: &BeliefGraph, rule: &RuleDef) -> Result<BeliefGraph, ExecError> {
     run_rule_for_each_with_globals(input, rule, &HashMap::new())
 }
 
 /// Executes a rule with access to global scalar variables (e.g., imported metrics).
 ///
-/// # Phase 7 Optimizations
-///
-/// This function now uses an optimized matcher that:
-/// 1. Uses adjacency index for fast edge lookup (avoids linear scan)
-/// 2. Filters by edge type and node labels early
-/// 3. Evaluates where clauses with consistent bindings
-/// 4. Maintains deterministic iteration order via sorted EdgeIds
+/// Uses deterministic iteration over sorted EdgeIds for reproducibility.
 pub fn run_rule_for_each_with_globals(
     input: &BeliefGraph,
     rule: &RuleDef,
@@ -398,33 +362,8 @@ pub fn run_rule_for_each_with_globals(
 
 /// Executes a rule in "fixpoint" mode until convergence or iteration limit.
 ///
-/// Applies the rule repeatedly until either:
-/// 1. The graph converges (changes below tolerance threshold)
-/// 2. Maximum iteration limit is reached
-///
-/// # Phase 7 Safety Features
-///
-/// - Maximum iteration cap (MAX_FIXPOINT_ITERATIONS = 1000) prevents infinite loops
-/// - Convergence detection via maximum change tracking
-/// - Configurable tolerance (FIXPOINT_TOLERANCE = 1e-6) for numerical stability
-///
-/// # Arguments
-///
-/// * `input` - The input belief graph
-/// * `rule` - The rule definition to execute repeatedly
-/// * `globals` - Global scalar variables (e.g., imported metrics)
-///
-/// # Returns
-///
-/// * `Ok(BeliefGraph)` - The converged graph
-/// * `Err(ExecError)` - If validation fails or iteration limit is exceeded
-///
-/// # Example
-///
-/// ```rust,ignore
-/// // Rule will execute until convergence or 1000 iterations
-/// let output = run_rule_fixpoint(&graph, &rule, &globals)?;
-/// ```
+/// Applies the rule repeatedly until convergence (changes < FIXPOINT_TOLERANCE)
+/// or MAX_FIXPOINT_ITERATIONS is reached.
 ///
 /// See baygraph_design.md:527-529 for fixpoint iteration strategy.
 pub fn run_rule_fixpoint(
@@ -434,7 +373,7 @@ pub fn run_rule_fixpoint(
 ) -> Result<BeliefGraph, ExecError> {
     let mut current = input.clone();
 
-    for iteration in 0..MAX_FIXPOINT_ITERATIONS {
+    for _iteration in 0..MAX_FIXPOINT_ITERATIONS {
         let next = run_rule_for_each_with_globals(&current, rule, globals)?;
         let max_change = compute_max_change(&current, &next);
 
@@ -443,7 +382,7 @@ pub fn run_rule_fixpoint(
             #[cfg(feature = "tracing")]
             tracing::debug!(
                 "Fixpoint converged after {} iterations (max_change = {:.2e})",
-                iteration + 1,
+                _iteration + 1,
                 max_change
             );
             return Ok(next);
@@ -461,18 +400,7 @@ pub fn run_rule_fixpoint(
 
 /// Public API for running rules with automatic mode detection.
 ///
-/// Dispatches to either `run_rule_for_each_with_globals` or `run_rule_fixpoint`
-/// based on the rule's mode field.
-///
-/// # Arguments
-///
-/// * `input` - The input belief graph
-/// * `rule` - The rule definition
-/// * `globals` - Global scalar variables
-///
-/// # Returns
-///
-/// The transformed graph after rule execution
+/// Dispatches to `run_rule_for_each_with_globals` or `run_rule_fixpoint` based on mode.
 pub fn run_rule(
     input: &BeliefGraph,
     rule: &RuleDef,

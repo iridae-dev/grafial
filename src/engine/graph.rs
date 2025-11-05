@@ -85,9 +85,9 @@ pub struct GaussianPosterior {
 }
 
 impl GaussianPosterior {
-    /// Updates the expected value while keeping precision unchanged.
+    /// Updates the expected value without changing precision.
     ///
-    /// This is a soft update that adjusts the mean without increasing certainty.
+    /// Soft update that adjusts the mean without increasing certainty.
     /// See baygraph_design.md:275-276.
     pub fn set_expectation(&mut self, v: f64) {
         self.mean = v;
@@ -95,20 +95,16 @@ impl GaussianPosterior {
 
     /// Performs a Bayesian update with a new observation.
     ///
-    /// Combines the current posterior with an observation using Normal-Normal
-    /// conjugate update formulas. Both mean and precision are updated.
+    /// Uses Normal-Normal conjugate update formulas:
+    /// ```text
+    /// τ_new = τ_old + τ_obs
+    /// μ_new = (τ_old * μ_old + τ_obs * x) / τ_new
+    /// ```
     ///
     /// # Arguments
     ///
     /// * `x` - The observed value
     /// * `tau_obs` - The observation precision (1/σ²_obs)
-    ///
-    /// # Formula
-    ///
-    /// ```text
-    /// τ_new = τ_old + τ_obs
-    /// μ_new = (τ_old * μ_old + τ_obs * x) / τ_new
-    /// ```
     ///
     /// See baygraph_design.md:93-101.
     pub fn update(&mut self, x: f64, tau_obs: f64) {
@@ -123,8 +119,8 @@ impl GaussianPosterior {
 
     /// Forces the attribute to a specific value with very high certainty.
     ///
-    /// Sets the mean to the exact value and precision to a very large number,
-    /// effectively making this a hard constraint. See baygraph_design.md:107.
+    /// Sets precision to FORCE_PRECISION (1e6), effectively creating a hard constraint.
+    /// See baygraph_design.md:107.
     ///
     /// # Arguments
     ///
@@ -149,34 +145,41 @@ pub struct BetaPosterior {
 }
 
 impl BetaPosterior {
-    /// Forces the edge to be absent with very high certainty.
+    /// Forces the edge to be absent (α=1, β=1e6).
     ///
-    /// Sets α=1, β=1e6, giving a mean probability near zero.
     /// See baygraph_design.md:133-135.
     pub fn force_absent(&mut self) {
         self.alpha = 1.0;
         self.beta = FORCE_PRECISION;
     }
 
-    /// Forces the edge to be present with very high certainty.
+    /// Forces the edge to be present (α=1e6, β=1).
     ///
-    /// Sets α=1e6, β=1, giving a mean probability near one.
     /// See baygraph_design.md:133-135.
     pub fn force_present(&mut self) {
         self.alpha = FORCE_PRECISION;
         self.beta = 1.0;
     }
 
-    /// Updates the posterior with an observation of edge presence/absence.
+    /// Performs a conjugate Beta-Bernoulli update.
     ///
-    /// Performs a conjugate Beta-Bernoulli update: increments α if present,
-    /// β if absent. See baygraph_design.md:127.
+    /// Increments α if present, β if absent. See baygraph_design.md:127.
     ///
     /// # Arguments
     ///
     /// * `present` - Whether the edge was observed to be present
     pub fn observe(&mut self, present: bool) {
         if present { self.alpha += 1.0; } else { self.beta += 1.0; }
+    }
+
+    /// Computes the posterior mean probability E[p] = α / (α + β).
+    ///
+    /// Applies MIN_BETA_PARAM floor to both parameters for numerical stability.
+    /// This ensures consistent probability calculations across the codebase.
+    pub fn mean_probability(&self) -> f64 {
+        let a = self.alpha.max(MIN_BETA_PARAM);
+        let b = self.beta.max(MIN_BETA_PARAM);
+        a / (a + b)
     }
 }
 
@@ -328,7 +331,7 @@ impl Default for BeliefGraph {
 }
 
 impl BeliefGraph {
-    /// Looks up a node by ID with O(1) time complexity.
+    /// Looks up a node by ID.
     ///
     /// # Arguments
     ///
@@ -343,43 +346,16 @@ impl BeliefGraph {
     }
 
     /// Looks up a node by ID with mutable access.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The node ID to look up
-    ///
-    /// # Returns
-    ///
-    /// * `Some(&mut NodeData)` - Mutable reference to the node if it exists
-    /// * `None` - If the node ID is not in the graph
     pub fn node_mut(&mut self, id: NodeId) -> Option<&mut NodeData> {
         self.node_index.get(&id).and_then(|&idx| self.nodes.get_mut(idx))
     }
 
-    /// Looks up an edge by ID with O(1) time complexity.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The edge ID to look up
-    ///
-    /// # Returns
-    ///
-    /// * `Some(&EdgeData)` - The edge if it exists
-    /// * `None` - If the edge ID is not in the graph
+    /// Looks up an edge by ID.
     pub fn edge(&self, id: EdgeId) -> Option<&EdgeData> {
         self.edge_index.get(&id).and_then(|&idx| self.edges.get(idx))
     }
 
     /// Looks up an edge by ID with mutable access.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The edge ID to look up
-    ///
-    /// # Returns
-    ///
-    /// * `Some(&mut EdgeData)` - Mutable reference to the edge if it exists
-    /// * `None` - If the edge ID is not in the graph
     pub fn edge_mut(&mut self, id: EdgeId) -> Option<&mut EdgeData> {
         self.edge_index.get(&id).and_then(|&idx| self.edges.get_mut(idx))
     }
@@ -439,10 +415,8 @@ impl BeliefGraph {
 
     /// Rebuilds a graph from a subset of nodes and edges.
     ///
-    /// This is a utility function for graph transformations that need to
-    /// create a new graph with a filtered set of nodes and edges.
-    /// The resulting graph maintains the same structure but with a subset
-    /// of the original elements.
+    /// Used by graph transformations (e.g., prune_edges) to create a new graph
+    /// with filtered elements.
     ///
     /// # Arguments
     ///
@@ -499,19 +473,8 @@ impl BeliefGraph {
 
     /// Computes the posterior mean probability for an edge's existence.
     ///
-    /// Returns the expected value of the Beta posterior: E[p] = α / (α + β)
-    ///
-    /// # Mathematical Foundation
-    ///
-    /// For a Beta(α, β) distribution over probability p ∈ [0,1]:
-    /// - Posterior mean: E[p] = α / (α + β)
-    /// - This is the Bayesian point estimate under squared error loss
-    ///
-    /// # Parameter Constraints
-    ///
-    /// Beta distribution requires α > 0 and β > 0 (strictly positive).
-    /// We enforce α ≥ MIN_BETA_PARAM and β ≥ MIN_BETA_PARAM per design spec
-    /// (baygraph_design.md:223) to prevent improper priors and ensure numerical stability.
+    /// Returns the expected value of the Beta posterior: E[p] = α / (α + β).
+    /// This is the Bayesian point estimate under squared error loss.
     ///
     /// # Arguments
     ///
@@ -525,31 +488,10 @@ impl BeliefGraph {
         let e = self
             .edge(edge)
             .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
-
-        // Enforce Beta parameter constraints: α ≥ 0.01, β ≥ 0.01
-        // This prevents improper priors (α ≤ 0 or β ≤ 0) and ensures numerical stability.
-        // See baygraph_design.md:221-223 for the mathematical justification.
-        let a = e.exist.alpha.max(MIN_BETA_PARAM);
-        let b = e.exist.beta.max(MIN_BETA_PARAM);
-
-        // Posterior mean: E[p] = α / (α + β)
-        // Since a ≥ 0.01 and b ≥ 0.01, we have a + b ≥ 0.02, so division is safe.
-        Ok(a / (a + b))
+        Ok(e.exist.mean_probability())
     }
 
     /// Counts outgoing edges from a node that meet a minimum probability threshold.
-    ///
-    /// This function counts edges where the posterior mean probability of existence
-    /// (computed via Beta distribution) is at least `min_prob`.
-    ///
-    /// # Mathematical Details
-    ///
-    /// For each edge with Beta(α, β) posterior:
-    /// - Computes posterior mean: p = α / (α + β)
-    /// - Includes edge in count if p ≥ min_prob
-    ///
-    /// Uses consistent Beta parameter floor (MIN_BETA_PARAM = 0.01) to ensure
-    /// all probability calculations match those in prob_mean().
     ///
     /// # Arguments
     ///
@@ -562,26 +504,14 @@ impl BeliefGraph {
     pub fn degree_outgoing(&self, node: NodeId, min_prob: f64) -> usize {
         self.edges
             .iter()
-            .filter(|e| e.src == node)
-            .filter(|e| {
-                // Use same Beta parameter floor as prob_mean for consistency
-                let a = e.exist.alpha.max(MIN_BETA_PARAM);
-                let b = e.exist.beta.max(MIN_BETA_PARAM);
-                (a / (a + b)) >= min_prob
-            })
+            .filter(|e| e.src == node && e.exist.mean_probability() >= min_prob)
             .count()
     }
 
     /// Builds or rebuilds the adjacency index for fast neighborhood queries.
     ///
-    /// This should be called after bulk graph modifications to enable optimized
-    /// pattern matching and neighborhood queries. The index is cached until
-    /// invalidated.
-    ///
-    /// # Performance (Phase 7)
-    ///
-    /// Building the index is O(E log E) due to sorting, but subsequent queries
-    /// are O(1) for neighborhood access.
+    /// Call after bulk graph modifications. The index is cached until invalidated.
+    /// Building is O(E log E) due to sorting; subsequent queries are O(1).
     pub fn build_adjacency(&mut self) {
         self.adjacency = Some(AdjacencyIndex::from_edges(&self.edges));
     }
@@ -593,18 +523,10 @@ impl BeliefGraph {
         }
     }
 
-    /// Gets outgoing edges for a node and edge type using the optimized adjacency index.
+    /// Gets outgoing edges for a node and edge type.
     ///
-    /// Builds the adjacency index lazily if not already built.
-    ///
-    /// # Arguments
-    ///
-    /// * `node` - Source node ID
-    /// * `edge_type` - Edge type filter
-    ///
-    /// # Returns
-    ///
-    /// Slice of edge IDs in deterministic sorted order
+    /// Builds the adjacency index lazily if not already built. Returns edge IDs
+    /// in deterministic sorted order.
     pub fn get_outgoing_edges(&mut self, node: NodeId, edge_type: &str) -> Vec<EdgeId> {
         self.ensure_adjacency();
         self.adjacency
@@ -615,9 +537,7 @@ impl BeliefGraph {
     }
 
     pub fn adjacency_outgoing_by_type(&self) -> std::collections::HashMap<(NodeId, String), Vec<EdgeId>> {
-        // Build on demand; correct but not optimized (Phase 3 minimal).
-        // Phase 7: Could be optimized to use cached adjacency index if available,
-        // but keeping this for backwards compatibility.
+        // Build on demand. Could use cached adjacency index if available.
         let mut map: std::collections::HashMap<(NodeId, String), Vec<EdgeId>> = std::collections::HashMap::new();
         for e in &self.edges {
             map.entry((e.src, e.ty.clone())).or_default().push(e.id);
@@ -669,13 +589,8 @@ impl BeliefGraph {
 
     /// Validates numerical stability of the graph.
     ///
-    /// Checks for:
-    /// - NaN or Inf values in posteriors
-    /// - Extremely small precisions that may cause numerical issues
-    /// - Beta parameters outside valid range
-    /// - Outlier values (> 10σ from mean)
-    ///
-    /// # Phase 7 Numerical Robustness
+    /// Checks for NaN/Inf values, invalid precisions, Beta parameters outside
+    /// valid range, and outlier values (> 10σ from mean).
     ///
     /// See baygraph_design.md:199-227 for numerical stability requirements.
     ///
