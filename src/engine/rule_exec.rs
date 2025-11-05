@@ -678,7 +678,7 @@ fn matches_node_labels(
         .ok_or_else(|| ExecError::Internal("missing src node".into()))?;
     let dst = graph.node(edge.dst)
         .ok_or_else(|| ExecError::Internal("missing dst node".into()))?;
-    Ok(src.label == pattern.src.label && dst.label == pattern.dst.label)
+    Ok(src.label.as_ref() == pattern.src.label.as_str() && dst.label.as_ref() == pattern.dst.label.as_str())
 }
 
 /// Attempts to extend bindings with a pattern match, validating variable compatibility.
@@ -821,12 +821,12 @@ mod tests {
         let mut g = BeliefGraph::default();
         g.insert_node(NodeData {
             id: NodeId(1),
-            label: "Person".into(),
+            label: Arc::from("Person"),
             attrs: HashMap::from([("x".into(), GaussianPosterior { mean: 10.0, precision: 1.0 })]),
         });
         g.insert_node(NodeData {
             id: NodeId(2),
-            label: "Person".into(),
+            label: Arc::from("Person"),
             attrs: HashMap::from([("x".into(), GaussianPosterior { mean: 5.0, precision: 1.0 })]),
         });
         g.insert_edge(BeliefGraph::test_edge_with_beta(

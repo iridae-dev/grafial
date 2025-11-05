@@ -87,11 +87,11 @@ fn analyze_pattern_selectivity(
         let nodes = graph.nodes();
         let src_label_count = nodes
             .iter()
-            .filter(|n| n.label == pattern.src.label)
+            .filter(|n| n.label.as_ref() == pattern.src.label.as_str())
             .count();
         let dst_label_count = nodes
             .iter()
-            .filter(|n| n.label == pattern.dst.label)
+            .filter(|n| n.label.as_ref() == pattern.dst.label.as_str())
             .count();
 
         // Estimate matches: edges with matching type * (label match probability)

@@ -369,7 +369,8 @@ pub struct NodeData {
     /// The unique node identifier
     pub id: NodeId,
     /// The node type label (e.g., "Person", "Company")
-    pub label: String,
+    /// Using Arc<str> for cheap cloning (reference count increment, not allocation)
+    pub label: Arc<str>,
     /// Gaussian posteriors for continuous attributes
     pub attrs: HashMap<String, GaussianPosterior>,
 }
@@ -1025,6 +1026,8 @@ impl BeliefGraph {
             .count();
         let id = NodeId((base_count + delta_count) as u32);
         
+        // Convert String to Arc<str> once for cheap cloning
+        let label = Arc::from(label);
         let node = NodeData { id, label, attrs };
         
         // Add to delta instead of immediate mutation
@@ -1972,7 +1975,7 @@ mod tests {
         let mut g = BeliefGraph::default();
         g.insert_node(NodeData {
             id: NodeId(1),
-            label: "Person".into(),
+            label: Arc::from("Person"),
             attrs: HashMap::new(),
         });
 
@@ -2000,7 +2003,7 @@ mod tests {
         let mut g = BeliefGraph::default();
         g.insert_node(NodeData {
             id: NodeId(1),
-            label: "Person".into(),
+            label: Arc::from("Person"),
             attrs: HashMap::from([
                 ("age".into(), GaussianPosterior { mean: 25.5, precision: 1.0 }),
             ]),
@@ -2023,7 +2026,7 @@ mod tests {
         let mut g = BeliefGraph::default();
         g.insert_node(NodeData {
             id: NodeId(1),
-            label: "Person".into(),
+            label: Arc::from("Person"),
             attrs: HashMap::new(),
         });
 
@@ -2036,7 +2039,7 @@ mod tests {
         let mut g = BeliefGraph::default();
         g.insert_node(NodeData {
             id: NodeId(1),
-            label: "Person".into(),
+            label: Arc::from("Person"),
             attrs: HashMap::from([
                 ("x".into(), GaussianPosterior { mean: 0.0, precision: 1.0 }),
             ]),

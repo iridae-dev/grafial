@@ -162,7 +162,7 @@ impl MetricFn for CountNodes {
         let where_expr = args.named.get("where").copied();
         let mut count = 0usize;
         for n in nodes_sorted_by_id(graph.nodes()) {
-            if n.label != label { continue; }
+            if n.label.as_ref() != label { continue; }
             if let Some(w) = where_expr {
                 let wv = eval_node_expr(w, graph, n.id, _ctx, None)?;
                 if wv == 0.0 { continue; }
@@ -191,7 +191,7 @@ impl MetricFn for SumNodes {
             // See baygraph_design.md:518-521
             let nodes: Vec<_> = nodes_sorted_by_id(graph.nodes())
                 .into_iter()
-                .filter(|n| n.label == label)
+                .filter(|n| n.label.as_ref() == label)
                 .collect();
 
             let terms: Result<Vec<f64>, ExecError> = nodes
@@ -218,7 +218,7 @@ impl MetricFn for SumNodes {
             let mut sum = 0.0f64;
             let mut c = 0.0f64;  // Running compensation for lost low-order bits
             for n in nodes_sorted_by_id(graph.nodes()) {
-                if n.label != label { continue; }
+                if n.label.as_ref() != label { continue; }
                 let nid = n.id;
                 if let Some(w) = where_expr {
                     let wv = eval_node_expr(w, graph, nid, ctx, None)?;
@@ -276,7 +276,7 @@ impl MetricFn for FoldNodes {
         // Collect candidate nodes (filtered), with order key
         let mut items: Vec<(NodeId, f64)> = Vec::new();
         for n in nodes_sorted_by_id(graph.nodes()) {
-            if n.label != label { continue; }
+            if n.label.as_ref() != label { continue; }
             let nid = n.id;
             if let Some(w) = where_expr {
                 let wv = eval_node_expr(w, graph, nid, ctx, None)?;
@@ -342,7 +342,7 @@ impl MetricFn for AvgDegree {
         use std::sync::Arc;
         let edge_type_arc: Arc<str> = Arc::from(edge_type);
         for n in nodes_sorted_by_id(graph.nodes()) {
-            if n.label != label { continue; }
+            if n.label.as_ref() != label { continue; }
             count_nodes += 1;
             let mut d = 0usize;
             // Clone Arc<str> only once per loop (cheap, just reference count increment)
