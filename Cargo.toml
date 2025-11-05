@@ -26,3 +26,8 @@ rayon = { version = "1", optional = true }
 [dev-dependencies]
 pretty_assertions = "1"
 proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "graph_benchmarks"
+harness = false

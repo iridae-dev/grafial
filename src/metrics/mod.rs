@@ -20,6 +20,9 @@ use crate::engine::expr_eval::{eval_expr_core, ExprContext};
 use crate::engine::graph::{BeliefGraph, NodeId};
 use crate::frontend::ast::{BinaryOp, CallArg, ExprAst, UnaryOp};
 
+#[cfg(feature = "rayon")]
+use rayon::prelude::*;
+
 /// Context passed during metric evaluation.
 #[derive(Debug, Default, Clone)]
 pub struct MetricContext {
@@ -176,27 +179,71 @@ impl MetricFn for SumNodes {
             .or_else(|| args.pos.get(2).copied())
             .ok_or_else(|| ExecError::ValidationError("sum_nodes: missing 'contrib' argument".into()))?;
 
-        // Kahan compensated summation for numerical stability
-        // See: Kahan, W. (1965). "Further remarks on reducing truncation errors"
-        // Maintains a running compensation term to reduce floating-point error accumulation
-        let mut sum = 0.0f64;
-        let mut c = 0.0f64;  // Running compensation for lost low-order bits
-        for n in nodes_sorted_by_id(&graph.nodes) {
-            if n.label != label { continue; }
-            let nid = n.id;
-            if let Some(w) = where_expr {
-                let wv = eval_node_expr(w, graph, nid, ctx, None)?;
-                if wv == 0.0 { continue; }
-            }
-            let term = eval_node_expr(contrib_expr, graph, nid, ctx, None)?;
-            // Kahan algorithm: compensation term c persists across iterations
-            // (it accumulates error from actual additions, not skipped iterations)
-            let y = term - c;
-            let t = sum + y;
-            c = (t - sum) - y;
-            sum = t;
+        #[cfg(feature = "rayon")]
+        {
+            // Phase 7: Parallel implementation with deterministic pairwise summation
+            // See baygraph_design.md:518-521
+            let nodes: Vec<_> = nodes_sorted_by_id(&graph.nodes)
+                .filter(|n| n.label == label)
+                .collect();
+
+            let terms: Result<Vec<f64>, ExecError> = nodes
+                .par_iter()
+                .map(|n| {
+                    let nid = n.id;
+                    if let Some(w) = where_expr {
+                        let wv = eval_node_expr(w, graph, nid, ctx, None)?;
+                        if wv == 0.0 { return Ok(0.0); }
+                    }
+                    eval_node_expr(contrib_expr, graph, nid, ctx, None)
+                })
+                .collect();
+
+            let terms = terms?;
+            // Deterministic pairwise summation for numerical stability
+            Ok(pairwise_sum(&terms))
         }
-        Ok(sum)
+
+        #[cfg(not(feature = "rayon"))]
+        {
+            // Sequential Kahan compensated summation for numerical stability
+            // See: Kahan, W. (1965). "Further remarks on reducing truncation errors"
+            let mut sum = 0.0f64;
+            let mut c = 0.0f64;  // Running compensation for lost low-order bits
+            for n in nodes_sorted_by_id(&graph.nodes) {
+                if n.label != label { continue; }
+                let nid = n.id;
+                if let Some(w) = where_expr {
+                    let wv = eval_node_expr(w, graph, nid, ctx, None)?;
+                    if wv == 0.0 { continue; }
+                }
+                let term = eval_node_expr(contrib_expr, graph, nid, ctx, None)?;
+                // Kahan algorithm: compensation term c persists across iterations
+                let y = term - c;
+                let t = sum + y;
+                c = (t - sum) - y;
+                sum = t;
+            }
+            Ok(sum)
+        }
+    }
+}
+
+/// Pairwise summation for better numerical accuracy in parallel reductions.
+///
+/// Recursively divides the array in half and sums each half, then combines.
+/// This reduces floating-point error accumulation compared to linear summation.
+///
+/// See baygraph_design.md:520-521 for the numerical stability strategy.
+fn pairwise_sum(values: &[f64]) -> f64 {
+    match values.len() {
+        0 => 0.0,
+        1 => values[0],
+        2 => values[0] + values[1],
+        n => {
+            let mid = n / 2;
+            pairwise_sum(&values[..mid]) + pairwise_sum(&values[mid..])
+        }
     }
 }
 

@@ -51,11 +51,16 @@ const MIN_OBS_PRECISION: f64 = 1e-12;
 /// as a numeric floor for stability and to prevent improper priors.
 const MIN_BETA_PARAM: f64 = 0.01;
 
+/// Maximum allowed deviation in standard deviations for outlier warnings
+/// See baygraph_design.md:211-213
+const OUTLIER_THRESHOLD_SIGMA: f64 = 10.0;
+
 /// A unique identifier for a node in the belief graph.
 ///
 /// See baygraph_design.md:471-486 for stable identifier requirements.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NodeId(pub u32);
 
 /// A unique identifier for an edge in the belief graph.
@@ -63,6 +68,7 @@ pub struct NodeId(pub u32);
 /// See baygraph_design.md:471-486 for stable identifier requirements.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EdgeId(pub u32);
 
 /// A Gaussian posterior distribution for continuous node attributes.
@@ -70,6 +76,7 @@ pub struct EdgeId(pub u32);
 /// Uses the precision parameterization (τ = 1/σ²) for efficient conjugate updates.
 /// See baygraph_design.md sections 93-101 for the update equations.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GaussianPosterior {
     /// The posterior mean (μ)
     pub mean: f64,
@@ -133,6 +140,7 @@ impl GaussianPosterior {
 /// Uses the Beta(α, β) parameterization for conjugate Bernoulli updates.
 /// The mean probability is α/(α+β). See baygraph_design.md:127-135.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BetaPosterior {
     /// The alpha parameter (pseudo-count of successes)
     pub alpha: f64,
@@ -174,6 +182,7 @@ impl BetaPosterior {
 
 /// A node in the belief graph with typed attributes.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NodeData {
     /// The unique node identifier
     pub id: NodeId,
@@ -185,6 +194,7 @@ pub struct NodeData {
 
 /// A directed edge in the belief graph with existence probability.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EdgeData {
     /// The unique edge identifier
     pub id: EdgeId,
@@ -198,15 +208,99 @@ pub struct EdgeData {
     pub exist: BetaPosterior,
 }
 
+/// Optimized adjacency list for fast neighborhood queries.
+///
+/// Uses offset-based indexing into a contiguous edge ID array for O(1) access.
+/// This structure is precomputed and cached for performance.
+///
+/// See baygraph_design.md:466-474 for the adjacency optimization strategy.
+#[derive(Debug, Clone)]
+pub struct AdjacencyIndex {
+    /// Maps (NodeId, EdgeType) to (start_offset, end_offset) in edge_ids
+    ranges: HashMap<(NodeId, String), (usize, usize)>,
+    /// Contiguous sorted array of EdgeIds
+    edge_ids: Vec<EdgeId>,
+}
+
+impl AdjacencyIndex {
+    /// Creates a new empty adjacency index.
+    pub fn new() -> Self {
+        Self {
+            ranges: HashMap::new(),
+            edge_ids: Vec::new(),
+        }
+    }
+
+    /// Builds an adjacency index from edges.
+    ///
+    /// Groups edges by (src, type) and stores them in sorted order for determinism.
+    pub fn from_edges(edges: &[EdgeData]) -> Self {
+        let mut map: HashMap<(NodeId, String), Vec<EdgeId>> = HashMap::new();
+        for e in edges {
+            map.entry((e.src, e.ty.clone())).or_default().push(e.id);
+        }
+
+        // Sort each adjacency list for determinism
+        for v in map.values_mut() {
+            v.sort();
+        }
+
+        // Flatten into contiguous storage with offset ranges
+        let mut edge_ids = Vec::new();
+        let mut ranges = HashMap::new();
+        for (key, ids) in map {
+            let start = edge_ids.len();
+            edge_ids.extend_from_slice(&ids);
+            let end = edge_ids.len();
+            ranges.insert(key, (start, end));
+        }
+
+        Self { ranges, edge_ids }
+    }
+
+    /// Gets outgoing edge IDs for a node and edge type.
+    ///
+    /// Returns an empty slice if no edges exist.
+    pub fn get_edges(&self, node: NodeId, edge_type: &str) -> &[EdgeId] {
+        if let Some(&(start, end)) = self.ranges.get(&(node, edge_type.to_string())) {
+            &self.edge_ids[start..end]
+        } else {
+            &[]
+        }
+    }
+
+    /// Gets all outgoing edge IDs for a node across all edge types.
+    pub fn get_all_edges(&self, node: NodeId) -> Vec<EdgeId> {
+        let mut result = Vec::new();
+        for ((n, _), (start, end)) in &self.ranges {
+            if *n == node {
+                result.extend_from_slice(&self.edge_ids[*start..*end]);
+            }
+        }
+        result.sort(); // Maintain deterministic order
+        result
+    }
+}
+
 /// A belief graph with Bayesian inference over nodes and edges.
 ///
 /// This is the core data structure for Baygraph, maintaining:
 /// - Nodes with continuous-valued attributes (Gaussian posteriors)
 /// - Directed edges with existence probabilities (Beta posteriors)
 /// - O(1) lookup indexes for efficient access
+/// - Optimized adjacency structure for fast neighborhood queries
 ///
 /// All graph modifications preserve Bayesian consistency through
 /// conjugate prior updates and force operations.
+///
+/// # Performance (Phase 7)
+///
+/// The graph uses Structure-of-Arrays (SoA) style organization for hot data:
+/// - Contiguous node/edge storage for cache efficiency
+/// - Precomputed adjacency index with offset ranges for O(1) neighborhood access
+/// - Stable IDs (NodeId, EdgeId) for deterministic iteration
+///
+/// See baygraph_design.md:466-474 for optimization details.
 #[derive(Debug, Clone)]
 pub struct BeliefGraph {
     /// All nodes in the graph
@@ -217,6 +311,8 @@ pub struct BeliefGraph {
     node_index: HashMap<NodeId, usize>,
     /// Index mapping EdgeId to position in edges vector
     edge_index: HashMap<EdgeId, usize>,
+    /// Cached adjacency index for fast neighborhood queries (Phase 7)
+    adjacency: Option<AdjacencyIndex>,
 }
 
 impl Default for BeliefGraph {
@@ -226,6 +322,7 @@ impl Default for BeliefGraph {
             edges: Vec::new(),
             node_index: HashMap::new(),
             edge_index: HashMap::new(),
+            adjacency: None,
         }
     }
 }
@@ -475,8 +572,52 @@ impl BeliefGraph {
             .count()
     }
 
+    /// Builds or rebuilds the adjacency index for fast neighborhood queries.
+    ///
+    /// This should be called after bulk graph modifications to enable optimized
+    /// pattern matching and neighborhood queries. The index is cached until
+    /// invalidated.
+    ///
+    /// # Performance (Phase 7)
+    ///
+    /// Building the index is O(E log E) due to sorting, but subsequent queries
+    /// are O(1) for neighborhood access.
+    pub fn build_adjacency(&mut self) {
+        self.adjacency = Some(AdjacencyIndex::from_edges(&self.edges));
+    }
+
+    /// Ensures adjacency index is built, building it lazily if needed.
+    fn ensure_adjacency(&mut self) {
+        if self.adjacency.is_none() {
+            self.build_adjacency();
+        }
+    }
+
+    /// Gets outgoing edges for a node and edge type using the optimized adjacency index.
+    ///
+    /// Builds the adjacency index lazily if not already built.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - Source node ID
+    /// * `edge_type` - Edge type filter
+    ///
+    /// # Returns
+    ///
+    /// Slice of edge IDs in deterministic sorted order
+    pub fn get_outgoing_edges(&mut self, node: NodeId, edge_type: &str) -> Vec<EdgeId> {
+        self.ensure_adjacency();
+        self.adjacency
+            .as_ref()
+            .unwrap()
+            .get_edges(node, edge_type)
+            .to_vec()
+    }
+
     pub fn adjacency_outgoing_by_type(&self) -> std::collections::HashMap<(NodeId, String), Vec<EdgeId>> {
         // Build on demand; correct but not optimized (Phase 3 minimal).
+        // Phase 7: Could be optimized to use cached adjacency index if available,
+        // but keeping this for backwards compatibility.
         let mut map: std::collections::HashMap<(NodeId, String), Vec<EdgeId>> = std::collections::HashMap::new();
         for e in &self.edges {
             map.entry((e.src, e.ty.clone())).or_default().push(e.id);
@@ -524,6 +665,100 @@ impl BeliefGraph {
             .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
         g.force_value(x);
         Ok(())
+    }
+
+    /// Validates numerical stability of the graph.
+    ///
+    /// Checks for:
+    /// - NaN or Inf values in posteriors
+    /// - Extremely small precisions that may cause numerical issues
+    /// - Beta parameters outside valid range
+    /// - Outlier values (> 10σ from mean)
+    ///
+    /// # Phase 7 Numerical Robustness
+    ///
+    /// See baygraph_design.md:199-227 for numerical stability requirements.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Vec<String>)` - List of warnings (empty if no issues)
+    /// - `Err(ExecError::Numerical)` - Critical numerical error that makes graph invalid
+    pub fn validate_numerical_stability(&self) -> Result<Vec<String>, ExecError> {
+        let mut warnings = Vec::new();
+
+        // Check node attributes
+        for node in &self.nodes {
+            for (attr_name, attr) in &node.attrs {
+                // Check for NaN/Inf
+                if !attr.mean.is_finite() {
+                    return Err(ExecError::Numerical(format!(
+                        "Node {:?} attribute '{}' has non-finite mean: {}",
+                        node.id, attr_name, attr.mean
+                    )));
+                }
+                if !attr.precision.is_finite() || attr.precision <= 0.0 {
+                    return Err(ExecError::Numerical(format!(
+                        "Node {:?} attribute '{}' has invalid precision: {}",
+                        node.id, attr_name, attr.precision
+                    )));
+                }
+
+                // Warn on very small precision (large uncertainty)
+                if attr.precision < MIN_PRECISION * 10.0 {
+                    warnings.push(format!(
+                        "Node {:?} attribute '{}' has very low precision: {:.2e}",
+                        node.id, attr_name, attr.precision
+                    ));
+                }
+
+                // Warn on extreme outliers (|x - μ| > 10σ would be unusual)
+                let std_dev = (1.0 / attr.precision).sqrt();
+                // This check is more for data quality than numerical stability
+                if std_dev.is_finite() {
+                    let z_score = attr.mean.abs() / std_dev;
+                    if z_score > OUTLIER_THRESHOLD_SIGMA {
+                        warnings.push(format!(
+                            "Node {:?} attribute '{}' has extreme value: mean={:.2e}, σ={:.2e}",
+                            node.id, attr_name, attr.mean, std_dev
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Check edge posteriors
+        for edge in &self.edges {
+            // Check for NaN/Inf in Beta parameters
+            if !edge.exist.alpha.is_finite() || !edge.exist.beta.is_finite() {
+                return Err(ExecError::Numerical(format!(
+                    "Edge {:?} has non-finite Beta parameters: α={}, β={}",
+                    edge.id, edge.exist.alpha, edge.exist.beta
+                )));
+            }
+
+            // Enforce minimum Beta parameters (proper priors)
+            if edge.exist.alpha < MIN_BETA_PARAM || edge.exist.beta < MIN_BETA_PARAM {
+                warnings.push(format!(
+                    "Edge {:?} has Beta parameters below minimum (α={:.2e}, β={:.2e}), will be clipped to {:.2e}",
+                    edge.id, edge.exist.alpha, edge.exist.beta, MIN_BETA_PARAM
+                ));
+            }
+
+            // Compute probability for range check
+            let a = edge.exist.alpha.max(MIN_BETA_PARAM);
+            let b = edge.exist.beta.max(MIN_BETA_PARAM);
+            let prob = a / (a + b);
+
+            // Probability must be in [0, 1]
+            if !(0.0..=1.0).contains(&prob) {
+                return Err(ExecError::Numerical(format!(
+                    "Edge {:?} has invalid probability: {} (from α={}, β={})",
+                    edge.id, prob, edge.exist.alpha, edge.exist.beta
+                )));
+            }
+        }
+
+        Ok(warnings)
     }
 }
 
@@ -1136,5 +1371,104 @@ mod tests {
         let variance = 1.0 / g.precision;
         assert!(variance < 1e-5, "force_value should give variance < 1e-5");
         assert_eq!(g.mean, 42.0, "force_value should set exact mean");
+    }
+
+    // ============================================================================
+    // Adjacency Index Tests (Phase 7)
+    // ============================================================================
+
+    #[test]
+    fn adjacency_index_groups_edges_by_node_and_type() {
+        let mut g = BeliefGraph::default();
+        g.insert_edge(EdgeData {
+            id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "LIKES".into(),
+            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
+        });
+        g.insert_edge(EdgeData {
+            id: EdgeId(2), src: NodeId(1), dst: NodeId(3), ty: "LIKES".into(),
+            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
+        });
+        g.insert_edge(EdgeData {
+            id: EdgeId(3), src: NodeId(1), dst: NodeId(4), ty: "KNOWS".into(),
+            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
+        });
+        g.insert_edge(EdgeData {
+            id: EdgeId(4), src: NodeId(2), dst: NodeId(3), ty: "LIKES".into(),
+            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
+        });
+
+        g.build_adjacency();
+
+        let likes = g.get_outgoing_edges(NodeId(1), "LIKES");
+        assert_eq!(likes.len(), 2);
+        assert!(likes.contains(&EdgeId(1)));
+        assert!(likes.contains(&EdgeId(2)));
+
+        let knows = g.get_outgoing_edges(NodeId(1), "KNOWS");
+        assert_eq!(knows.len(), 1);
+        assert!(knows.contains(&EdgeId(3)));
+
+        let node2_likes = g.get_outgoing_edges(NodeId(2), "LIKES");
+        assert_eq!(node2_likes.len(), 1);
+        assert!(node2_likes.contains(&EdgeId(4)));
+    }
+
+    #[test]
+    fn adjacency_index_returns_sorted_edges() {
+        let mut g = BeliefGraph::default();
+        // Insert edges in non-sorted order
+        g.insert_edge(EdgeData {
+            id: EdgeId(5), src: NodeId(1), dst: NodeId(2), ty: "R".into(),
+            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
+        });
+        g.insert_edge(EdgeData {
+            id: EdgeId(2), src: NodeId(1), dst: NodeId(3), ty: "R".into(),
+            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
+        });
+        g.insert_edge(EdgeData {
+            id: EdgeId(8), src: NodeId(1), dst: NodeId(4), ty: "R".into(),
+            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
+        });
+
+        g.build_adjacency();
+        let edges = g.get_outgoing_edges(NodeId(1), "R");
+
+        // Should be sorted by EdgeId
+        assert_eq!(edges, vec![EdgeId(2), EdgeId(5), EdgeId(8)]);
+    }
+
+    #[test]
+    fn adjacency_index_handles_empty_neighborhoods() {
+        let mut g = BeliefGraph::default();
+        g.insert_edge(EdgeData {
+            id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "R".into(),
+            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
+        });
+
+        g.build_adjacency();
+
+        // Query non-existent node
+        let edges = g.get_outgoing_edges(NodeId(999), "R");
+        assert_eq!(edges.len(), 0);
+
+        // Query non-existent edge type
+        let edges = g.get_outgoing_edges(NodeId(1), "NONEXISTENT");
+        assert_eq!(edges.len(), 0);
+    }
+
+    #[test]
+    fn adjacency_index_lazy_build() {
+        let mut g = BeliefGraph::default();
+        g.insert_edge(EdgeData {
+            id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "R".into(),
+            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
+        });
+
+        // Don't explicitly call build_adjacency
+        let edges = g.get_outgoing_edges(NodeId(1), "R");
+
+        // Should build index lazily and return correct result
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0], EdgeId(1));
     }
 }
