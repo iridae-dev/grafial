@@ -1,0 +1,110 @@
+// Example: Prior Sensitivity Analysis
+// Demonstrates how prior strength affects Bayesian inference - critical for understanding
+// when your conclusions are driven by data vs. assumptions. This illustrates the
+// bias-variance tradeoff in prior selection.
+
+schema Measurement {
+  node Sensor {
+    reading: Real
+  }
+}
+
+// Scenario: We have one sensor reading = 10.0
+// Question: What should we believe about the true value?
+// Answer: Depends on our prior knowledge!
+
+belief_model WeakPrior on Measurement {
+  node Sensor {
+    // Weak prior: "I have almost no prior knowledge"
+    // High variance (σ² = 100) means prior has little influence on posterior
+    reading ~ GaussianPosterior(
+      prior_mean=0.0,
+      prior_precision=0.01  // τ₀ = 0.01 → σ² = 1/0.01 = 100
+    )
+  }
+}
+
+belief_model ModeratePrior on Measurement {
+  node Sensor {
+    // Moderate prior: "I have some prior knowledge"
+    // Moderate variance (σ² = 1) gives prior equal weight to one observation
+    reading ~ GaussianPosterior(
+      prior_mean=0.0,
+      prior_precision=1.0  // τ₀ = 1.0 → σ² = 1
+    )
+  }
+}
+
+belief_model StrongPrior on Measurement {
+  node Sensor {
+    // Strong prior: "I'm confident about my prior knowledge"
+    // Low variance (σ² = 0.01) means prior dominates over observations
+    reading ~ GaussianPosterior(
+      prior_mean=0.0,
+      prior_precision=100.0  // τ₀ = 100.0 → σ² = 0.01
+    )
+  }
+}
+
+evidence OneSensorReading on WeakPrior {
+  // One observation: reading = 10.0
+  // Assume observation_precision = 1.0 (default) → σ²_obs = 1
+  observe Sensor["S1"].reading = 10.0
+}
+
+// Bayesian update with weak prior:
+// τ_post = τ₀ + τ_obs = 0.01 + 1.0 = 1.01
+// μ_post = (τ₀×μ₀ + τ_obs×x_obs) / τ_post
+//        = (0.01×0 + 1.0×10) / 1.01 = 9.90
+// Result: Posterior heavily influenced by data (99% weight to observation)
+
+flow WeakPriorFlow on WeakPrior {
+  graph g = from_evidence OneSensorReading
+
+  metric posterior_mean = sum_nodes(label=Sensor, contrib=E[node.reading])
+  // Expected value: ~9.90 (very close to observed 10.0)
+  // Prior contributes only ~1% to posterior
+
+  export g as "weak_result"
+}
+
+// With moderate prior (reuse evidence, different belief model):
+// τ_post = 1.0 + 1.0 = 2.0
+// μ_post = (1.0×0 + 1.0×10) / 2.0 = 5.0
+// Result: Prior and data have equal influence (50% each)
+// Expected value: 5.0 (midpoint between prior 0 and observation 10)
+
+// With strong prior (reuse evidence, different belief model):
+// τ_post = 100.0 + 1.0 = 101.0
+// μ_post = (100×0 + 1.0×10) / 101.0 = 0.099
+// Result: Posterior heavily influenced by prior (99% weight to prior)
+// Expected value: ~0.10 (very close to prior mean 0)
+
+// Pedagogical lessons:
+// 1. Weak priors: Fast learning from data, but sensitive to noise
+// 2. Strong priors: Robust to noisy observations, but slow to update
+// 3. Prior choice should reflect:
+//    - Quality of prior knowledge (stronger knowledge → higher precision)
+//    - Expected sample size (small samples → need stronger priors)
+//    - Cost of false conclusions (high cost → need more data or better priors)
+// 4. Always perform sensitivity analysis with different prior strengths!
+// 5. Document your prior choices and justify them
+
+// Rule demonstrating how prior strength affects decision-making
+rule FlagAnomalies on WeakPrior {
+  pattern
+    (S:Sensor)-[dummy:reading]->(S:Sensor)  // Dummy self-edge pattern
+
+  where
+    // Flag if reading deviates significantly from prior
+    E[S.reading] > 5.0  // Threshold depends on prior!
+
+  action {
+    // With weak prior: E[reading] ≈ 9.90 → triggers flag
+    // With moderate prior: E[reading] ≈ 5.0 → borderline
+    // With strong prior: E[reading] ≈ 0.10 → no flag
+    set_expectation S.reading = E[S.reading] * 1.1
+  }
+
+  mode: for_each
+}

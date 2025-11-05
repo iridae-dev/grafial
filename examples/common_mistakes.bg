@@ -1,0 +1,406 @@
+// Example: Common Mistakes and Anti-Patterns
+// Documents common errors, limitations, and anti-patterns to help users avoid pitfalls.
+// Includes commented-out incorrect code with explanations of why it's wrong.
+
+schema Examples {
+  node Item {
+    value: Real
+    score: Real
+  }
+  edge LINKS { }
+}
+
+belief_model ExampleBeliefs on Examples {
+  node Item {
+    value ~ GaussianPosterior(prior_mean=0.0, prior_precision=0.1)
+    score ~ GaussianPosterior(prior_mean=0.5, prior_precision=1.0)
+  }
+  edge LINKS {
+    exist ~ BernoulliPosterior(prior=0.5, pseudo_count=2.0)
+  }
+}
+
+evidence ExampleEvidence on ExampleBeliefs {
+  observe Item["A"].value = 10.0
+  observe Item["B"].value = 20.0
+  observe edge LINKS(Item["A"], Item["B"]) present
+}
+
+// ========================================
+// MISTAKE 1: Using exists in metric expressions
+// ========================================
+
+// ❌ WRONG: exists cannot be used in metric where clauses
+// Metrics operate on node sets, not individual edges
+/*
+metric bad = count_nodes(
+    label=Item,
+    where=exists (node:Item)-[e:LINKS]->(X:Item) where prob(e) >= 0.5  // ERROR!
+)
+*/
+
+// ✅ CORRECT: Use degree() instead to check connectivity
+flow CorrectConnectivityCheck on ExampleBeliefs {
+  graph g = from_evidence ExampleEvidence
+
+  metric good = count_nodes(
+    label=Item,
+    where=degree(node, min_prob=0.5) > 0
+  )
+  // degree() counts edges, which is what we actually want
+
+  export g as "output"
+}
+
+// ========================================
+// MISTAKE 2: Chaining multiple exists expressions
+// ========================================
+
+// ❌ WRONG: Cannot chain exists with 'and exists'
+// The grammar only supports single exists expressions in where clauses
+/*
+rule BadMultiHopPattern on ExampleBeliefs {
+  pattern
+    (A:Item)-[ab:LINKS]->(B:Item)
+
+  where
+    exists (A)-[ax:LINKS]->(X) where prob(ax) >= 0.7
+    and exists (X)-[xb:LINKS]->(B) where prob(xb) >= 0.7  // ERROR: second exists not supported
+
+  action {
+    set_expectation B.value = E[A.value] * 0.9
+  }
+
+  mode: for_each
+}
+*/
+
+// ✅ CORRECT: Use fixpoint mode for multi-hop inference
+rule CorrectMultiHopPattern on ExampleBeliefs {
+  pattern
+    (A:Item)-[ab:LINKS]->(B:Item)
+
+  where
+    prob(ab) >= 0.7
+    and E[A.value] > E[B.value] + 0.1
+
+  action {
+    set_expectation B.value = E[A.value] * 0.9
+  }
+
+  mode: fixpoint  // Iterates until convergence, achieving transitive effect
+}
+
+// ========================================
+// MISTAKE 3: Forgetting that set_expectation preserves precision
+// ========================================
+
+// ❌ MISCONCEPTION: Thinking set_expectation is a full Bayesian update
+rule MisunderstoodUpdate on ExampleBeliefs {
+  pattern
+    (A:Item)-[ab:LINKS]->(B:Item)
+
+  where
+    prob(ab) >= 0.7
+
+  action {
+    // set_expectation shifts mean but preserves variance
+    // This is NOT equivalent to observing new evidence
+    // It's a manual intervention for control actions
+    set_expectation A.value = E[A.value] + 1.0
+
+    // If you want a true Bayesian update, use evidence blocks instead!
+  }
+
+  mode: for_each
+}
+
+// ✅ CORRECT: Understanding when to use each approach
+// - set_expectation: Control actions, policy enforcement, counterfactuals
+// - observe (in evidence): True data observations, Bayesian belief updates
+
+// ========================================
+// MISTAKE 4: Confusing force_absent with hard constraint
+// ========================================
+
+// ❌ MISCONCEPTION: Thinking force_absent sets probability to exactly 0
+rule MisunderstoodForceAbsent on ExampleBeliefs {
+  pattern
+    (A:Item)-[ab:LINKS]->(B:Item)
+
+  where
+    prob(ab) >= 0.7
+
+  action {
+    force_absent ab
+    // Sets edge to Beta(1, 10⁶) → P(exist) ≈ 0.000001
+    // NOT exactly zero! Still a valid probability distribution
+    // Strong evidence could theoretically update this (though unlikely)
+  }
+
+  mode: for_each
+}
+
+// ✅ UNDERSTANDING: force_absent is a finite approximation to determinism
+// - Preserves probabilistic semantics
+// - Avoids numerical issues with exact zeros
+// - Effectively removes edge from consideration
+// - Cannot create true hard constraints in Baygraph (by design)
+
+// ========================================
+// MISTAKE 5: Using prob() on nodes instead of edges
+// ========================================
+
+// ❌ WRONG: prob() only works on edge variables
+/*
+rule BadProbUsage on ExampleBeliefs {
+  pattern
+    (A:Item)-[ab:LINKS]->(B:Item)
+
+  where
+    prob(A) >= 0.7  // ERROR: A is a node, not an edge
+
+  action {
+    set_expectation B.value = E[A.value]
+  }
+
+  mode: for_each
+}
+*/
+
+// ✅ CORRECT: Use E[] for node attributes, prob() for edges
+rule CorrectProbUsage on ExampleBeliefs {
+  pattern
+    (A:Item)-[ab:LINKS]->(B:Item)
+
+  where
+    prob(ab) >= 0.7  // Correct: ab is an edge variable
+    and E[A.value] > 10.0  // Correct: E[] for node attributes
+
+  action {
+    set_expectation B.value = E[A.value]
+  }
+
+  mode: for_each
+}
+
+// ========================================
+// MISTAKE 6: Forgetting to handle division by zero
+// ========================================
+
+// ❌ RISKY: Division without checking denominator
+/*
+flow RiskyDivision on ExampleBeliefs {
+  graph g = from_evidence ExampleEvidence
+
+  metric total = sum_nodes(label=Item, contrib=E[node.value])
+  metric count = count_nodes(label=Item)
+  metric avg = total / count  // OK if count > 0, but what if empty graph?
+
+  export g as "output"
+}
+*/
+
+// ✅ SAFER: Check for zero or use conditional logic
+flow SafeDivision on ExampleBeliefs {
+  graph g = from_evidence ExampleEvidence
+
+  metric total = sum_nodes(label=Item, contrib=E[node.value])
+  metric count = count_nodes(label=Item)
+
+  // Option 1: Add small epsilon to denominator
+  metric avg_safe = total / (count + 0.0001)
+
+  // Option 2: In practice, validate count > 0 externally before using avg
+  // The language doesn't have if/else for metrics yet
+
+  export g as "output"
+}
+
+// ========================================
+// MISTAKE 7: Over-reliance on strong priors
+// ========================================
+
+// ❌ ANTI-PATTERN: Using very strong priors without justification
+belief_model TooStrongPrior on Examples {
+  node Item {
+    value ~ GaussianPosterior(
+      prior_mean=0.0,
+      prior_precision=10000.0  // τ = 10000 → σ² = 0.0001 (very strong!)
+      // This prior will dominate even large amounts of data
+      // Only use if you're very confident about the prior
+    )
+  }
+  edge LINKS {
+    exist ~ BernoulliPosterior(
+      prior=0.5,
+      pseudo_count=1000000.0  // Extremely strong prior!
+      // Requires millions of observations to shift belief significantly
+    )
+  }
+}
+
+// ✅ BEST PRACTICE: Use moderate priors unless you have strong justification
+belief_model ReasonablePriors on Examples {
+  node Item {
+    value ~ GaussianPosterior(
+      prior_mean=0.0,
+      prior_precision=0.1  // Weak prior: lets data dominate after ~10 observations
+      // Document rationale: "No strong prior knowledge, expect data-driven learning"
+    )
+  }
+  edge LINKS {
+    exist ~ BernoulliPosterior(
+      prior=0.5,
+      pseudo_count=2.0  // Minimal prior: equivalent to 2 observations
+      // Document rationale: "Maximum uncertainty, no preference"
+    )
+  }
+}
+
+// Always document your prior choices:
+// - What background knowledge informed the prior?
+// - How sensitive are results to prior specification?
+// - Have you tested with different priors (sensitivity analysis)?
+
+// ========================================
+// MISTAKE 8: Ignoring fixpoint convergence issues
+// ========================================
+
+// ❌ RISKY: Fixpoint rule without proper convergence guarantees
+/*
+rule PotentiallyNonConvergent on ExampleBeliefs {
+  pattern
+    (A:Item)-[ab:LINKS]->(B:Item)
+
+  where
+    prob(ab) >= 0.5
+
+  action {
+    // Oscillation risk: values might bounce back and forth
+    set_expectation A.value = E[B.value] * 1.1
+    set_expectation B.value = E[A.value] * 1.1
+  }
+
+  mode: fixpoint  // May not converge!
+}
+*/
+
+// ✅ BEST PRACTICE: Ensure monotonic updates with decay
+rule ConvergentFixpoint on ExampleBeliefs {
+  pattern
+    (A:Item)-[ab:LINKS]->(B:Item)
+
+  where
+    prob(ab) >= 0.7
+    and E[A.value] > E[B.value] + 0.1  // Threshold prevents tiny oscillations
+
+  action {
+    // Unidirectional update with decay prevents oscillation
+    set_expectation B.value = E[A.value] * 0.9  // Decay factor < 1.0
+  }
+
+  mode: fixpoint
+}
+
+// Fixpoint convergence requirements:
+// 1. Monotonic or decreasing updates (no oscillation)
+// 2. Decay factors < 1.0 (prevents unbounded growth)
+// 3. Thresholds in where clause (prevents infinite tiny updates)
+// 4. Consider iteration limits for safety
+
+// ========================================
+// MISTAKE 9: Expecting deterministic execution order
+// ========================================
+
+// ❌ MISCONCEPTION: Assuming rules fire in a specific order
+/*
+rule FirstRule on ExampleBeliefs {
+  pattern (A:Item)
+  where E[A.value] > 0.0
+  action { set_expectation A.score = 0.5 }
+  mode: for_each
+}
+
+rule SecondRule on ExampleBeliefs {
+  pattern (A:Item)
+  where E[A.score] == 0.5  // Assumes FirstRule ran first!
+  action { set_expectation A.value = 100.0 }
+  mode: for_each
+}
+*/
+
+// ✅ BEST PRACTICE: Make rules independent or use explicit sequencing
+flow ExplicitSequencing on ExampleBeliefs {
+  graph g = from_evidence ExampleEvidence
+
+  // Explicit sequencing via pipeline
+  graph step1 = g |> apply_rule FirstRule
+  graph step2 = step1 |> apply_rule SecondRule
+
+  export step2 as "output"
+}
+
+// Or make rules independent (don't depend on execution order)
+
+// ========================================
+// MISTAKE 10: Using node equality incorrectly
+// ========================================
+
+// ❌ WRONG: Trying to compare node identity in where clause
+/*
+rule BadNodeComparison on ExampleBeliefs {
+  pattern
+    (A:Item)-[ab:LINKS]->(B:Item)
+
+  where
+    A == Item["A"]  // ERROR: Cannot compare node variables to literals this way
+
+  action {
+    set_expectation B.value = 10.0
+  }
+
+  mode: for_each
+}
+*/
+
+// ✅ CORRECT: Use node attributes or structural patterns instead
+rule CorrectNodeSelection on ExampleBeliefs {
+  pattern
+    (A:Item)-[ab:LINKS]->(B:Item)
+
+  where
+    // Use attributes to identify nodes
+    E[A.value] == 10.0  // Identifies node with value=10
+    and prob(ab) >= 0.7
+
+  action {
+    set_expectation B.value = E[A.value] * 0.9
+  }
+
+  mode: for_each
+}
+
+// Or match by structure (which nodes connect to which)
+
+// ========================================
+// Summary of Best Practices
+// ========================================
+
+// 1. Use degree() instead of exists in metrics
+// 2. Use fixpoint mode for multi-hop inference
+// 3. Understand set_expectation is NOT a Bayesian update
+// 4. Remember force_absent is not exactly zero
+// 5. Use prob() for edges, E[] for node attributes
+// 6. Handle division by zero carefully
+// 7. Document and justify prior choices
+// 8. Ensure fixpoint convergence with decay and thresholds
+// 9. Make rules independent or sequence explicitly
+// 10. Use attributes or structure for node selection
+
+// When in doubt:
+// - Check the grammar for supported syntax
+// - Read the language guide for semantics
+// - Test with minimal examples first
+// - Use snapshots for debugging
+// - Validate assumptions with sensitivity analysis

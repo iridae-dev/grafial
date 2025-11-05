@@ -1,0 +1,218 @@
+// Example: Pipeline Composition with Cross-Flow References and Snapshots
+// Demonstrates how to build multi-stage analysis pipelines using from_graph for
+// cross-flow composition and snapshot for debugging/checkpointing.
+
+schema DataPipeline {
+  node Record {
+    raw_value: Real
+    clean_value: Real
+    enriched_value: Real
+    quality_score: Real
+  }
+  edge RELATED { }
+}
+
+belief_model PipelineBeliefs on DataPipeline {
+  node Record {
+    raw_value ~ GaussianPosterior(prior_mean=0.0, prior_precision=0.01)
+    clean_value ~ GaussianPosterior(prior_mean=0.0, prior_precision=0.01)
+    enriched_value ~ GaussianPosterior(prior_mean=0.0, prior_precision=0.01)
+    quality_score ~ GaussianPosterior(prior_mean=0.5, prior_precision=1.0)
+  }
+  edge RELATED {
+    exist ~ BernoulliPosterior(prior=0.3, pseudo_count=5.0)
+  }
+}
+
+evidence RawData on PipelineBeliefs {
+  // Raw input data with noise and missing values
+  observe Record["R1"].raw_value = 10.5
+  observe Record["R2"].raw_value = -999.0  // Sentinel value (missing data)
+  observe Record["R3"].raw_value = 25.3
+  observe Record["R4"].raw_value = 18.7
+
+  // Some relationships
+  observe edge RELATED(Record["R1"], Record["R3"]) present
+  observe edge RELATED(Record["R3"], Record["R4"]) present
+}
+
+// Stage 1: Data Cleaning
+rule CleanData on PipelineBeliefs {
+  pattern
+    (R:Record)-[dummy:RELATED]->(R:Record)
+
+  where
+    // Detect sentinel values or outliers
+    E[R.raw_value] < -100.0 or E[R.raw_value] > 100.0
+
+  action {
+    // Impute missing/bad values using prior mean
+    set_expectation R.clean_value = 0.0
+    set_expectation R.quality_score = 0.3  // Mark as low quality
+  }
+
+  mode: for_each
+}
+
+rule CopyCleanValues on PipelineBeliefs {
+  pattern
+    (R:Record)-[dummy:RELATED]->(R:Record)
+
+  where
+    // Normal values: just copy to clean_value
+    E[R.raw_value] >= -100.0 and E[R.raw_value] <= 100.0
+
+  action {
+    set_expectation R.clean_value = E[R.raw_value]
+    set_expectation R.quality_score = 0.9  // Mark as high quality
+  }
+
+  mode: for_each
+}
+
+flow CleaningStage on PipelineBeliefs {
+  // Start with raw data
+  graph raw = from_evidence RawData
+
+  // Checkpoint: save raw data state for later inspection
+  graph raw_snapshot = raw |> snapshot "raw_data"
+
+  // Apply cleaning rules
+  graph step1 = raw_snapshot |> apply_rule CleanData
+  graph cleaned = step1 |> apply_rule CopyCleanValues
+
+  // Checkpoint: save cleaned data
+  graph cleaned_snapshot = cleaned |> snapshot "cleaned_data"
+
+  // Compute cleaning statistics
+  metric total_records = count_nodes(label=Record)
+  metric low_quality = count_nodes(
+    label=Record,
+    where=E[node.quality_score] < 0.5
+  )
+  metric cleaning_rate = low_quality / total_records
+
+  export cleaned_snapshot as "cleaned_graph"
+  export_metric cleaning_rate as "cleaning_stats"
+}
+
+// Stage 2: Data Enrichment (uses output from Stage 1)
+rule EnrichFromNeighbors on PipelineBeliefs {
+  pattern
+    (A:Record)-[ab:RELATED]->(B:Record)
+
+  where
+    // Enrich high-quality records from their neighbors
+    prob(ab) >= 0.7
+    and E[A.quality_score] > 0.7
+    and E[B.quality_score] > 0.7
+
+  action {
+    // Enriched value: combination of both records
+    let enriched = (E[A.clean_value] + E[B.clean_value]) / 2.0
+    set_expectation A.enriched_value = enriched
+    set_expectation B.enriched_value = enriched
+  }
+
+  mode: for_each
+}
+
+flow EnrichmentStage on PipelineBeliefs {
+  // Cross-flow reference: import graph from cleaning stage
+  import_metric cleaning_stats as imported_cleaning_rate
+
+  graph cleaned = from_graph "cleaned_graph"  // Reference previous flow's output
+
+  // Apply enrichment
+  graph enriched = cleaned |> apply_rule EnrichFromNeighbors
+
+  // Checkpoint enriched data
+  graph enriched_snapshot = enriched |> snapshot "enriched_data"
+
+  // Metrics that build on previous stage
+  metric avg_enriched = sum_nodes(
+    label=Record,
+    where=E[node.enriched_value] != 0.0,
+    contrib=E[node.enriched_value]
+  ) / count_nodes(label=Record, where=E[node.enriched_value] != 0.0)
+
+  // Reference imported metric
+  metric enrichment_rate = 1.0 - imported_cleaning_rate
+
+  export enriched_snapshot as "enriched_graph"
+  export_metric enrichment_rate as "enrichment_stats"
+}
+
+// Stage 3: Quality Analysis (uses outputs from both previous stages)
+flow QualityAnalysis on PipelineBeliefs {
+  import_metric cleaning_stats as cleaning_rate
+  import_metric enrichment_stats as enrichment_rate
+
+  // Can reference either snapshot
+  graph data = from_graph "enriched_graph"
+
+  // Final quality metrics
+  metric high_quality_count = count_nodes(
+    label=Record,
+    where=E[node.quality_score] > 0.7
+  )
+
+  metric avg_quality = sum_nodes(
+    label=Record,
+    contrib=E[node.quality_score]
+  ) / count_nodes(label=Record)
+
+  // Composite metric using imported values
+  metric pipeline_quality = avg_quality * enrichment_rate * (1.0 - cleaning_rate)
+
+  export data as "final_result"
+}
+
+// Pedagogical points:
+// 1. from_graph enables cross-flow composition
+//    - Flows can reference outputs from other flows
+//    - Enables modular pipeline design
+//    - Each stage can be developed and tested independently
+//
+// 2. snapshot creates checkpoints for debugging
+//    - Named snapshots can be inspected during development
+//    - Enables A/B testing different processing branches
+//    - Useful for visualizing intermediate states
+//
+// 3. export_metric and import_metric pass scalar values between flows
+//    - Metrics computed in early stages inform later stages
+//    - Enables conditional processing based on data quality
+//    - Supports meta-analysis across pipeline stages
+//
+// 4. Pipeline composition patterns:
+//    - Sequential: flow1 → flow2 → flow3 (linear pipeline)
+//    - Branching: flow1 → [flow2a, flow2b] (parallel processing)
+//    - Merging: [flow1a, flow1b] → flow2 (join results)
+//
+// 5. Best practices:
+//    - Use meaningful snapshot names for documentation
+//    - Export metrics at each stage for monitoring
+//    - Keep flows focused on single responsibility
+//    - Document expected data quality at each stage
+//
+// 6. Debugging with snapshots:
+//    - Compare snapshots before/after rule application
+//    - Identify which rule caused unexpected changes
+//    - Validate data quality assumptions
+//    - Profile performance bottlenecks
+
+// Advanced: Conditional branching based on metrics
+rule FlagLowQualityPipeline on PipelineBeliefs {
+  pattern
+    (R:Record)-[dummy:RELATED]->(R:Record)
+
+  where
+    // If overall quality is low, flag all records for review
+    E[R.quality_score] < 0.6
+
+  action {
+    set_expectation R.quality_score = E[R.quality_score] * 0.8
+  }
+
+  mode: for_each
+}

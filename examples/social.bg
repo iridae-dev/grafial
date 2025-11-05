@@ -8,26 +8,45 @@ schema Social {
 }
 
 belief_model SocialBeliefs on Social {
-  // Opaque body for now
-  node Person { some_value ~ GaussianPosterior(prior_mean=0.0) }
+  node Person {
+    some_value ~ GaussianPosterior(prior_mean=0.0, prior_precision=0.1)
+    other_value ~ GaussianPosterior(prior_mean=0.0, prior_precision=0.1)
+  }
+  edge REL {
+    exist ~ BernoulliPosterior(prior=0.5, pseudo_count=2.0)
+  }
 }
 
 evidence SocialEvidence on SocialBeliefs {
-  // Opaque body for now
   observe Person["Alice"].some_value = 10.0
+  observe Person["Bob"].some_value = 5.0
+  observe Person["Carol"].some_value = 2.0
+
+  observe edge REL(Person["Alice"], Person["Bob"]) present
+  observe edge REL(Person["Bob"], Person["Carol"]) present
 }
 
+// Rule: Transfer value from A to B through intermediate node B,
+// then disconnect B->C to prevent further propagation
 rule TransferAndDisconnect on SocialBeliefs {
   pattern
     (A:Person)-[ab:REL]->(B:Person),
     (B:Person)-[bc:REL]->(C:Person)
 
-  where prob(ab) >= 0.9 and prob(bc) >= 0.9
+  where
+    // Only apply if both edges are highly probable
+    prob(ab) >= 0.9 and prob(bc) >= 0.9
 
   action {
+    // Transfer half of A's value to B
     let v_ab = E[A.some_value] / 2
     set_expectation A.some_value = E[A.some_value] - v_ab
     set_expectation B.some_value = E[B.some_value] + v_ab
+
+    // Disconnect B->C to prevent further propagation
+    // force_absent sets edge to Beta(1, 10⁶) → P(exist) ≈ 0.000001
+    // NOT exactly zero - still a valid probability distribution
+    // Strong subsequent evidence could theoretically shift this belief
     force_absent bc
   }
 
@@ -36,7 +55,15 @@ rule TransferAndDisconnect on SocialBeliefs {
 
 flow Demo on SocialBeliefs {
   graph base = from_evidence SocialEvidence
-  graph cleaned = base |> apply_rule TransferAndDisconnect |> prune_edges REL where prob(edge) < 0.1
+
+  // Apply rule to transfer value and disconnect
+  graph transferred = base |> apply_rule TransferAndDisconnect
+
+  // Prune low-probability edges (implicit 'edge' variable in where clause)
+  graph cleaned = transferred |> prune_edges REL where prob(edge) < 0.1
+
+  // Compute average degree considering only high-probability edges
   metric avg_degree = avg_degree(Person, REL, min_prob=0.8)
+
   export cleaned as "demo"
 }

@@ -1,0 +1,172 @@
+// Example: Transitive Closure with Fixpoint Iteration
+// Demonstrates fixpoint mode for computing transitive properties through graph propagation.
+// This is critical for multi-hop inference that cannot be expressed with single-hop exists.
+
+schema Network {
+  node Server {
+    reachability: Real
+    distance: Real
+  }
+  edge CONNECTS { }
+}
+
+belief_model NetworkBeliefs on Network {
+  node Server {
+    // Reachability: 0.0 = unreachable, 1.0 = fully reachable
+    reachability ~ GaussianPosterior(
+      prior_mean=0.0,
+      prior_precision=0.1  // Weak prior: σ² = 10
+    )
+    // Distance: hop count from source (0 = source, higher = further)
+    distance ~ GaussianPosterior(
+      prior_mean=100.0,  // Large default (effectively "infinity")
+      prior_precision=0.01
+    )
+  }
+  edge CONNECTS {
+    // Edge existence: uncertain connectivity
+    exist ~ BernoulliPosterior(
+      prior=0.5,
+      pseudo_count=2.0
+    )
+  }
+}
+
+evidence DirectConnections on NetworkBeliefs {
+  // Source node: fully reachable at distance 0
+  observe Server["S1"].reachability = 1.0
+  observe Server["S1"].distance = 0.0
+
+  // Direct connections from source
+  observe edge CONNECTS(Server["S1"], Server["S2"]) present
+  observe edge CONNECTS(Server["S2"], Server["S3"]) present
+  observe edge CONNECTS(Server["S1"], Server["S4"]) present
+  observe edge CONNECTS(Server["S4"], Server["S5"]) present
+
+  // Some uncertain edges
+  observe edge CONNECTS(Server["S3"], Server["S5"]) present
+}
+
+// Fixpoint rule: propagate reachability through edges until convergence
+// This computes transitive closure probabilistically
+rule PropagateReachability on NetworkBeliefs {
+  pattern
+    (A:Server)-[ab:CONNECTS]->(B:Server)
+
+  where
+    // Only propagate through high-probability edges
+    prob(ab) >= 0.7
+    // Only propagate if A is more reachable than B (with threshold to prevent oscillation)
+    and E[A.reachability] > E[B.reachability] + 0.05
+
+  action {
+    // Propagate reachability with decay (distance penalty)
+    // Reachability decreases as we move further from source
+    let propagated = E[A.reachability] * 0.9
+    set_expectation B.reachability = propagated
+
+    // Update distance: increment by 1 hop
+    set_expectation B.distance = E[A.distance] + 1.0
+  }
+
+  mode: fixpoint  // Run until convergence (no more changes above threshold)
+}
+
+flow ReachabilityAnalysis on NetworkBeliefs {
+  graph base = from_evidence DirectConnections
+
+  // Apply fixpoint iteration to compute transitive reachability
+  // Fixpoint mode runs the rule repeatedly until:
+  // 1. No more patterns match, OR
+  // 2. Actions don't change graph significantly (convergence detected)
+  // 3. Maximum iteration limit reached (safety)
+  graph with_transitive = base |> apply_rule PropagateReachability
+
+  // Expected results after convergence:
+  // S1: reachability=1.0, distance=0 (source)
+  // S2: reachability≈0.9, distance≈1 (1 hop from S1)
+  // S3: reachability≈0.81, distance≈2 (2 hops via S2)
+  // S4: reachability≈0.9, distance≈1 (1 hop from S1)
+  // S5: reachability≈0.81, distance≈2 (2 hops via S4, or S1→S4→S5)
+
+  metric avg_reachability = sum_nodes(
+    label=Server,
+    contrib=E[node.reachability]
+  ) / count_nodes(label=Server)
+
+  metric reachable_count = count_nodes(
+    label=Server,
+    where=E[node.reachability] > 0.5
+  )
+
+  metric avg_distance = sum_nodes(
+    label=Server,
+    where=E[node.reachability] > 0.5,
+    contrib=E[node.distance]
+  ) / count_nodes(label=Server, where=E[node.reachability] > 0.5)
+
+  export with_transitive as "reachable"
+}
+
+// Alternative: PageRank-style influence propagation with fixpoint
+rule PropagateInfluence on NetworkBeliefs {
+  pattern
+    (A:Server)-[ab:CONNECTS]->(B:Server)
+
+  where
+    prob(ab) >= 0.7
+    and E[A.reachability] > E[B.reachability] + 0.01
+
+  action {
+    // PageRank-style: influence flows proportional to reachability
+    // and inversely proportional to out-degree
+    let out_degree = degree(A, min_prob=0.7)
+    let influence_share = E[A.reachability] / out_degree
+    let new_influence = E[B.reachability] + influence_share * 0.15
+    set_expectation B.reachability = new_influence
+  }
+
+  mode: fixpoint
+}
+
+// Pedagogical points:
+// 1. Fixpoint mode enables transitive inference that single-hop exists cannot express
+// 2. Convergence requires:
+//    - Monotonic updates (values don't oscillate)
+//    - Decay factors (prevents unbounded growth)
+//    - Thresholds in where clause (prevents infinite tiny updates)
+// 3. Similar to:
+//    - Datalog recursion
+//    - Iterative graph algorithms (PageRank, label propagation)
+//    - Belief propagation in graphical models
+// 4. Useful for:
+//    - Transitive closure (reachability)
+//    - Shortest paths (with appropriate decay)
+//    - Influence propagation (social networks)
+//    - Iterative refinement of beliefs
+// 5. Performance considerations:
+//    - Each iteration processes all matching patterns
+//    - Convergence time depends on graph structure and decay rates
+//    - May need iteration limits for safety
+
+// Advanced: Shortest path computation with fixpoint
+rule ComputeShortestPath on NetworkBeliefs {
+  pattern
+    (A:Server)-[ab:CONNECTS]->(B:Server)
+
+  where
+    prob(ab) >= 0.8
+    // Only update if we found a shorter path
+    and E[A.distance] + 1.0 < E[B.distance] - 0.1
+
+  action {
+    // Bellman-Ford style update: distance via A + 1
+    set_expectation B.distance = E[A.distance] + 1.0
+
+    // Reachability inverse of distance (higher distance = lower reachability)
+    let reach = 1.0 / (1.0 + E[B.distance])
+    set_expectation B.reachability = reach
+  }
+
+  mode: fixpoint
+}

@@ -1,0 +1,261 @@
+// Example: Advanced Metrics Demonstration
+// Comprehensive showcase of all metric functions: count_nodes, sum_nodes, fold_nodes, avg_degree
+// Demonstrates filtering, ordering, cross-references, and metric composition.
+
+schema Analytics {
+  node Entity {
+    value: Real
+    weight: Real
+    priority: Real
+  }
+  edge CONNECTS { }
+  edge INFLUENCES { }
+}
+
+belief_model AnalyticsBeliefs on Analytics {
+  node Entity {
+    value ~ GaussianPosterior(prior_mean=10.0, prior_precision=0.1)
+    weight ~ GaussianPosterior(prior_mean=1.0, prior_precision=1.0)
+    priority ~ GaussianPosterior(prior_mean=0.5, prior_precision=0.5)
+  }
+  edge CONNECTS {
+    exist ~ BernoulliPosterior(prior=0.3, pseudo_count=5.0)
+  }
+  edge INFLUENCES {
+    exist ~ BernoulliPosterior(prior=0.2, pseudo_count=10.0)
+  }
+}
+
+evidence SampleData on AnalyticsBeliefs {
+  // Entities with varying values, weights, priorities
+  observe Entity["E1"].value = 100.0
+  observe Entity["E1"].weight = 2.0
+  observe Entity["E1"].priority = 0.9
+
+  observe Entity["E2"].value = 50.0
+  observe Entity["E2"].weight = 1.5
+  observe Entity["E2"].priority = 0.7
+
+  observe Entity["E3"].value = 75.0
+  observe Entity["E3"].weight = 1.0
+  observe Entity["E3"].priority = 0.5
+
+  observe Entity["E4"].value = 25.0
+  observe Entity["E4"].weight = 0.5
+  observe Entity["E4"].priority = 0.3
+
+  observe Entity["E5"].value = 80.0
+  observe Entity["E5"].weight = 1.8
+  observe Entity["E5"].priority = 0.8
+
+  // Connections
+  observe edge CONNECTS(Entity["E1"], Entity["E2"]) present
+  observe edge CONNECTS(Entity["E1"], Entity["E3"]) present
+  observe edge CONNECTS(Entity["E2"], Entity["E4"]) present
+  observe edge CONNECTS(Entity["E3"], Entity["E5"]) present
+
+  // Influences
+  observe edge INFLUENCES(Entity["E1"], Entity["E2"]) present
+  observe edge INFLUENCES(Entity["E1"], Entity["E3"]) present
+  observe edge INFLUENCES(Entity["E2"], Entity["E3"]) present
+}
+
+flow MetricsShowcase on AnalyticsBeliefs {
+  graph g = from_evidence SampleData
+
+  // ========== count_nodes: Basic Counting ==========
+
+  // Simple count: total entities
+  metric total_entities = count_nodes(label=Entity)
+  // Expected: 5
+
+  // Filtered count: high-value entities
+  metric high_value_count = count_nodes(
+    label=Entity,
+    where=E[node.value] > 60.0
+  )
+  // Expected: 3 (E1=100, E3=75, E5=80)
+
+  // Multiple conditions: high value AND high priority
+  metric premium_count = count_nodes(
+    label=Entity,
+    where=E[node.value] > 60.0 and E[node.priority] > 0.6
+  )
+  // Expected: 2 (E1, E5)
+
+  // ========== sum_nodes: Aggregation with Filtering ==========
+
+  // Simple sum: total value across all entities
+  metric total_value = sum_nodes(
+    label=Entity,
+    contrib=E[node.value]
+  )
+  // Expected: 100 + 50 + 75 + 25 + 80 = 330
+
+  // Weighted sum: value weighted by entity weight
+  metric weighted_value = sum_nodes(
+    label=Entity,
+    contrib=E[node.value] * E[node.weight]
+  )
+  // Expected: 100×2.0 + 50×1.5 + 75×1.0 + 25×0.5 + 80×1.8
+  //         = 200 + 75 + 75 + 12.5 + 144 = 506.5
+
+  // Filtered sum: only high-priority entities
+  metric priority_value = sum_nodes(
+    label=Entity,
+    where=E[node.priority] > 0.6,
+    contrib=E[node.value]
+  )
+  // Expected: 100 + 50 + 80 = 230 (E1, E2, E5)
+
+  // Complex contribution: priority-weighted value
+  metric priority_weighted_value = sum_nodes(
+    label=Entity,
+    contrib=E[node.value] * E[node.priority] * E[node.weight]
+  )
+  // Expected: 100×0.9×2.0 + 50×0.7×1.5 + 75×0.5×1.0 + 25×0.3×0.5 + 80×0.8×1.8
+  //         = 180 + 52.5 + 37.5 + 3.75 + 115.2 = 388.95
+
+  // ========== fold_nodes: Sequential Computation with Ordering ==========
+
+  // Cumulative value with ordering: process highest-value entities first
+  // Useful for computing running totals, compound effects, etc.
+  metric cumulative_value = fold_nodes(
+    label=Entity,
+    order_by=E[node.value] DESC,  // Process in descending order of value
+    init=0.0,
+    step=value + E[node.value]  // 'value' is accumulator, 'node' is current entity
+  )
+  // Processing order: E1(100) → E5(80) → E3(75) → E2(50) → E4(25)
+  // Accumulation: 0 → 100 → 180 → 255 → 305 → 330
+  // Final: 330 (same as total_value, but demonstrates ordering)
+
+  // Compound interest-style accumulation
+  metric compound_value = fold_nodes(
+    label=Entity,
+    order_by=E[node.priority] DESC,  // Process by priority
+    init=0.0,
+    step=value + E[node.value] * (1.0 + value * 0.01)  // Current value amplified by accumulator
+  )
+  // Processing order: E1(0.9) → E5(0.8) → E2(0.7) → E3(0.5) → E4(0.3)
+  // Step 1: 0 + 100×(1+0×0.01) = 100
+  // Step 2: 100 + 80×(1+100×0.01) = 100 + 80×2.0 = 260
+  // Step 3: 260 + 50×(1+260×0.01) = 260 + 50×3.6 = 440
+  // Step 4: 440 + 75×(1+440×0.01) = 440 + 75×5.4 = 845
+  // Step 5: 845 + 25×(1+845×0.01) = 845 + 25×9.45 = 1081.25
+  // Final: ~1081.25 (demonstrates compound effect)
+
+  // Filtered fold: only consider high-value entities
+  metric selective_compound = fold_nodes(
+    label=Entity,
+    where=E[node.value] > 50.0,
+    order_by=E[node.value] DESC,
+    init=0.0,
+    step=value + E[node.value] * (1.0 + value * 0.005)
+  )
+  // Only processes: E1(100), E5(80), E3(75)
+
+  // ========== avg_degree: Connectivity Analysis ==========
+
+  // Average degree considering all probable edges
+  metric avg_connections = avg_degree(Entity, CONNECTS, min_prob=0.5)
+  // Counts edges with P(exist) >= 0.5 for each entity, then averages
+
+  // Average degree with stricter threshold
+  metric avg_strong_connections = avg_degree(Entity, CONNECTS, min_prob=0.9)
+  // Only counts highly certain edges
+
+  // Different edge type
+  metric avg_influences = avg_degree(Entity, INFLUENCES, min_prob=0.7)
+
+  // ========== Metric Cross-References ==========
+
+  // Derived metrics that reference other metrics
+  metric avg_value = total_value / total_entities
+  // Expected: 330 / 5 = 66
+
+  metric value_concentration = priority_value / total_value
+  // Expected: 230 / 330 ≈ 0.697 (69.7% of value in high-priority entities)
+
+  metric weighted_avg_value = weighted_value / sum_nodes(label=Entity, contrib=E[node.weight])
+  // Denominator: 2.0 + 1.5 + 1.0 + 0.5 + 1.8 = 6.8
+  // Expected: 506.5 / 6.8 ≈ 74.5
+
+  // Composite quality score
+  metric quality_score = (
+    (premium_count / total_entities) * 0.4 +
+    (value_concentration) * 0.3 +
+    (avg_strong_connections / avg_connections) * 0.3
+  )
+  // Combines multiple metrics with weights
+
+  // ========== Complex Patterns ==========
+
+  // Entities with high value but low connectivity
+  metric isolated_high_value = count_nodes(
+    label=Entity,
+    where=E[node.value] > 70.0 and degree(node, min_prob=0.7) < 2.0
+  )
+
+  // Average value of well-connected entities
+  metric connected_avg_value = sum_nodes(
+    label=Entity,
+    where=degree(node, min_prob=0.7) >= 2.0,
+    contrib=E[node.value]
+  ) / count_nodes(label=Entity, where=degree(node, min_prob=0.7) >= 2.0)
+
+  export g as "analyzed"
+}
+
+// Pedagogical points:
+// 1. count_nodes: Simple counting with optional filtering
+//    - No contrib parameter (just counts)
+//    - where clause filters which nodes to count
+//    - Useful for cardinality queries
+//
+// 2. sum_nodes: Aggregation over node attributes
+//    - contrib specifies what to sum (can be complex expression)
+//    - where clause filters which nodes to include
+//    - Returns scalar value (sum of contributions)
+//
+// 3. fold_nodes: Sequential computation with ordering
+//    - Unique feature: order_by clause determines processing order
+//    - init specifies starting value for accumulator
+//    - step specifies how to update accumulator (uses 'value' and 'node')
+//    - Enables compound effects, running totals, context-dependent aggregation
+//    - Different from sum_nodes: order matters, can have dependencies
+//
+// 4. avg_degree: Connectivity analysis
+//    - Computes average number of edges per node
+//    - min_prob threshold filters edges by probability
+//    - Returns average across all nodes of specified type
+//    - Useful for network analysis, connectivity metrics
+//
+// 5. Metric cross-references: Build complex metrics from simpler ones
+//    - Later metrics can reference earlier ones
+//    - Enables composable analytics
+//    - Keep expressions readable (don't nest too deeply)
+//
+// 6. Best practices:
+//    - Use count_nodes for simple cardinality
+//    - Use sum_nodes for independent aggregations
+//    - Use fold_nodes when order matters or for compound effects
+//    - Use avg_degree for network topology analysis
+//    - Document expected values in comments
+//    - Test metrics with known data
+
+// Advanced: Multi-stage metric computation
+rule TagHighValueEntities on AnalyticsBeliefs {
+  pattern
+    (E:Entity)-[dummy:CONNECTS]->(E:Entity)
+
+  where
+    E[E.value] > 70.0
+
+  action {
+    // Boost priority for high-value entities
+    set_expectation E.priority = E[E.priority] * 1.2
+  }
+
+  mode: for_each
+}

@@ -1,0 +1,151 @@
+// Example: Bayesian A/B Testing
+// Classic application of Bayesian inference: comparing conversion rates between variants.
+// Demonstrates proper Bayesian hypothesis testing and decision-making under uncertainty.
+
+schema ABTest {
+  node Variant {
+    conversion_rate: Real
+    sample_size: Real
+  }
+  edge OUTPERFORMS { }
+}
+
+belief_model TestBeliefs on ABTest {
+  node Variant {
+    // Prior: conversion rate around 10% (typical for web applications)
+    // Moderate uncertainty to let data dominate after sufficient samples
+    conversion_rate ~ GaussianPosterior(
+      prior_mean=0.1,
+      prior_precision=10.0  // τ = 10 → σ² = 0.1
+      // Prior standard deviation: √0.1 ≈ 0.316
+      // 95% credible interval: [0.1 - 1.96×0.316, 0.1 + 1.96×0.316] ≈ [-0.52, 0.72]
+    )
+    sample_size ~ GaussianPosterior(
+      prior_mean=1000.0,
+      prior_precision=0.01
+    )
+  }
+  edge OUTPERFORMS {
+    // Does variant A outperform variant B?
+    // Prior: 50% chance (no preference before seeing data)
+    exist ~ BernoulliPosterior(
+      prior=0.5,
+      pseudo_count=2.0  // Weak prior: Beta(1, 1) uniform
+    )
+  }
+}
+
+evidence VariantAData on TestBeliefs {
+  // Variant A: observed conversion rate = 0.12
+  // (e.g., 120 conversions out of 1000 impressions)
+  // With default observation precision = 1.0:
+  // τ_post = 10 + 1 = 11
+  // μ_post = (10×0.1 + 1×0.12) / 11 = 1.12/11 ≈ 0.102
+  observe Variant["A"].conversion_rate = 0.12
+  observe Variant["A"].sample_size = 1000.0
+}
+
+evidence VariantBData on TestBeliefs {
+  // Variant B: observed conversion rate = 0.15
+  // (e.g., 150 conversions out of 1000 impressions)
+  // τ_post = 10 + 1 = 11
+  // μ_post = (10×0.1 + 1×0.15) / 11 = 1.15/11 ≈ 0.105
+  observe Variant["B"].conversion_rate = 0.15
+  observe Variant["B"].sample_size = 1000.0
+}
+
+// Rule to determine winner based on practical significance
+rule DetermineWinner on TestBeliefs {
+  pattern
+    (A:Variant)-[dummy_a:OUTPERFORMS]->(A:Variant),
+    (B:Variant)-[dummy_b:OUTPERFORMS]->(B:Variant)
+
+  where
+    A != B
+    and E[B.conversion_rate] > E[A.conversion_rate]
+    and E[B.conversion_rate] - E[A.conversion_rate] > 0.02  // Practical significance: 2% lift
+
+  action {
+    // Mark B as winner by boosting its posterior slightly
+    // In production, this might trigger deployment or further testing
+    set_expectation B.conversion_rate = E[B.conversion_rate] * 1.01
+  }
+
+  mode: for_each
+}
+
+flow ABTestAnalysis on TestBeliefs {
+  graph a = from_evidence VariantAData
+  graph b = from_evidence VariantBData
+
+  // After Bayesian updates:
+  // A: μ_post ≈ 0.102 (prior pulls observation 0.12 down toward 0.10)
+  // B: μ_post ≈ 0.105 (prior pulls observation 0.15 down toward 0.10)
+  // Difference: 0.003 (0.3 percentage points)
+
+  // Decision analysis:
+  // - Statistical difference: 0.3% (B > A)
+  // - Practical significance threshold: 2%
+  // - Conclusion: Difference is statistically real but too small to matter
+  // - Action: Need more data OR accept no meaningful difference
+
+  graph with_winner = b |> apply_rule DetermineWinner
+
+  metric mean_A = sum_nodes(
+    label=Variant,
+    where=E[node.sample_size] > 0.0,
+    contrib=E[node.conversion_rate]
+  ) / count_nodes(label=Variant, where=E[node.sample_size] > 0.0)
+
+  // Count variants with "good" conversion rates
+  metric good_variants = count_nodes(
+    label=Variant,
+    where=E[node.conversion_rate] > 0.12
+  )
+
+  export with_winner as "winner"
+}
+
+// Pedagogical points:
+// 1. Bayesian A/B testing naturally incorporates prior knowledge
+//    - Prior prevents overfitting to small samples
+//    - Prior reflects baseline conversion rates from historical data
+// 2. Can make decisions before reaching "statistical significance"
+//    - No need for fixed sample sizes or p-values
+//    - Update beliefs continuously as data arrives
+// 3. Separates statistical significance from practical significance
+//    - Statistical: Is there a real difference? (Bayesian credible intervals)
+//    - Practical: Does the difference matter? (Business thresholds)
+// 4. Posterior uncertainty guides sample size requirements
+//    - High uncertainty → need more data
+//    - Low uncertainty → can make decision with confidence
+// 5. Natural handling of multiple comparisons
+//    - Prior regularization prevents false positives
+//    - No need for Bonferroni corrections
+
+// Advanced: Demonstrating decision-making with loss functions
+rule DecideWithLoss on TestBeliefs {
+  pattern
+    (A:Variant)-[dummy:OUTPERFORMS]->(A:Variant)
+
+  where
+    // Decision rule based on expected loss
+    // Loss = (cost of wrong decision) × P(wrong decision)
+    // Here: simple threshold on posterior mean
+    E[A.conversion_rate] > 0.11
+
+  action {
+    // Deploy variant A if it clears threshold
+    // In practice, would trigger deployment pipeline
+    set_expectation A.conversion_rate = E[A.conversion_rate] * 1.05
+  }
+
+  mode: for_each
+}
+
+// Note on sample size calculation:
+// Traditional frequentist: fix N in advance based on power analysis
+// Bayesian approach: sequential testing with posterior credible intervals
+//   - Stop when P(B > A | data) > 0.95 and |E[B] - E[A]| > threshold
+//   - Or when credible intervals overlap significantly (no meaningful difference)
+//   - No inflation of Type I error from "peeking" at results

@@ -47,15 +47,27 @@ rule BalanceAllocation on AllocationBeliefs {
     and E[B.allocation] < 0.5
   
   action {
-    // SOFT UPDATE: set_expectation updates the mean but preserves precision
-    // The posterior distribution still has uncertainty - we're not forcing a value
+    // SOFT UPDATE: set_expectation shifts the posterior mean while preserving precision
+    // This is NOT a full Bayesian update - it's a manual intervention for control actions
+    //
+    // Mechanically: updates μ while keeping τ (precision) unchanged
+    // - Before: value ~ N(μ_old, τ)
+    // - After: value ~ N(μ_new, τ)  ← same variance, different mean
+    //
+    // Use cases:
+    // - Control actions (rebalancing, adjustments)
+    // - Policy enforcement (soft constraints)
+    // - Counterfactual reasoning
+    //
+    // For true Bayesian evidence incorporation, use observe statements instead
     let transfer = (E[A.allocation] - E[B.allocation]) * 0.2
     set_expectation A.allocation = E[A.allocation] - transfer
     set_expectation B.allocation = E[B.allocation] + transfer
-    
-    // Compare to a hard constraint (which we don't support):
-    // Hard: A.allocation = 0.7  (eliminates uncertainty)
-    // Soft: E[A.allocation] = 0.7  (preserves uncertainty, just shifts mean)
+
+    // Compare to alternatives:
+    // 1. Hard constraint (not supported): A.allocation = 0.7 → eliminates uncertainty
+    // 2. Bayesian observation: observe A.allocation = 0.7 → combines with prior
+    // 3. set_expectation (used here): sets mean directly, preserves variance
   }
   
   mode: for_each
@@ -73,8 +85,15 @@ rule DisconnectOverloaded on AllocationBeliefs {
     and E[B.allocation] > 0.9
   
   action {
-    // Force absent: sets probability to very low (but not exactly 0)
-    // This preserves the ability to update later if evidence changes
+    // force_absent: sets edge to Beta(1, 10⁶) → P(exist) ≈ 0.000001
+    // Properties:
+    // - NOT exactly zero (still a valid probability distribution)
+    // - Highly concentrated: variance ≈ 10⁻¹²
+    // - Theoretically updatable: strong evidence could shift belief
+    // - In practice: effectively removes edge from consideration
+    //
+    // This is a finite approximation to a deterministic constraint
+    // Preserves probabilistic semantics while achieving near-determinism
     force_absent ab
   }
   
