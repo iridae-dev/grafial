@@ -1,0 +1,43 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Coverage
+*.profraw
+*.profdata
+target/coverage/
+target/llvm-cov-target/
+lcov.info
+
+# Nix
+result
+result-*
+
+# Temporary files
+*.tmp
+tmp/
+.session-path
+
+# Claude/editor sessions
+.claude/
+

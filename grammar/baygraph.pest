@@ -1,0 +1,154 @@
+// Phase 1: grammar to build typed AST (no semantics)
+
+WHITESPACE = _{ (" " | "\t" | "\r" | "\n")+ }
+COMMENT = _{ LINE_COMMENT | BLOCK_COMMENT }
+LINE_COMMENT = _{ "//" ~ (!("\n") ~ ANY)* }
+BLOCK_COMMENT = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
+
+ident = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+label = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+string = @{ "\"" ~ ( "\\\"" | "\\\\" | (!"\"" ~ ANY) )* ~ "\"" }
+
+program = { SOI ~ (COMMENT | decl)* ~ EOI }
+
+decl = _{ schema_decl | belief_model_decl | evidence_decl | rule_decl | flow_decl }
+
+// --- schema ---
+schema_decl = { KW_schema ~ ident ~ block_schema }
+block_schema = { "{" ~ (COMMENT | node_decl | edge_decl)* ~ "}" }
+node_decl = { KW_node ~ ident ~ "{" ~ (COMMENT | attr_decl)* ~ "}" }
+edge_decl = { KW_edge ~ ident ~ "{" ~ (COMMENT)* ~ "}" }
+attr_decl = { ident ~ ":" ~ ident ~ ";"? }
+
+// --- belief_model / evidence (opaque bodies for now) ---
+belief_model_decl = { KW_belief_model ~ ident ~ KW_on ~ ident ~ block }
+evidence_decl = { KW_evidence ~ ident ~ KW_on ~ ident ~ block }
+
+// Balanced block text (captures nested braces)
+block = { "{" ~ block_inner* ~ "}" }
+block_inner = _{ block | (!("{" | "}") ~ ANY) }
+
+// --- rule ---
+rule_decl = { KW_rule ~ ident ~ KW_on ~ ident ~ "{" ~ rule_body ~ "}" }
+rule_body = { (COMMENT | pattern_clause | where_clause | action_clause | mode_clause )* }
+
+pattern_clause = { KW_pattern ~ pattern_list }
+pattern_list = { pattern_item ~ ("," ~ pattern_item)* }
+pattern_item = {
+    "(" ~ ident ~ ":" ~ label ~ ")" ~ "-" ~ "[" ~ ident ~ ":" ~ ident ~ "]" ~ "->" ~ "(" ~ ident ~ ":" ~ label ~ ")"
+}
+
+where_clause = { KW_where ~ expr }
+
+action_clause = { KW_action ~ action_block }
+action_block = { "{" ~ (COMMENT | action_stmt)* ~ "}" }
+action_stmt = _{ let_stmt | set_expectation_stmt | force_absent_stmt }
+let_stmt = { KW_let ~ ident ~ "=" ~ expr ~ ";"? }
+set_expectation_stmt = { KW_set_expectation ~ node_attr ~ "=" ~ expr ~ ";"? }
+force_absent_stmt = { KW_force_absent ~ ident ~ ";"? }
+node_attr = { ident ~ "." ~ ident }
+mode_clause = { KW_mode ~ ":" ~ ident }
+
+// --- flow ---
+flow_decl = { KW_flow ~ ident ~ KW_on ~ ident ~ "{" ~ flow_body ~ "}" }
+flow_body = { (COMMENT | graph_stmt | metric_stmt | export_stmt | metric_export_stmt | metric_import_stmt)* }
+
+graph_stmt = { KW_graph ~ ident ~ "=" ~ graph_expr }
+graph_expr = { from_evidence_expr | pipeline_expr }
+from_evidence_expr = { KW_from_evidence ~ ident }
+pipeline_expr = { ident ~ (pipe_op ~ transform)+ }
+pipe_op = { "|>" }
+
+transform = _{ apply_rule_tr | prune_edges_tr }
+apply_rule_tr = { KW_apply_rule ~ ident }
+prune_edges_tr = { KW_prune_edges ~ ident ~ KW_where ~ expr }
+
+metric_stmt = { KW_metric ~ ident ~ "=" ~ expr }
+export_stmt = { KW_export ~ ident ~ KW_as ~ string }
+metric_export_stmt = { KW_export_metric ~ ident ~ KW_as ~ string }
+metric_import_stmt = { KW_import_metric ~ ident ~ KW_as ~ ident }
+
+// --- expressions ---
+expr = { or_expr }
+or_expr = { and_expr ~ (KW_or ~ and_expr)* }
+and_expr = { cmp_expr ~ (KW_and ~ cmp_expr)* }
+cmp_expr = { add_expr ~ ((op_cmp) ~ add_expr)? }
+op_cmp = _{ "==" | "!=" | "<=" | ">=" | "<" | ">" }
+add_expr = { mul_expr ~ ((op_add) ~ mul_expr)* }
+op_add = _{ "+" | "-" }
+mul_expr = { unary_expr ~ ((op_mul) ~ unary_expr)* }
+op_mul = _{ "*" | "/" }
+unary_expr = { (op_unary ~ unary_expr) | postfix }
+op_unary = _{ "-" | KW_not }
+postfix = { primary ~ ( field_access | call_suffix )* }
+field_access = { "." ~ ident }
+call_suffix = { "(" ~ (arg ~ ("," ~ arg)*)? ~ ")" }
+arg = _{ named_arg | expr }
+named_arg = { ident ~ "=" ~ expr }
+primary = { number | boolean | e_bracket | ident | paren_expr }
+paren_expr = { "(" ~ expr ~ ")" }
+e_bracket = { "E" ~ "[" ~ (ident ~ "." ~ ident) ~ "]" }
+number = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+boolean = _{ KW_true | KW_false }
+
+// Keywords with word boundaries (atomic match wrapped in silent rule)
+kw_schema_tok = @{ "schema" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_node_tok = @{ "node" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_edge_tok = @{ "edge" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_belief_model_tok = @{ "belief_model" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_on_tok = @{ "on" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_evidence_tok = @{ "evidence" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_rule_tok = @{ "rule" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_pattern_tok = @{ "pattern" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_where_tok = @{ "where" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_action_tok = @{ "action" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_mode_tok = @{ "mode" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_flow_tok = @{ "flow" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_graph_tok = @{ "graph" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_from_evidence_tok = @{ "from_evidence" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_apply_rule_tok = @{ "apply_rule" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_prune_edges_tok = @{ "prune_edges" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_metric_tok = @{ "metric" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_export_tok = @{ "export" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_as_tok = @{ "as" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_export_metric_tok = @{ "export_metric" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_import_metric_tok = @{ "import_metric" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+KW_schema = _{ kw_schema_tok }
+KW_node = _{ kw_node_tok }
+KW_edge = _{ kw_edge_tok }
+KW_belief_model = _{ kw_belief_model_tok }
+KW_on = _{ kw_on_tok }
+KW_evidence = _{ kw_evidence_tok }
+KW_rule = _{ kw_rule_tok }
+KW_pattern = _{ kw_pattern_tok }
+KW_where = _{ kw_where_tok }
+KW_action = _{ kw_action_tok }
+KW_mode = _{ kw_mode_tok }
+KW_flow = _{ kw_flow_tok }
+KW_graph = _{ kw_graph_tok }
+KW_from_evidence = _{ kw_from_evidence_tok }
+KW_apply_rule = _{ kw_apply_rule_tok }
+KW_prune_edges = _{ kw_prune_edges_tok }
+KW_metric = _{ kw_metric_tok }
+KW_export = _{ kw_export_tok }
+KW_as = _{ kw_as_tok }
+KW_export_metric = _{ kw_export_metric_tok }
+KW_import_metric = _{ kw_import_metric_tok }
+kw_let_tok = @{ "let" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_set_expectation_tok = @{ "set_expectation" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_force_absent_tok = @{ "force_absent" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_and_tok = @{ "and" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_or_tok = @{ "or" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_not_tok = @{ "not" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_true_tok = @{ "true" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_false_tok = @{ "false" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+KW_and = _{ kw_and_tok }
+KW_or = _{ kw_or_tok }
+KW_not = _{ kw_not_tok }
+KW_true = _{ kw_true_tok }
+KW_false = _{ kw_false_tok }
+KW_let = _{ kw_let_tok }
+KW_set_expectation = _{ kw_set_expectation_tok }
+KW_force_absent = _{ kw_force_absent_tok }

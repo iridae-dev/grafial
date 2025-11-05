@@ -1,0 +1,42 @@
+schema Social {
+  node Person {
+    some_value: Real
+    other_value: Real
+  }
+
+  edge REL { }
+}
+
+belief_model SocialBeliefs on Social {
+  // Opaque body for now
+  node Person { some_value ~ GaussianPosterior(prior_mean=0.0) }
+}
+
+evidence SocialEvidence on SocialBeliefs {
+  // Opaque body for now
+  observe Person["Alice"].some_value = 10.0
+}
+
+rule TransferAndDisconnect on SocialBeliefs {
+  pattern
+    (A:Person)-[ab:REL]->(B:Person),
+    (B:Person)-[bc:REL]->(C:Person)
+
+  where prob(ab) >= 0.9 and prob(bc) >= 0.9
+
+  action {
+    let v_ab = E[A.some_value] / 2
+    set_expectation A.some_value = E[A.some_value] - v_ab
+    set_expectation B.some_value = E[B.some_value] + v_ab
+    force_absent bc
+  }
+
+  mode: for_each
+}
+
+flow Demo on SocialBeliefs {
+  graph base = from_evidence SocialEvidence
+  graph cleaned = base |> apply_rule TransferAndDisconnect |> prune_edges REL where prob(edge) < 0.1
+  metric avg_degree = avg_degree(Person, REL, min_prob=0.8)
+  export cleaned as "demo"
+}
