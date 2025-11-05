@@ -35,6 +35,7 @@
 //! deterministic rule execution. See baygraph_design.md:517-518.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::engine::errors::ExecError;
 use crate::engine::expr_eval::{eval_binary_op, eval_expr_core, eval_unary_op, ExprContext};
