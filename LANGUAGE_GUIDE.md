@@ -11,6 +11,7 @@ This guide documents the language as actually implemented. Every feature describ
 1. [Quick Start](#quick-start)
 2. [Schema Definitions](#schema-definitions)
 3. [Belief Models](#belief-models)
+   - [Prior Selection Guide](#prior-selection-guide)
 4. [Evidence](#evidence)
 5. [Rules](#rules)
 6. [Flows](#flows)
@@ -196,6 +197,92 @@ edge ROUTES_TO {
 ```
 
 **Dynamic category discovery:** For uniform priors, new categories are automatically discovered when evidence is observed. For explicit priors, categories must be declared upfront.
+
+### Prior Selection Guide
+
+**Prior choice significantly impacts small-sample inference.** The prior distribution encodes your beliefs before seeing any data, and it influences posterior results especially when you have few observations.
+
+#### Recommended Prior Strategies
+
+**Weakly informative priors** (default for most cases):
+
+These priors are wide enough to be reasonable across many scenarios, but still provide some regularization:
+
+```bayscript
+node Person {
+  age ~ GaussianPosterior(
+    prior_mean = 35.0,           // reasonable center
+    prior_precision = 0.01        // SD = 10, weakly informative
+  )
+}
+```
+
+**When to use:** When you have some domain knowledge about the typical range, but don't want to be too specific. The wide variance (SD = 10 in this example) allows the data to dominate after a few observations.
+
+**Informative priors** (strong domain knowledge):
+
+Use when you have good prior information about the likely values:
+
+```bayscript
+node Person {
+  height_cm ~ GaussianPosterior(
+    prior_mean = 170.0,
+    prior_precision = 0.1         // SD = 3.16, stronger belief
+  )
+}
+```
+
+**When to use:** When you have reliable prior information (e.g., from previous studies, domain expertise, or similar populations). The higher precision means more observations are needed to significantly shift the posterior away from the prior.
+
+**Skeptical priors** (high evidence threshold):
+
+Use for rare events or when you want to require strong evidence before updating beliefs:
+
+```bayscript
+edge FRAUD {
+  exist ~ BernoulliPosterior(
+    prior = 0.01,                // rare event
+    pseudo_count = 100           // requires strong evidence to shift
+  )
+}
+```
+
+**When to use:** 
+- Rare events (fraud, disease, failure modes)
+- When false positives are costly
+- When you want to require many observations before changing beliefs
+
+The large `pseudo_count` (100 in this example) means the prior is "strong" - it will take many observations to significantly shift the posterior probability away from 0.01.
+
+#### Choosing Prior Parameters
+
+**GaussianPosterior:**
+- `prior_mean`: Choose a reasonable center based on domain knowledge or previous data
+- `prior_precision`: Lower values = wider prior (more uncertain). 
+  - `0.01` → SD = 10 (weakly informative)
+  - `0.1` → SD = 3.16 (moderately informative)
+  - `1.0` → SD = 1.0 (strongly informative)
+
+**BernoulliPosterior:**
+- `prior`: The initial probability you expect (0.0 to 1.0)
+- `pseudo_count`: How "strong" your prior is (higher = more observations needed to change it)
+  - `2.0` → weak prior (easily updated)
+  - `10.0` → moderate prior
+  - `100.0` → strong prior (skeptical)
+
+**CategoricalPosterior:**
+- `prior`: Either `uniform` (all categories equally likely) or an explicit array
+- `pseudo_count`: Strength of the prior (higher = more evidence needed)
+  - For uniform: `pseudo_count = 1.0` is typical
+  - For explicit: `pseudo_count = 10.0` or higher if you have strong prior beliefs
+
+#### General Guidelines
+
+1. **Start weakly informative** if you're unsure - you can always make priors stronger later
+2. **Match the scale** - `prior_mean` should be in the same units and scale as your observations
+3. **Consider the data volume** - If you'll have many observations, the prior matters less
+4. **Be conservative for rare events** - Use skeptical priors to avoid false positives
+5. **Validate with domain experts** - Prior choice should reflect real-world knowledge
 
 ---
 
