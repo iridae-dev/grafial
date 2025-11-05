@@ -76,29 +76,122 @@ pub struct EdgeDef {
     pub name: String,
 }
 
+/// Posterior type for edge existence or node attributes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PosteriorType {
+    /// Gaussian posterior for continuous attributes
+    Gaussian {
+        /// Named parameters (e.g., "prior_mean" = 0.0)
+        params: Vec<(String, f64)>,
+    },
+    /// Bernoulli posterior (Beta-Bernoulli) for independent edges
+    Bernoulli {
+        /// Named parameters (e.g., "prior" = 0.3, "pseudo_count" = 2.0)
+        params: Vec<(String, f64)>,
+    },
+    /// Categorical posterior (Dirichlet-Categorical) for competing edges
+    Categorical {
+        /// Grouping direction: "source" or "destination"
+        group_by: String,
+        /// Prior specification: either uniform (with pseudo_count) or explicit array
+        prior: CategoricalPrior,
+        /// Optional category names for validation
+        categories: Option<Vec<String>>,
+    },
+}
+
+/// Prior specification for CategoricalPosterior.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CategoricalPrior {
+    /// Uniform prior: all α_k = pseudo_count / K
+    Uniform { pseudo_count: f64 },
+    /// Explicit prior: α = [α_1, α_2, ..., α_K]
+    Explicit { concentrations: Vec<f64> },
+}
+
+/// Node belief declaration in a belief model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeBeliefDecl {
+    /// Node type name
+    pub node_type: String,
+    /// Attribute posterior declarations
+    pub attrs: Vec<(String, PosteriorType)>,
+}
+
+/// Edge belief declaration in a belief model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeBeliefDecl {
+    /// Edge type name
+    pub edge_type: String,
+    /// Posterior type for edge existence
+    pub exist: PosteriorType,
+}
+
 /// A belief model associates inference parameters with a schema.
-///
-/// The body source is preserved as text for future processing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BeliefModel {
     /// The belief model name
     pub name: String,
     /// The schema this model operates on
     pub on_schema: String,
-    /// Raw source text of the model body
+    /// Node belief declarations
+    pub nodes: Vec<NodeBeliefDecl>,
+    /// Edge belief declarations
+    pub edges: Vec<EdgeBeliefDecl>,
+    /// Raw source text of the model body (preserved for backward compatibility)
     pub body_src: String,
 }
 
-/// An evidence definition specifies observations for a belief model.
-///
-/// The body source is preserved as text for future processing.
+/// Evidence mode for edge observations.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvidenceMode {
+    /// Independent edge: edge exists
+    Present,
+    /// Independent edge: edge does not exist
+    Absent,
+    /// Competing edge: this category was chosen
+    Chosen,
+    /// Competing edge: this category was not chosen (rare)
+    Unchosen,
+    /// Competing edge: deterministic choice (force)
+    ForcedChoice,
+}
+
+/// An evidence observation statement.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ObserveStmt {
+    /// Observe an edge with a specific mode
+    Edge {
+        /// Edge type name
+        edge_type: String,
+        /// Source node reference (type and label)
+        src: (String, String),
+        /// Destination node reference (type and label)
+        dst: (String, String),
+        /// Evidence mode
+        mode: EvidenceMode,
+    },
+    /// Observe a node attribute value
+    Attribute {
+        /// Node type and label
+        node: (String, String),
+        /// Attribute name
+        attr: String,
+        /// Observed value
+        value: f64,
+    },
+}
+
+/// An evidence definition specifies observations for a belief model.
+#[derive(Debug, Clone, PartialEq)]
 pub struct EvidenceDef {
     /// The evidence name
     pub name: String,
     /// The belief model this evidence applies to
     pub on_model: String,
-    /// Raw source text of the evidence body
+    /// Parsed observation statements
+    pub observations: Vec<ObserveStmt>,
+    /// Raw source text of the evidence body (preserved for backward compatibility)
     pub body_src: String,
 }
 

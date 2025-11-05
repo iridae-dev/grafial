@@ -1,6 +1,6 @@
 //! Property tests for posterior invariants and metric determinism (Phase 5)
 
-use baygraph::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, GaussianPosterior, NodeData, NodeId, EdgeId};
+use baygraph::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, EdgePosterior, GaussianPosterior, NodeData, NodeId, EdgeId};
 use proptest::prelude::*;
 use std::collections::HashMap;
 
@@ -10,7 +10,7 @@ proptest! {
         let mut g = BeliefGraph::default();
         g.insert_node(NodeData { id: NodeId(1), label: "N".into(), attrs: HashMap::new() });
         g.insert_node(NodeData { id: NodeId(2), label: "N".into(), attrs: HashMap::new() });
-        g.insert_edge(EdgeData { id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "E".into(), exist: BetaPosterior { alpha, beta } });
+        g.insert_edge(EdgeData { id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "E".into(), exist: EdgePosterior::Independent(BetaPosterior { alpha, beta }) });
         let p = g.prob_mean(EdgeId(1)).unwrap();
         prop_assert!(p >= 0.0 && p <= 1.0);
     }

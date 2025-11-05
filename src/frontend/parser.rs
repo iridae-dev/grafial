@@ -74,7 +74,7 @@ pub fn parse_program(source: &str) -> Result<ProgramAst, ExecError> {
                         match d.as_rule() {
                             Rule::schema_decl => schemas.push(build_schema(d)?),
                             Rule::belief_model_decl => belief_models.push(build_belief_model(d, source)?),
-                            Rule::evidence_decl => evidences.push(build_evidence(d, source)),
+                            Rule::evidence_decl => evidences.push(build_evidence(d, source)?),
                             Rule::rule_decl => rules.push(build_rule(d, source)?),
                             Rule::flow_decl => flows.push(build_flow(d, source)?),
                             _ => {}
@@ -83,7 +83,7 @@ pub fn parse_program(source: &str) -> Result<ProgramAst, ExecError> {
                 }
                 Rule::schema_decl => schemas.push(build_schema(inner)?),
                 Rule::belief_model_decl => belief_models.push(build_belief_model(inner, source)?),
-                Rule::evidence_decl => evidences.push(build_evidence(inner, source)),
+                Rule::evidence_decl => evidences.push(build_evidence(inner, source)?),
                 Rule::rule_decl => rules.push(build_rule(inner, source)?),
                 Rule::flow_decl => flows.push(build_flow(inner, source)?),
                 _ => {}
@@ -160,35 +160,307 @@ fn block_src(pair: &pest::iterators::Pair<Rule>, source: &str) -> String {
 fn build_belief_model(pair: pest::iterators::Pair<Rule>, source: &str) -> Result<BeliefModel, ExecError> {
     let mut name = String::new();
     let mut on_schema = String::new();
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
     let mut body_src = String::new();
+    
     for p in pair.into_inner() {
         match p.as_rule() {
             Rule::ident => {
                 if name.is_empty() { name = p.as_str().to_string(); }
                 else if on_schema.is_empty() { on_schema = p.as_str().to_string(); }
             }
-            Rule::block => { body_src = block_src(&p, source); }
+            Rule::belief_model_body => {
+                body_src = block_src(&p, source);
+                for b in p.into_inner() {
+                    match b.as_rule() {
+                        Rule::node_belief_decl => nodes.push(build_node_belief(b)?),
+                        Rule::edge_belief_decl => edges.push(build_edge_belief(b)?),
+                        _ => {}
+                    }
+                }
+            }
             _ => {}
         }
     }
-    Ok(BeliefModel { name, on_schema, body_src })
+    Ok(BeliefModel { name, on_schema, nodes, edges, body_src })
 }
 
-fn build_evidence(pair: pest::iterators::Pair<Rule>, source: &str) -> EvidenceDef {
+fn build_node_belief(pair: pest::iterators::Pair<Rule>) -> Result<NodeBeliefDecl, ExecError> {
+    let mut node_type = String::new();
+    let mut attrs = Vec::new();
+    
+    for p in pair.into_inner() {
+        match p.as_rule() {
+            Rule::ident if node_type.is_empty() => node_type = p.as_str().to_string(),
+            Rule::attr_belief_decl => {
+                let mut ai = p.into_inner();
+                let attr_name = ai.next()
+                    .ok_or_else(|| ExecError::ParseError("Missing attribute name".to_string()))?
+                    .as_str().to_string();
+                let posterior = build_posterior_type(ai.next()
+                    .ok_or_else(|| ExecError::ParseError("Missing posterior type".to_string()))?)?;
+                attrs.push((attr_name, posterior));
+            }
+            _ => {}
+        }
+    }
+    Ok(NodeBeliefDecl { node_type, attrs })
+}
+
+fn build_edge_belief(pair: pest::iterators::Pair<Rule>) -> Result<EdgeBeliefDecl, ExecError> {
+    let mut edge_type = String::new();
+    let mut exist: Option<PosteriorType> = None;
+    
+    for p in pair.into_inner() {
+        match p.as_rule() {
+            Rule::ident if edge_type.is_empty() => edge_type = p.as_str().to_string(),
+            Rule::exist_belief_decl => {
+                let mut ei = p.into_inner();
+                // Skip "exist" ~ "~", get posterior_type
+                let posterior_pair = ei.find(|e| matches!(e.as_rule(), Rule::posterior_type));
+                if let Some(pp) = posterior_pair {
+                    exist = Some(build_posterior_type(pp)?);
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    let exist_posterior = exist.ok_or_else(|| ExecError::ParseError("Missing exist posterior for edge".to_string()))?;
+    Ok(EdgeBeliefDecl { edge_type, exist: exist_posterior })
+}
+
+fn build_posterior_type(pair: pest::iterators::Pair<Rule>) -> Result<PosteriorType, ExecError> {
+    match pair.as_rule() {
+        Rule::gaussian_posterior => {
+            let mut params = Vec::new();
+            for p in pair.into_inner() {
+                if let Rule::gaussian_param = p.as_rule() {
+                    let mut gp = p.into_inner();
+                    let name = gp.next().unwrap().as_str().to_string();
+                    let value = gp.next().unwrap().as_str().parse::<f64>()
+                        .map_err(|e| ExecError::ParseError(format!("Invalid number: {}", e)))?;
+                    params.push((name, value));
+                }
+            }
+            Ok(PosteriorType::Gaussian { params })
+        }
+        Rule::bernoulli_posterior => {
+            let mut params = Vec::new();
+            for p in pair.into_inner() {
+                if let Rule::bernoulli_param = p.as_rule() {
+                    let mut bp = p.into_inner();
+                    let name = bp.next().unwrap().as_str().to_string();
+                    let value = bp.next().unwrap().as_str().parse::<f64>()
+                        .map_err(|e| ExecError::ParseError(format!("Invalid number: {}", e)))?;
+                    params.push((name, value));
+                }
+            }
+            Ok(PosteriorType::Bernoulli { params })
+        }
+        Rule::categorical_posterior => {
+            let mut group_by: Option<String> = None;
+            let mut prior: Option<CategoricalPrior> = None;
+            let mut categories: Option<Vec<String>> = None;
+            
+            for p in pair.into_inner() {
+                match p.as_rule() {
+                    Rule::categorical_param => {
+                        let mut cp = p.into_inner();
+                        let param_name = cp.next().unwrap().as_str();
+                        match param_name {
+                            "group_by" => {
+                                cp.next(); // skip "="
+                                let value = cp.next().unwrap().as_str();
+                                // Remove quotes from string
+                                group_by = Some(value.trim_matches('"').to_string());
+                            }
+                            "prior" => {
+                                cp.next(); // skip "="
+                                let next = cp.next().unwrap();
+                                match next.as_rule() {
+                                    Rule::prior_array => {
+                                        let mut concentrations = Vec::new();
+                                        for n in next.into_inner() {
+                                            if let Rule::number = n.as_rule() {
+                                                let val = n.as_str().parse::<f64>()
+                                                    .map_err(|e| ExecError::ParseError(format!("Invalid number: {}", e)))?;
+                                                concentrations.push(val);
+                                            }
+                                        }
+                                        prior = Some(CategoricalPrior::Explicit { concentrations });
+                                    }
+                                    _ => {
+                                        // Must be "uniform" - pseudo_count will be parsed separately
+                                        // Don't set prior here, it will be set when we parse pseudo_count
+                                    }
+                                }
+                            }
+                            "pseudo_count" => {
+                                cp.next(); // skip "="
+                                let value = cp.next().unwrap().as_str().parse::<f64>()
+                                    .map_err(|e| ExecError::ParseError(format!("Invalid number: {}", e)))?;
+                                prior = Some(CategoricalPrior::Uniform { pseudo_count: value });
+                            }
+                            "categories" => {
+                                cp.next(); // skip "="
+                                let mut cats = Vec::new();
+                                // Skip "["
+                                let array_pair = cp.find(|c| c.as_str().starts_with('['));
+                                if let Some(arr) = array_pair {
+                                    for s in arr.into_inner() {
+                                        if let Rule::string = s.as_rule() {
+                                            let val = s.as_str().trim_matches('"').to_string();
+                                            cats.push(val);
+                                        }
+                                    }
+                                }
+                                categories = Some(cats);
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            
+            let group_by_val = group_by.ok_or_else(|| ExecError::ParseError("Missing group_by parameter".to_string()))?;
+            let prior_val = prior.ok_or_else(|| ExecError::ParseError("Missing prior parameter".to_string()))?;
+            Ok(PosteriorType::Categorical { group_by: group_by_val, prior: prior_val, categories })
+        }
+        _ => Err(ExecError::ParseError("Invalid posterior type".to_string()))
+    }
+}
+
+fn build_evidence(pair: pest::iterators::Pair<Rule>, source: &str) -> Result<EvidenceDef, ExecError> {
     let mut name = String::new();
     let mut on_model = String::new();
+    let mut observations = Vec::new();
     let mut body_src = String::new();
+    
     for p in pair.into_inner() {
         match p.as_rule() {
             Rule::ident => {
                 if name.is_empty() { name = p.as_str().to_string(); }
                 else if on_model.is_empty() { on_model = p.as_str().to_string(); }
             }
-            Rule::block => { body_src = block_src(&p, source); }
+            Rule::evidence_body => {
+                body_src = block_src(&p, source);
+                for b in p.into_inner() {
+                    match b.as_rule() {
+                        Rule::observe_stmt => observations.push(build_observe_stmt(b)?),
+                        _ => {}
+                    }
+                }
+            }
             _ => {}
         }
     }
-    EvidenceDef { name, on_model, body_src }
+    Ok(EvidenceDef { name, on_model, observations, body_src })
+}
+
+fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, ExecError> {
+    let mut target_pair = None;
+    let mut mode_pair = None;
+    
+    for p in pair.into_inner() {
+        match p.as_rule() {
+            Rule::observe_target => target_pair = Some(p),
+            Rule::evidence_mode => mode_pair = Some(p),
+            _ => {}
+        }
+    }
+    
+    let target = target_pair.ok_or_else(|| ExecError::ParseError("Missing observe target".to_string()))?;
+    
+    match target.as_rule() {
+        Rule::edge_observe => {
+            let mut edge_type = String::new();
+            let mut src: Option<(String, String)> = None;
+            let mut dst: Option<(String, String)> = None;
+            
+            for e in target.into_inner() {
+                match e.as_rule() {
+                    Rule::ident if edge_type.is_empty() => edge_type = e.as_str().to_string(),
+                    Rule::node_ref => {
+                        if src.is_none() {
+                            src = Some(build_node_ref(e)?);
+                        } else if dst.is_none() {
+                            dst = Some(build_node_ref(e)?);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            
+            let src_val = src.ok_or_else(|| ExecError::ParseError("Missing source node".to_string()))?;
+            let dst_val = dst.ok_or_else(|| ExecError::ParseError("Missing destination node".to_string()))?;
+            let mode = build_evidence_mode(mode_pair.ok_or_else(|| ExecError::ParseError("Missing evidence mode".to_string()))?)?;
+            
+            Ok(ObserveStmt::Edge {
+                edge_type,
+                src: src_val,
+                dst: dst_val,
+                mode,
+            })
+        }
+        Rule::attr_observe => {
+            let mut node: Option<(String, String)> = None;
+            let mut attr = String::new();
+            let mut value: Option<f64> = None;
+            
+            for a in target.into_inner() {
+                match a.as_rule() {
+                    Rule::node_ref => node = Some(build_node_ref(a)?),
+                    Rule::ident if attr.is_empty() => attr = a.as_str().to_string(),
+                    Rule::number => {
+                        value = Some(a.as_str().parse::<f64>()
+                            .map_err(|e| ExecError::ParseError(format!("Invalid number: {}", e)))?);
+                    }
+                    _ => {}
+                }
+            }
+            
+            let node_val = node.ok_or_else(|| ExecError::ParseError("Missing node reference".to_string()))?;
+            let value_val = value.ok_or_else(|| ExecError::ParseError("Missing attribute value".to_string()))?;
+            
+            Ok(ObserveStmt::Attribute {
+                node: node_val,
+                attr,
+                value: value_val,
+            })
+        }
+        _ => Err(ExecError::ParseError("Invalid observe target".to_string()))
+    }
+}
+
+fn build_node_ref(pair: pest::iterators::Pair<Rule>) -> Result<(String, String), ExecError> {
+    let mut node_type = String::new();
+    let mut label = String::new();
+    
+    for p in pair.into_inner() {
+        match p.as_rule() {
+            Rule::ident if node_type.is_empty() => node_type = p.as_str().to_string(),
+            Rule::string => {
+                label = p.as_str().trim_matches('"').to_string();
+            }
+            _ => {}
+        }
+    }
+    
+    Ok((node_type, label))
+}
+
+fn build_evidence_mode(pair: pest::iterators::Pair<Rule>) -> Result<EvidenceMode, ExecError> {
+    match pair.as_str() {
+        "present" => Ok(EvidenceMode::Present),
+        "absent" => Ok(EvidenceMode::Absent),
+        "chosen" => Ok(EvidenceMode::Chosen),
+        "unchosen" => Ok(EvidenceMode::Unchosen),
+        "forced_choice" => Ok(EvidenceMode::ForcedChoice),
+        _ => Err(ExecError::ParseError(format!("Invalid evidence mode: {}", pair.as_str())))
+    }
 }
 
 fn build_rule(pair: pest::iterators::Pair<Rule>, _source: &str) -> Result<RuleDef, ExecError> {

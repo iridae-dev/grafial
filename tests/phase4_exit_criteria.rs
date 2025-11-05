@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use baygraph::engine::errors::ExecError;
 use baygraph::engine::flow_exec::run_flow;
-use baygraph::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, GaussianPosterior, NodeData, NodeId, EdgeId};
+use baygraph::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, EdgePosterior, GaussianPosterior, NodeData, NodeId, EdgeId};
 use baygraph::frontend::ast::*;
 
 /// End-to-end test: Parse → Run Flow → Verify BeliefGraph structure and beliefs
@@ -74,6 +74,8 @@ fn build_complete_program() -> ProgramAst {
     let belief_model = BeliefModel {
         name: "SocialBeliefs".into(),
         on_schema: "SocialNetwork".into(),
+        nodes: vec![],
+        edges: vec![],
         body_src: "".into(),
     };
 
@@ -81,6 +83,7 @@ fn build_complete_program() -> ProgramAst {
     let evidence = EvidenceDef {
         name: "SocialEvidence".into(),
         on_model: "SocialBeliefs".into(),
+        observations: vec![],
         body_src: "".into(),
     };
 
@@ -207,10 +210,10 @@ fn build_evidence_graph(_evidence: &EvidenceDef) -> Result<BeliefGraph, ExecErro
         src: NodeId(1),
         dst: NodeId(2),
         ty: "Knows".into(),
-        exist: BetaPosterior {
+        exist: EdgePosterior::Independent(BetaPosterior {
             alpha: 9.0,
             beta: 1.0,
-        }, // prob ≈ 0.9
+        }), // prob ≈ 0.9
     });
 
     // Medium probability edge (will be forced absent by rule, then pruned)
@@ -219,10 +222,10 @@ fn build_evidence_graph(_evidence: &EvidenceDef) -> Result<BeliefGraph, ExecErro
         src: NodeId(2),
         dst: NodeId(3),
         ty: "Knows".into(),
-        exist: BetaPosterior {
+        exist: EdgePosterior::Independent(BetaPosterior {
             alpha: 3.0,
             beta: 7.0,
-        }, // prob = 0.3 < 0.5
+        }), // prob = 0.3 < 0.5
     });
 
     // Low probability edge (will be forced absent by rule, then pruned)
@@ -231,10 +234,10 @@ fn build_evidence_graph(_evidence: &EvidenceDef) -> Result<BeliefGraph, ExecErro
         src: NodeId(1),
         dst: NodeId(3),
         ty: "Knows".into(),
-        exist: BetaPosterior {
+        exist: EdgePosterior::Independent(BetaPosterior {
             alpha: 1.0,
             beta: 19.0,
-        }, // prob = 0.05 < 0.5
+        }), // prob = 0.05 < 0.5
     });
 
     Ok(graph)

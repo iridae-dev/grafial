@@ -50,6 +50,16 @@ use crate::frontend::ast::*;
 /// validate::validate_program(&ast)?; // Ensure semantic correctness
 /// ```
 pub fn validate_program(ast: &ProgramAst) -> Result<(), ExecError> {
+    // Validate belief models (competing edge groups, posterior parameters)
+    for model in &ast.belief_models {
+        validate_belief_model(model, &ast.schemas)?;
+    }
+    
+    // Validate evidence (evidence mode matches posterior type)
+    for evidence in &ast.evidences {
+        validate_evidence(evidence, &ast.belief_models)?;
+    }
+    
     for rule in &ast.rules {
         validate_rule(rule)?;
     }
@@ -61,6 +71,158 @@ pub fn validate_program(ast: &ProgramAst) -> Result<(), ExecError> {
             validate_metric(&m.expr)?;
         }
     }
+    Ok(())
+}
+
+fn validate_belief_model(model: &BeliefModel, schemas: &[Schema]) -> Result<(), ExecError> {
+    // Find the schema this model operates on
+    let schema = schemas
+        .iter()
+        .find(|s| s.name == model.on_schema)
+        .ok_or_else(|| ExecError::ValidationError(
+            format!("Belief model '{}' references unknown schema '{}'", model.name, model.on_schema)
+        ))?;
+    
+    // Track edge types to ensure uniqueness (independent vs competing)
+    let mut edge_types_seen = std::collections::HashMap::new();
+    
+    // Validate edge declarations
+    for edge_decl in &model.edges {
+        // Check if edge type exists in schema
+        if !schema.edges.iter().any(|e| e.name == edge_decl.edge_type) {
+            return Err(ExecError::ValidationError(
+                format!("Edge type '{}' not found in schema '{}'", edge_decl.edge_type, model.on_schema)
+            ));
+        }
+        
+        // Validate posterior type
+        match &edge_decl.exist {
+            PosteriorType::Categorical { group_by, prior, categories: _ } => {
+                // Check group_by is valid
+                if group_by != "source" && group_by != "destination" {
+                    return Err(ExecError::ValidationError(
+                        format!("CategoricalPosterior 'group_by' must be 'source' or 'destination', got '{}'", group_by)
+                    ));
+                }
+                
+                // Check prior specification
+                match prior {
+                    CategoricalPrior::Uniform { pseudo_count } => {
+                        if *pseudo_count <= 0.0 {
+                            return Err(ExecError::ValidationError(
+                                format!("CategoricalPosterior 'pseudo_count' must be > 0, got {}", pseudo_count)
+                            ));
+                        }
+                    }
+                    CategoricalPrior::Explicit { concentrations } => {
+                        if concentrations.is_empty() {
+                            return Err(ExecError::ValidationError(
+                                "CategoricalPosterior explicit prior array cannot be empty".into()
+                            ));
+                        }
+                        for (i, &alpha) in concentrations.iter().enumerate() {
+                            if alpha <= 0.0 {
+                                return Err(ExecError::ValidationError(
+                                    format!("CategoricalPosterior prior array element {} must be > 0, got {}", i, alpha)
+                                ));
+                            }
+                        }
+                    }
+                }
+                
+                // Note: categories validation against schema would require knowing all possible destinations
+                // This is deferred to runtime when edges are actually created
+            }
+            PosteriorType::Bernoulli { params } => {
+                // Validate Bernoulli parameters if needed
+                let prior = params.iter().find(|(name, _)| name == "prior");
+                let pseudo_count = params.iter().find(|(name, _)| name == "pseudo_count");
+                
+                if let Some((_, val)) = prior {
+                    if !(0.0..=1.0).contains(val) {
+                        return Err(ExecError::ValidationError(
+                            format!("BernoulliPosterior 'prior' must be in [0, 1], got {}", val)
+                        ));
+                    }
+                }
+                
+                if let Some((_, val)) = pseudo_count {
+                    if *val <= 0.0 {
+                        return Err(ExecError::ValidationError(
+                            format!("BernoulliPosterior 'pseudo_count' must be > 0, got {}", val)
+                        ));
+                    }
+                }
+            }
+            PosteriorType::Gaussian { .. } => {
+                // Gaussian validation would go here if needed
+            }
+        }
+        
+        // Check for duplicate edge type declarations
+        if let Some(prev_type) = edge_types_seen.get(&edge_decl.edge_type) {
+            return Err(ExecError::ValidationError(
+                format!(
+                    "Edge type '{}' declared multiple times in belief model '{}' (previous: {:?})",
+                    edge_decl.edge_type, model.name, prev_type
+                )
+            ));
+        }
+        edge_types_seen.insert(edge_decl.edge_type.clone(), &edge_decl.exist);
+    }
+    
+    Ok(())
+}
+
+fn validate_evidence(evidence: &EvidenceDef, belief_models: &[BeliefModel]) -> Result<(), ExecError> {
+    // Find the belief model this evidence applies to
+    let model = belief_models
+        .iter()
+        .find(|m| m.name == evidence.on_model)
+        .ok_or_else(|| ExecError::ValidationError(
+            format!("Evidence '{}' references unknown belief model '{}'", evidence.name, evidence.on_model)
+        ))?;
+    
+    // Validate each observation statement
+    for obs in &evidence.observations {
+        match obs {
+            ObserveStmt::Edge { edge_type, mode, .. } => {
+                // Find the edge declaration in the belief model
+                let edge_decl = model.edges.iter().find(|e| e.edge_type == *edge_type);
+                
+                if let Some(edge_decl) = edge_decl {
+                    // Check evidence mode matches posterior type
+                    match (&edge_decl.exist, mode) {
+                        (PosteriorType::Categorical { .. }, EvidenceMode::Present | EvidenceMode::Absent) => {
+                            return Err(ExecError::ValidationError(
+                                format!(
+                                    "Edge '{}' has competing posterior; use 'chosen', 'unchosen', or 'forced_choice', not '{:?}'",
+                                    edge_type, mode
+                                )
+                            ));
+                        }
+                        (PosteriorType::Bernoulli { .. } | PosteriorType::Gaussian { .. }, 
+                         EvidenceMode::Chosen | EvidenceMode::Unchosen | EvidenceMode::ForcedChoice) => {
+                            return Err(ExecError::ValidationError(
+                                format!(
+                                    "Edge '{}' is independent; use 'present' or 'absent', not '{:?}'",
+                                    edge_type, mode
+                                )
+                            ));
+                        }
+                        _ => {} // Valid combinations
+                    }
+                } else {
+                    // Edge type not declared in belief model - this might be okay if it's optional
+                    // For now, we'll allow it (could be validated later when building the graph)
+                }
+            }
+            ObserveStmt::Attribute { .. } => {
+                // Attribute observations are validated when building the graph
+            }
+        }
+    }
+    
     Ok(())
 }
 

@@ -20,11 +20,41 @@ node_decl = { KW_node ~ ident ~ "{" ~ (COMMENT | attr_decl)* ~ "}" }
 edge_decl = { KW_edge ~ ident ~ "{" ~ (COMMENT)* ~ "}" }
 attr_decl = { ident ~ ":" ~ ident ~ ";"? }
 
-// --- belief_model / evidence (opaque bodies for now) ---
-belief_model_decl = { KW_belief_model ~ ident ~ KW_on ~ ident ~ block }
-evidence_decl = { KW_evidence ~ ident ~ KW_on ~ ident ~ block }
+// --- belief_model / evidence ---
+belief_model_decl = { KW_belief_model ~ ident ~ KW_on ~ ident ~ belief_model_body }
+belief_model_body = { "{" ~ (COMMENT | node_belief_decl | edge_belief_decl)* ~ "}" }
+node_belief_decl = { KW_node ~ ident ~ "{" ~ (COMMENT | attr_belief_decl)* ~ "}" }
+attr_belief_decl = { ident ~ "~" ~ posterior_type ~ ";"? }
+edge_belief_decl = { KW_edge ~ ident ~ "{" ~ (COMMENT | exist_belief_decl)* ~ "}" }
+exist_belief_decl = { "exist" ~ "~" ~ posterior_type ~ ";"? }
 
-// Balanced block text (captures nested braces)
+posterior_type = { gaussian_posterior | bernoulli_posterior | categorical_posterior }
+gaussian_posterior = { "GaussianPosterior" ~ "(" ~ gaussian_param ~ ("," ~ gaussian_param)* ~ ")" }
+gaussian_param = { (ident ~ "=" ~ number) }
+bernoulli_posterior = { "BernoulliPosterior" ~ "(" ~ bernoulli_param ~ ("," ~ bernoulli_param)* ~ ")" }
+bernoulli_param = { (ident ~ "=" ~ number) }
+categorical_posterior = { "CategoricalPosterior" ~ "(" ~ categorical_param ~ ("," ~ categorical_param)* ~ ")" }
+categorical_param = {
+    ("group_by" ~ "=" ~ string) |
+    ("prior" ~ "=" ~ (prior_array | "uniform")) |
+    ("pseudo_count" ~ "=" ~ number) |
+    ("categories" ~ "=" ~ "[" ~ string ~ ("," ~ string)* ~ "]")
+}
+prior_array = { "[" ~ number ~ ("," ~ number)* ~ "]" }
+
+evidence_decl = { KW_evidence ~ ident ~ KW_on ~ ident ~ evidence_body }
+evidence_body = { "{" ~ (COMMENT | observe_stmt)* ~ "}" }
+observe_stmt = { KW_observe ~ observe_target ~ evidence_mode ~ ";"? }
+observe_target = { edge_observe | attr_observe }
+edge_observe = { KW_edge ~ ident ~ "(" ~ node_ref ~ "," ~ node_ref ~ ")" }
+attr_observe = { node_ref ~ "." ~ ident ~ "=" ~ number }
+node_ref = { ident ~ "[" ~ string ~ "]" }
+evidence_mode = { "present" | "absent" | "chosen" | "unchosen" | "forced_choice" }
+
+kw_observe_tok = @{ "observe" ~ !(ASCII_ALPHANUMERIC | "_") }
+KW_observe = _{ kw_observe_tok }
+
+// Balanced block text (captures nested braces) - for evidence and other opaque bodies
 block = { "{" ~ block_inner* ~ "}" }
 block_inner = _{ block | (!("{" | "}") ~ ANY) }
 

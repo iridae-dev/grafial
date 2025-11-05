@@ -272,20 +272,14 @@ mod tests {
             label: "Person".into(),
             attrs: HashMap::from([("value".into(), GaussianPosterior { mean: 20.0, precision: 1.0 })]),
         });
-        g.insert_edge(EdgeData {
-            id: EdgeId(1),
-            src: NodeId(1),
-            dst: NodeId(2),
-            ty: "REL".into(),
-            exist: BetaPosterior { alpha: 8.0, beta: 2.0 },
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(2),
-            src: NodeId(2),
-            dst: NodeId(1),
-            ty: "REL".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 9.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "REL".into(),
+            BetaPosterior { alpha: 8.0, beta: 2.0 },
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(2), NodeId(2), NodeId(1), "REL".into(),
+            BetaPosterior { alpha: 1.0, beta: 9.0 },
+        ));
         g
     }
 
@@ -422,13 +416,10 @@ mod tests {
     #[test]
     fn prune_edges_keeps_non_matching_type() {
         let mut g = build_simple_graph();
-        g.insert_edge(EdgeData {
-            id: EdgeId(3),
-            src: NodeId(1),
-            dst: NodeId(2),
-            ty: "OTHER".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 99.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(3), NodeId(1), NodeId(2), "OTHER".into(),
+            BetaPosterior { alpha: 1.0, beta: 99.0 },
+        ));
 
         let predicate = ExprAst::Bool(true); // Always prune
         let result = prune_edges(&g, "REL", &predicate).unwrap();
@@ -467,7 +458,7 @@ mod tests {
     fn run_flow_evaluates_metrics_on_last_graph() {
         // Build a tiny program with a flow that creates a graph and computes a metric
         let program = ProgramAst {
-            schemas: vec![], belief_models: vec![], evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into() }], rules: vec![],
+            schemas: vec![], belief_models: vec![], evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), observations: vec![], body_src: "".into() }], rules: vec![],
             flows: vec![FlowDef {
                 name: "F".into(), on_model: "M".into(),
                 graphs: vec![GraphDef { name: "g".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } }],
@@ -514,7 +505,7 @@ mod tests {
         let program = ProgramAst {
             schemas: vec![],
             belief_models: vec![],
-            evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into() }],
+            evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), observations: vec![], body_src: "".into() }],
             rules: vec![],
             flows: vec![
                 FlowDef {
@@ -573,7 +564,7 @@ mod tests {
         };
 
         let program = ProgramAst {
-            schemas: vec![], belief_models: vec![], evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), body_src: "".into() }],
+            schemas: vec![], belief_models: vec![], evidences: vec![EvidenceDef { name: "Ev".into(), on_model: "M".into(), observations: vec![], body_src: "".into() }],
             rules: vec![rule],
             flows: vec![
                 FlowDef {
@@ -597,7 +588,10 @@ mod tests {
             let mut g = BeliefGraph::default();
             g.insert_node(NodeData { id: NodeId(1), label: "P".into(), attrs: HashMap::new() });
             g.insert_node(NodeData { id: NodeId(2), label: "P".into(), attrs: HashMap::new() });
-            g.insert_edge(EdgeData { id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "R".into(), exist: BetaPosterior { alpha: 3.0, beta: 7.0 } }); // prob 0.3
+            g.insert_edge(BeliefGraph::test_edge_with_beta(
+                EdgeId(1), NodeId(1), NodeId(2), "R".into(),
+                BetaPosterior { alpha: 3.0, beta: 7.0 },
+            )); // prob 0.3
             Ok(g)
         };
 

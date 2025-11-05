@@ -51,6 +51,10 @@ const MIN_OBS_PRECISION: f64 = 1e-12;
 /// as a numeric floor for stability and to prevent improper priors.
 const MIN_BETA_PARAM: f64 = 0.01;
 
+/// Minimum Dirichlet concentration parameter to enforce proper prior
+/// Dirichlet requires all α_k > 0. We enforce α_k ≥ 0.01 for numerical stability.
+const MIN_DIRICHLET_PARAM: f64 = 0.01;
+
 /// Maximum allowed deviation in standard deviations for outlier warnings
 /// See baygraph_design.md:211-213
 const OUTLIER_THRESHOLD_SIGMA: f64 = 10.0;
@@ -183,6 +187,177 @@ impl BetaPosterior {
     }
 }
 
+/// A Dirichlet posterior distribution for competing edge probabilities.
+///
+/// Uses Dirichlet(α_1, ..., α_K) parameterization for conjugate Categorical updates.
+/// The mean probabilities are E[π_k] = α_k / Σ_j α_j, with Σ_k π_k = 1.
+/// See competing_edges_design.md:§3.1 and baygraph_design.md:144-158.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DirichletPosterior {
+    /// Concentration parameters α_k for each category
+    /// Each α_k must be > 0; we enforce α_k ≥ MIN_DIRICHLET_PARAM for stability.
+    pub concentrations: Vec<f64>,
+}
+
+impl DirichletPosterior {
+    /// Creates a new Dirichlet posterior with given concentration parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `concentrations` - Initial α_k parameters (must all be > 0)
+    ///
+    /// # Panics
+    ///
+    /// Panics if any concentration is ≤ 0 or if the vector is empty.
+    pub fn new(concentrations: Vec<f64>) -> Self {
+        assert!(!concentrations.is_empty(), "Dirichlet posterior requires at least one category");
+        assert!(
+            concentrations.iter().all(|&a| a > 0.0),
+            "All Dirichlet concentrations must be > 0"
+        );
+        Self { concentrations }
+    }
+
+    /// Creates a uniform Dirichlet posterior.
+    ///
+    /// All categories have equal prior: α_k = pseudo_count / K for K categories.
+    ///
+    /// # Arguments
+    ///
+    /// * `num_categories` - Number of categories K
+    /// * `pseudo_count` - Total pseudo-count (Σ α_k = pseudo_count)
+    pub fn uniform(num_categories: usize, pseudo_count: f64) -> Self {
+        assert!(num_categories > 0, "Must have at least one category");
+        assert!(pseudo_count > 0.0, "Pseudo-count must be > 0");
+        let alpha_per_category = pseudo_count / num_categories as f64;
+        Self {
+            concentrations: vec![alpha_per_category; num_categories],
+        }
+    }
+
+    /// Updates the posterior with an observation of a chosen category.
+    ///
+    /// Performs a conjugate Dirichlet-Categorical update: increments α_k for the chosen category.
+    /// See competing_edges_design.md:§4.2 and baygraph_design.md:154-156.
+    ///
+    /// # Arguments
+    ///
+    /// * `category_index` - Index of the chosen category (0-based)
+    pub fn observe_chosen(&mut self, category_index: usize) {
+        assert!(
+            category_index < self.concentrations.len(),
+            "Category index out of bounds"
+        );
+        self.concentrations[category_index] += 1.0;
+    }
+
+    /// Updates the posterior with an observation that a category was not chosen.
+    ///
+    /// Distributes probability mass uniformly among all other categories.
+    /// This is a rare operation; see competing_edges_design.md:§4.2.
+    ///
+    /// # Arguments
+    ///
+    /// * `category_index` - Index of the unchosen category
+    pub fn observe_unchosen(&mut self, category_index: usize) {
+        assert!(
+            category_index < self.concentrations.len(),
+            "Category index out of bounds"
+        );
+        let k = self.concentrations.len();
+        if k > 1 {
+            let increment = 1.0 / (k - 1) as f64;
+            for (i, alpha) in self.concentrations.iter_mut().enumerate() {
+                if i != category_index {
+                    *alpha += increment;
+                }
+            }
+        }
+    }
+
+    /// Forces a specific category to be chosen with very high certainty.
+    ///
+    /// Sets α_k = 1e6 for the chosen category, α_j = 1.0 for others.
+    /// See competing_edges_design.md:§4.2.
+    ///
+    /// # Arguments
+    ///
+    /// * `category_index` - Index of the category to force
+    pub fn force_choice(&mut self, category_index: usize) {
+        assert!(
+            category_index < self.concentrations.len(),
+            "Category index out of bounds"
+        );
+        for (i, alpha) in self.concentrations.iter_mut().enumerate() {
+            if i == category_index {
+                *alpha = FORCE_PRECISION;
+            } else {
+                *alpha = 1.0;
+            }
+        }
+    }
+
+    /// Computes the posterior mean probability for a category.
+    ///
+    /// Returns E[π_k] = α_k / Σ_j α_j. Applies MIN_DIRICHLET_PARAM floor
+    /// to all parameters for numerical stability.
+    ///
+    /// # Arguments
+    ///
+    /// * `category_index` - Index of the category
+    ///
+    /// # Returns
+    ///
+    /// The posterior mean probability in [0, 1]
+    pub fn mean_probability(&self, category_index: usize) -> f64 {
+        assert!(
+            category_index < self.concentrations.len(),
+            "Category index out of bounds"
+        );
+        let alpha_k = self.concentrations[category_index].max(MIN_DIRICHLET_PARAM);
+        let sum_alpha: f64 = self
+            .concentrations
+            .iter()
+            .map(|&a| a.max(MIN_DIRICHLET_PARAM))
+            .sum();
+        alpha_k / sum_alpha
+    }
+
+    /// Computes the full posterior mean probability vector.
+    ///
+    /// Returns [E[π_1], E[π_2], ..., E[π_K]] for all categories.
+    pub fn mean_probabilities(&self) -> Vec<f64> {
+        let sum_alpha: f64 = self
+            .concentrations
+            .iter()
+            .map(|&a| a.max(MIN_DIRICHLET_PARAM))
+            .sum();
+        self.concentrations
+            .iter()
+            .map(|&a| a.max(MIN_DIRICHLET_PARAM) / sum_alpha)
+            .collect()
+    }
+
+    /// Computes the Shannon entropy of the distribution.
+    ///
+    /// Returns H(π) = -Σ_k π_k log(π_k) in nats.
+    /// Range: [0, log(K)] where K = number of categories.
+    pub fn entropy(&self) -> f64 {
+        let probs = self.mean_probabilities();
+        probs
+            .iter()
+            .filter(|&&p| p > 1e-10)
+            .map(|&p| -p * p.ln())
+            .sum()
+    }
+
+    /// Returns the number of categories.
+    pub fn num_categories(&self) -> usize {
+        self.concentrations.len()
+    }
+}
+
 /// A node in the belief graph with typed attributes.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -193,6 +368,186 @@ pub struct NodeData {
     pub label: String,
     /// Gaussian posteriors for continuous attributes
     pub attrs: HashMap<String, GaussianPosterior>,
+}
+
+/// A unique identifier for a competing edge group.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CompetingGroupId(pub u32);
+
+/// A competing edge group representing mutually exclusive choices from a source.
+///
+/// Groups edges from the same source node and edge type that share a Dirichlet posterior.
+/// See competing_edges_design.md:§2.1 and §7.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CompetingEdgeGroup {
+    /// Unique identifier for this group
+    pub id: CompetingGroupId,
+    /// Source node for this group
+    pub source: NodeId,
+    /// Edge type for this group
+    pub edge_type: String,
+    /// Destination nodes (categories) in order
+    pub categories: Vec<NodeId>,
+    /// Mapping from destination NodeId to category index
+    pub category_index: HashMap<NodeId, usize>,
+    /// Dirichlet posterior for the probability distribution
+    pub posterior: DirichletPosterior,
+}
+
+impl CompetingEdgeGroup {
+    /// Creates a new competing edge group.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique group identifier
+    /// * `source` - Source node ID
+    /// * `edge_type` - Edge type name
+    /// * `categories` - Destination nodes (must be non-empty)
+    /// * `posterior` - Initial Dirichlet posterior
+    pub fn new(
+        id: CompetingGroupId,
+        source: NodeId,
+        edge_type: String,
+        categories: Vec<NodeId>,
+        posterior: DirichletPosterior,
+    ) -> Self {
+        assert_eq!(
+            categories.len(),
+            posterior.num_categories(),
+            "Number of categories must match posterior dimensions"
+        );
+        let category_index: HashMap<NodeId, usize> = categories
+            .iter()
+            .enumerate()
+            .map(|(i, &node_id)| (node_id, i))
+            .collect();
+        Self {
+            id,
+            source,
+            edge_type,
+            categories,
+            category_index,
+            posterior,
+        }
+    }
+
+    /// Gets the category index for a destination node.
+    pub fn get_category_index(&self, dst: NodeId) -> Option<usize> {
+        self.category_index.get(&dst).copied()
+    }
+
+    /// Gets the mean probability for a destination node.
+    pub fn mean_probability_for_dst(&self, dst: NodeId) -> Option<f64> {
+        let idx = self.get_category_index(dst)?;
+        Some(self.posterior.mean_probability(idx))
+    }
+}
+
+/// Edge posterior type: either independent (Beta) or competing (Dirichlet group reference).
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum EdgePosterior {
+    /// Independent edge with Beta posterior
+    Independent(BetaPosterior),
+    /// Competing edge with reference to a Dirichlet group
+    Competing {
+        /// Reference to the competing group
+        group_id: CompetingGroupId,
+        /// Category index within the group
+        category_index: usize,
+    },
+}
+
+impl EdgePosterior {
+    /// Creates an independent edge posterior from a Beta posterior.
+    pub fn independent(beta: BetaPosterior) -> Self {
+        Self::Independent(beta)
+    }
+
+    /// Creates a competing edge posterior reference.
+    pub fn competing(group_id: CompetingGroupId, category_index: usize) -> Self {
+        Self::Competing {
+            group_id,
+            category_index,
+        }
+    }
+
+    /// Gets a mutable reference to the Beta posterior if independent.
+    pub fn as_beta_mut(&mut self) -> Option<&mut BetaPosterior> {
+        match self {
+            Self::Independent(beta) => Some(beta),
+            Self::Competing { .. } => None,
+        }
+    }
+
+    /// Gets a reference to the Beta posterior if independent.
+    pub fn as_beta(&self) -> Option<&BetaPosterior> {
+        match self {
+            Self::Independent(beta) => Some(beta),
+            Self::Competing { .. } => None,
+        }
+    }
+
+    /// Forces the edge to be absent (only for independent edges).
+    pub fn force_absent(&mut self) -> Result<(), ExecError> {
+        match self {
+            Self::Independent(beta) => {
+                beta.force_absent();
+                Ok(())
+            }
+            Self::Competing { .. } => Err(ExecError::ValidationError(
+                "force_absent() only valid for independent edges".into(),
+            )),
+        }
+    }
+
+    /// Forces the edge to be present (only for independent edges).
+    pub fn force_present(&mut self) -> Result<(), ExecError> {
+        match self {
+            Self::Independent(beta) => {
+                beta.force_present();
+                Ok(())
+            }
+            Self::Competing { .. } => Err(ExecError::ValidationError(
+                "force_present() only valid for independent edges".into(),
+            )),
+        }
+    }
+
+    /// Updates the posterior with an observation (only for independent edges).
+    pub fn observe(&mut self, present: bool) -> Result<(), ExecError> {
+        match self {
+            Self::Independent(beta) => {
+                beta.observe(present);
+                Ok(())
+            }
+            Self::Competing { .. } => Err(ExecError::ValidationError(
+                "observe() only valid for independent edges; use observe_chosen for competing edges".into(),
+            )),
+        }
+    }
+
+    /// Computes the mean probability.
+    ///
+    /// For independent edges: E[p] = α / (α + β)
+    /// For competing edges: requires access to the group's Dirichlet posterior
+    pub fn mean_probability(&self, groups: &HashMap<CompetingGroupId, CompetingEdgeGroup>) -> Result<f64, ExecError> {
+        match self {
+            Self::Independent(beta) => Ok(beta.mean_probability()),
+            Self::Competing {
+                group_id,
+                category_index,
+            } => {
+                let group = groups
+                    .get(group_id)
+                    .ok_or_else(|| ExecError::Internal("missing competing group".into()))?;
+                Ok(group.posterior.mean_probability(*category_index))
+            }
+        }
+    }
 }
 
 /// A directed edge in the belief graph with existence probability.
@@ -207,8 +562,8 @@ pub struct EdgeData {
     pub dst: NodeId,
     /// The edge type (e.g., "KNOWS", "LIKES")
     pub ty: String,
-    /// Beta posterior for edge existence probability
-    pub exist: BetaPosterior,
+    /// Posterior for edge existence (independent or competing)
+    pub exist: EdgePosterior,
 }
 
 /// Optimized adjacency list for fast neighborhood queries.
@@ -289,7 +644,8 @@ impl AdjacencyIndex {
 ///
 /// This is the core data structure for Baygraph, maintaining:
 /// - Nodes with continuous-valued attributes (Gaussian posteriors)
-/// - Directed edges with existence probabilities (Beta posteriors)
+/// - Directed edges with existence probabilities (Beta or Dirichlet posteriors)
+/// - Competing edge groups for mutually exclusive choices
 /// - O(1) lookup indexes for efficient access
 /// - Optimized adjacency structure for fast neighborhood queries
 ///
@@ -310,6 +666,8 @@ pub struct BeliefGraph {
     pub nodes: Vec<NodeData>,
     /// All edges in the graph
     pub edges: Vec<EdgeData>,
+    /// Competing edge groups (for Dirichlet-Categorical posteriors)
+    pub competing_groups: HashMap<CompetingGroupId, CompetingEdgeGroup>,
     /// Index mapping NodeId to position in nodes vector
     node_index: HashMap<NodeId, usize>,
     /// Index mapping EdgeId to position in edges vector
@@ -323,6 +681,7 @@ impl Default for BeliefGraph {
         Self {
             nodes: Vec::new(),
             edges: Vec::new(),
+            competing_groups: HashMap::new(),
             node_index: HashMap::new(),
             edge_index: HashMap::new(),
             adjacency: None,
@@ -380,11 +739,17 @@ impl BeliefGraph {
         id
     }
 
-    /// Add an edge and update the index. Returns the EdgeId.
+    /// Add an independent edge and update the index. Returns the EdgeId.
     pub fn add_edge(&mut self, src: NodeId, dst: NodeId, ty: String, exist: BetaPosterior) -> EdgeId {
         let id = EdgeId(self.edges.len() as u32);
         let idx = self.edges.len();
-        self.edges.push(EdgeData { id, src, dst, ty, exist });
+        self.edges.push(EdgeData {
+            id,
+            src,
+            dst,
+            ty,
+            exist: EdgePosterior::independent(exist),
+        });
         self.edge_index.insert(id, idx);
         id
     }
@@ -411,6 +776,24 @@ impl BeliefGraph {
         let idx = self.edges.len();
         self.edge_index.insert(edge.id, idx);
         self.edges.push(edge);
+    }
+
+    /// Helper function for tests: creates an EdgeData with independent Beta posterior.
+    #[cfg(test)]
+    pub(crate) fn test_edge_with_beta(
+        id: EdgeId,
+        src: NodeId,
+        dst: NodeId,
+        ty: String,
+        beta: BetaPosterior,
+    ) -> EdgeData {
+        EdgeData {
+            id,
+            src,
+            dst,
+            ty,
+            exist: EdgePosterior::independent(beta),
+        }
     }
 
     /// Rebuilds a graph from a subset of nodes and edges.
@@ -467,13 +850,14 @@ impl BeliefGraph {
         let e = self
             .edge_mut(edge)
             .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
-        e.exist.force_absent();
+        e.exist.force_absent()?;
         Ok(())
     }
 
     /// Computes the posterior mean probability for an edge's existence.
     ///
     /// Returns the expected value of the Beta posterior: E[p] = α / (α + β).
+    /// For competing edges, returns E[π_k] = α_k / Σ_j α_j from Dirichlet posterior.
     /// This is the Bayesian point estimate under squared error loss.
     ///
     /// # Arguments
@@ -488,10 +872,13 @@ impl BeliefGraph {
         let e = self
             .edge(edge)
             .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
-        Ok(e.exist.mean_probability())
+        e.exist.mean_probability(&self.competing_groups)
     }
 
     /// Counts outgoing edges from a node that meet a minimum probability threshold.
+    ///
+    /// For independent edges: counts edges with E[p] ≥ threshold.
+    /// For competing edges: counts categories with E[π_k] ≥ threshold.
     ///
     /// # Arguments
     ///
@@ -504,8 +891,115 @@ impl BeliefGraph {
     pub fn degree_outgoing(&self, node: NodeId, min_prob: f64) -> usize {
         self.edges
             .iter()
-            .filter(|e| e.src == node && e.exist.mean_probability() >= min_prob)
+            .filter(|e| {
+                e.src == node
+                    && e.exist
+                        .mean_probability(&self.competing_groups)
+                        .unwrap_or(0.0)
+                        >= min_prob
+            })
             .count()
+    }
+
+    /// Gets the competing edge group for a node and edge type.
+    ///
+    /// Returns the group if it exists, None if the edges are independent or no edges exist.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The source node ID
+    /// * `edge_type` - The edge type name
+    ///
+    /// # Returns
+    ///
+    /// The competing group if it exists
+    pub fn get_competing_group(&self, node: NodeId, edge_type: &str) -> Option<&CompetingEdgeGroup> {
+        // Find an edge from this node with this type
+        let edge = self.edges.iter().find(|e| e.src == node && e.ty == edge_type)?;
+        
+        // Check if it's a competing edge
+        if let EdgePosterior::Competing { group_id, .. } = &edge.exist {
+            self.competing_groups.get(group_id)
+        } else {
+            None
+        }
+    }
+
+    /// Gets the winner destination node for a competing group (category with maximum probability).
+    ///
+    /// Returns the destination node ID (category) with the highest E[π_k], or None if tied within epsilon.
+    /// This can be used in expressions like `winner(A, ROUTES_TO) == B` to check if B is the clear winner.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The source node ID
+    /// * `edge_type` - The edge type name
+    /// * `epsilon` - Tolerance for ties (default 0.01)
+    ///
+    /// # Returns
+    ///
+    /// The winning destination node ID, or None if ambiguous
+    pub fn winner(&self, node: NodeId, edge_type: &str, epsilon: f64) -> Option<NodeId> {
+        let group = self.get_competing_group(node, edge_type)?;
+        
+        let probs = group.posterior.mean_probabilities();
+        let (max_idx, &max_prob) = probs
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))?;
+        
+        // Check for ties within epsilon
+        let num_ties = probs
+            .iter()
+            .filter(|&&p| (p - max_prob).abs() < epsilon)
+            .count();
+        
+        if num_ties > 1 {
+            None // Ambiguous: multiple categories within epsilon of max
+        } else {
+            group.categories.get(max_idx).copied()
+        }
+    }
+
+    /// Computes the Shannon entropy of a competing edge group.
+    ///
+    /// Returns H(π) = -Σ π_k log(π_k) in nats.
+    /// Range: [0, log(K)] where K = number of categories.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The source node ID
+    /// * `edge_type` - The edge type name
+    ///
+    /// # Returns
+    ///
+    /// The entropy value, or an error if edges are independent or group doesn't exist
+    pub fn entropy(&self, node: NodeId, edge_type: &str) -> Result<f64, ExecError> {
+        let group = self.get_competing_group(node, edge_type)
+            .ok_or_else(|| ExecError::ValidationError(
+                format!("entropy() only valid for competing edges: node {:?}, edge_type '{}'", node, edge_type)
+            ))?;
+        Ok(group.posterior.entropy())
+    }
+
+    /// Gets the full probability vector for a competing edge group.
+    ///
+    /// Returns [E[π_1], E[π_2], ..., E[π_K]] for all categories.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The source node ID
+    /// * `edge_type` - The edge type name
+    ///
+    /// # Returns
+    ///
+    /// Vector of probabilities, or an error if edges are independent
+    pub fn prob_vector(&self, node: NodeId, edge_type: &str) -> Result<Vec<f64>, ExecError> {
+        let group = self.get_competing_group(node, edge_type)
+            .ok_or_else(|| ExecError::ValidationError(
+                format!("prob_vector() only valid for competing edges: node {:?}, edge_type '{}'", node, edge_type)
+            ))?;
+        Ok(group.posterior.mean_probabilities())
     }
 
     /// Builds or rebuilds the adjacency index for fast neighborhood queries.
@@ -551,7 +1045,91 @@ impl BeliefGraph {
         let e = self
             .edge_mut(edge)
             .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
-        e.exist.observe(present);
+        e.exist.observe(present)?;
+        Ok(())
+    }
+
+    /// Observes a competing edge as chosen (increments α_k for the chosen category).
+    ///
+    /// # Arguments
+    ///
+    /// * `edge` - The edge ID to observe
+    pub fn observe_edge_chosen(&mut self, edge: EdgeId) -> Result<(), ExecError> {
+        let (group_id, category_index) = {
+            let e = self
+                .edge(edge)
+                .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
+            
+            match &e.exist {
+                EdgePosterior::Competing { group_id, category_index } => (*group_id, *category_index),
+                EdgePosterior::Independent(_) => {
+                    return Err(ExecError::ValidationError(
+                        "observe_edge_chosen() only valid for competing edges".into()
+                    ));
+                }
+            }
+        };
+        
+        let group = self.competing_groups
+            .get_mut(&group_id)
+            .ok_or_else(|| ExecError::Internal("missing competing group".into()))?;
+        group.posterior.observe_chosen(category_index);
+        Ok(())
+    }
+
+    /// Observes a competing edge as unchosen (distributes probability to other categories).
+    ///
+    /// # Arguments
+    ///
+    /// * `edge` - The edge ID to observe
+    pub fn observe_edge_unchosen(&mut self, edge: EdgeId) -> Result<(), ExecError> {
+        let (group_id, category_index) = {
+            let e = self
+                .edge(edge)
+                .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
+            
+            match &e.exist {
+                EdgePosterior::Competing { group_id, category_index } => (*group_id, *category_index),
+                EdgePosterior::Independent(_) => {
+                    return Err(ExecError::ValidationError(
+                        "observe_edge_unchosen() only valid for competing edges".into()
+                    ));
+                }
+            }
+        };
+        
+        let group = self.competing_groups
+            .get_mut(&group_id)
+            .ok_or_else(|| ExecError::Internal("missing competing group".into()))?;
+        group.posterior.observe_unchosen(category_index);
+        Ok(())
+    }
+
+    /// Forces a competing edge to be chosen deterministically.
+    ///
+    /// # Arguments
+    ///
+    /// * `edge` - The edge ID to force
+    pub fn observe_edge_forced_choice(&mut self, edge: EdgeId) -> Result<(), ExecError> {
+        let (group_id, category_index) = {
+            let e = self
+                .edge(edge)
+                .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
+            
+            match &e.exist {
+                EdgePosterior::Competing { group_id, category_index } => (*group_id, *category_index),
+                EdgePosterior::Independent(_) => {
+                    return Err(ExecError::ValidationError(
+                        "observe_edge_forced_choice() only valid for competing edges".into()
+                    ));
+                }
+            }
+        };
+        
+        let group = self.competing_groups
+            .get_mut(&group_id)
+            .ok_or_else(|| ExecError::Internal("missing competing group".into()))?;
+        group.posterior.force_choice(category_index);
         Ok(())
     }
 
@@ -559,7 +1137,7 @@ impl BeliefGraph {
         let e = self
             .edge_mut(edge)
             .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
-        e.exist.force_present();
+        e.exist.force_present()?;
         Ok(())
     }
 
@@ -643,33 +1221,62 @@ impl BeliefGraph {
 
         // Check edge posteriors
         for edge in &self.edges {
-            // Check for NaN/Inf in Beta parameters
-            if !edge.exist.alpha.is_finite() || !edge.exist.beta.is_finite() {
-                return Err(ExecError::Numerical(format!(
-                    "Edge {:?} has non-finite Beta parameters: α={}, β={}",
-                    edge.id, edge.exist.alpha, edge.exist.beta
-                )));
-            }
+            match &edge.exist {
+                EdgePosterior::Independent(beta) => {
+                    // Check for NaN/Inf in Beta parameters
+                    if !beta.alpha.is_finite() || !beta.beta.is_finite() {
+                        return Err(ExecError::Numerical(format!(
+                            "Edge {:?} has non-finite Beta parameters: α={}, β={}",
+                            edge.id, beta.alpha, beta.beta
+                        )));
+                    }
 
-            // Enforce minimum Beta parameters (proper priors)
-            if edge.exist.alpha < MIN_BETA_PARAM || edge.exist.beta < MIN_BETA_PARAM {
-                warnings.push(format!(
-                    "Edge {:?} has Beta parameters below minimum (α={:.2e}, β={:.2e}), will be clipped to {:.2e}",
-                    edge.id, edge.exist.alpha, edge.exist.beta, MIN_BETA_PARAM
-                ));
-            }
+                    // Enforce minimum Beta parameters (proper priors)
+                    if beta.alpha < MIN_BETA_PARAM || beta.beta < MIN_BETA_PARAM {
+                        warnings.push(format!(
+                            "Edge {:?} has Beta parameters below minimum (α={:.2e}, β={:.2e}), will be clipped to {:.2e}",
+                            edge.id, beta.alpha, beta.beta, MIN_BETA_PARAM
+                        ));
+                    }
 
-            // Compute probability for range check
-            let a = edge.exist.alpha.max(MIN_BETA_PARAM);
-            let b = edge.exist.beta.max(MIN_BETA_PARAM);
-            let prob = a / (a + b);
+                    // Compute probability for range check
+                    let prob = beta.mean_probability();
 
-            // Probability must be in [0, 1]
-            if !(0.0..=1.0).contains(&prob) {
-                return Err(ExecError::Numerical(format!(
-                    "Edge {:?} has invalid probability: {} (from α={}, β={})",
-                    edge.id, prob, edge.exist.alpha, edge.exist.beta
-                )));
+                    // Probability must be in [0, 1]
+                    if !(0.0..=1.0).contains(&prob) {
+                        return Err(ExecError::Numerical(format!(
+                            "Edge {:?} has invalid probability: {} (from α={}, β={})",
+                            edge.id, prob, beta.alpha, beta.beta
+                        )));
+                    }
+                }
+                EdgePosterior::Competing { group_id, category_index } => {
+                    if let Some(group) = self.competing_groups.get(group_id) {
+                        // Check Dirichlet parameters
+                        for (i, &alpha) in group.posterior.concentrations.iter().enumerate() {
+                            if !alpha.is_finite() {
+                                return Err(ExecError::Numerical(format!(
+                                    "Edge {:?} (competing group {:?}, category {}) has non-finite Dirichlet parameter: α={}",
+                                    edge.id, group_id, i, alpha
+                                )));
+                            }
+                            if alpha < MIN_DIRICHLET_PARAM {
+                                warnings.push(format!(
+                                    "Edge {:?} (competing group {:?}) has Dirichlet parameter below minimum (α_{}={:.2e}), will be clipped",
+                                    edge.id, group_id, i, alpha
+                                ));
+                            }
+                        }
+                        // Check probability
+                        let prob = group.posterior.mean_probability(*category_index);
+                        if !(0.0..=1.0).contains(&prob) {
+                            return Err(ExecError::Numerical(format!(
+                                "Edge {:?} (competing group {:?}) has invalid probability: {}",
+                                edge.id, group_id, prob
+                            )));
+                        }
+                    }
+                }
             }
         }
 
@@ -862,13 +1469,13 @@ mod tests {
     #[test]
     fn belief_graph_edge_lookup_by_id() {
         let mut g = BeliefGraph::default();
-        g.insert_edge(EdgeData {
-            id: EdgeId(42),
-            src: NodeId(1),
-            dst: NodeId(2),
-            ty: "REL".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(42),
+            NodeId(1),
+            NodeId(2),
+            "REL".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
 
         assert!(g.edge(EdgeId(42)).is_some());
         assert!(g.edge(EdgeId(999)).is_none());
@@ -930,13 +1537,13 @@ mod tests {
     #[test]
     fn belief_graph_prob_mean_calculates_beta_mean() {
         let mut g = BeliefGraph::default();
-        g.insert_edge(EdgeData {
-            id: EdgeId(1),
-            src: NodeId(1),
-            dst: NodeId(2),
-            ty: "REL".into(),
-            exist: BetaPosterior { alpha: 3.0, beta: 7.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1),
+            NodeId(1),
+            NodeId(2),
+            "REL".into(),
+            BetaPosterior { alpha: 3.0, beta: 7.0 },
+        ));
 
         let prob = g.prob_mean(EdgeId(1)).unwrap();
         assert!((prob - 0.3).abs() < 1e-9); // 3/(3+7) = 0.3
@@ -945,13 +1552,10 @@ mod tests {
     #[test]
     fn belief_graph_prob_mean_clips_negative_parameters() {
         let mut g = BeliefGraph::default();
-        g.insert_edge(EdgeData {
-            id: EdgeId(1),
-            src: NodeId(1),
-            dst: NodeId(2),
-            ty: "REL".into(),
-            exist: BetaPosterior { alpha: -1.0, beta: 2.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "REL".into(),
+            BetaPosterior { alpha: -1.0, beta: 2.0 },
+        ));
 
         // Should clip negative alpha to MIN_BETA_PARAM (0.01) per design spec
         // Expected: 0.01 / (0.01 + 2.0) ≈ 0.00497...
@@ -963,13 +1567,10 @@ mod tests {
     #[test]
     fn belief_graph_prob_mean_handles_zero_parameters() {
         let mut g = BeliefGraph::default();
-        g.insert_edge(EdgeData {
-            id: EdgeId(1),
-            src: NodeId(1),
-            dst: NodeId(2),
-            ty: "REL".into(),
-            exist: BetaPosterior { alpha: 0.0, beta: 0.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "REL".into(),
+            BetaPosterior { alpha: 0.0, beta: 0.0 },
+        ));
 
         // With clipping to MIN_BETA_PARAM, even (0,0) becomes valid:
         // 0.01 / (0.01 + 0.01) = 0.5
@@ -983,18 +1584,18 @@ mod tests {
         g.insert_node(NodeData { id: NodeId(1), label: "N".into(), attrs: HashMap::new() });
 
         // Add edges with different probabilities
-        g.insert_edge(EdgeData {
-            id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "R".into(),
-            exist: BetaPosterior { alpha: 8.0, beta: 2.0 }, // p=0.8
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(2), src: NodeId(1), dst: NodeId(3), ty: "R".into(),
-            exist: BetaPosterior { alpha: 2.0, beta: 8.0 }, // p=0.2
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(3), src: NodeId(1), dst: NodeId(4), ty: "R".into(),
-            exist: BetaPosterior { alpha: 6.0, beta: 4.0 }, // p=0.6
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "R".into(),
+            BetaPosterior { alpha: 8.0, beta: 2.0 }, // p=0.8
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(2), NodeId(1), NodeId(3), "R".into(),
+            BetaPosterior { alpha: 2.0, beta: 8.0 }, // p=0.2
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(3), NodeId(1), NodeId(4), "R".into(),
+            BetaPosterior { alpha: 6.0, beta: 4.0 }, // p=0.6
+        ));
 
         assert_eq!(g.degree_outgoing(NodeId(1), 0.7), 1, "only one edge >= 0.7");
         assert_eq!(g.degree_outgoing(NodeId(1), 0.5), 2, "two edges >= 0.5");
@@ -1004,14 +1605,14 @@ mod tests {
     #[test]
     fn belief_graph_degree_outgoing_filters_by_source() {
         let mut g = BeliefGraph::default();
-        g.insert_edge(EdgeData {
-            id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "R".into(),
-            exist: BetaPosterior { alpha: 5.0, beta: 5.0 },
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(2), src: NodeId(2), dst: NodeId(3), ty: "R".into(),
-            exist: BetaPosterior { alpha: 5.0, beta: 5.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "R".into(),
+            BetaPosterior { alpha: 5.0, beta: 5.0 },
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(2), NodeId(2), NodeId(3), "R".into(),
+            BetaPosterior { alpha: 5.0, beta: 5.0 },
+        ));
 
         assert_eq!(g.degree_outgoing(NodeId(1), 0.0), 1);
         assert_eq!(g.degree_outgoing(NodeId(2), 0.0), 1);
@@ -1021,18 +1622,18 @@ mod tests {
     #[test]
     fn belief_graph_adjacency_outgoing_groups_by_node_and_type() {
         let mut g = BeliefGraph::default();
-        g.insert_edge(EdgeData {
-            id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "LIKES".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(2), src: NodeId(1), dst: NodeId(3), ty: "LIKES".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(3), src: NodeId(1), dst: NodeId(4), ty: "KNOWS".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "LIKES".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(2), NodeId(1), NodeId(3), "LIKES".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(3), NodeId(1), NodeId(4), "KNOWS".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
 
         let adj = g.adjacency_outgoing_by_type();
 
@@ -1049,18 +1650,18 @@ mod tests {
     #[test]
     fn belief_graph_adjacency_outgoing_returns_sorted_edges() {
         let mut g = BeliefGraph::default();
-        g.insert_edge(EdgeData {
-            id: EdgeId(5), src: NodeId(1), dst: NodeId(2), ty: "R".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(2), src: NodeId(1), dst: NodeId(3), ty: "R".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(8), src: NodeId(1), dst: NodeId(4), ty: "R".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(5), NodeId(1), NodeId(2), "R".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(2), NodeId(1), NodeId(3), "R".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(8), NodeId(1), NodeId(4), "R".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
 
         let adj = g.adjacency_outgoing_by_type();
         let edges = adj.get(&(NodeId(1), "R".into())).unwrap();
@@ -1071,31 +1672,39 @@ mod tests {
     #[test]
     fn belief_graph_observe_edge_updates_beta_posterior() {
         let mut g = BeliefGraph::default();
-        g.insert_edge(EdgeData {
-            id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "R".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "R".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
 
         g.observe_edge(EdgeId(1), true).unwrap();
 
         let edge = g.edge(EdgeId(1)).unwrap();
-        assert_eq!(edge.exist.alpha, 2.0);
-        assert_eq!(edge.exist.beta, 1.0);
+        if let EdgePosterior::Independent(beta) = &edge.exist {
+            assert_eq!(beta.alpha, 2.0);
+            assert_eq!(beta.beta, 1.0);
+        } else {
+            panic!("Expected independent edge");
+        }
     }
 
     #[test]
     fn belief_graph_force_edge_present_sets_high_alpha() {
         let mut g = BeliefGraph::default();
-        g.insert_edge(EdgeData {
-            id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "R".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "R".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
 
         g.force_edge_present(EdgeId(1)).unwrap();
 
         let edge = g.edge(EdgeId(1)).unwrap();
-        assert_eq!(edge.exist.alpha, FORCE_PRECISION);
-        assert_eq!(edge.exist.beta, 1.0);
+        if let EdgePosterior::Independent(beta) = &edge.exist {
+            assert_eq!(beta.alpha, FORCE_PRECISION);
+            assert_eq!(beta.beta, 1.0);
+        } else {
+            panic!("Expected independent edge");
+        }
     }
 
     #[test]
@@ -1153,13 +1762,13 @@ mod tests {
 
         for (alpha, beta, expected_mean) in test_cases {
             let mut g = BeliefGraph::default();
-            g.insert_edge(EdgeData {
-                id: EdgeId(1),
-                src: NodeId(1),
-                dst: NodeId(2),
-                ty: "R".into(),
-                exist: BetaPosterior { alpha, beta },
-            });
+            g.insert_edge(BeliefGraph::test_edge_with_beta(
+                EdgeId(1),
+                NodeId(1),
+                NodeId(2),
+                "R".into(),
+                BetaPosterior { alpha, beta },
+            ));
 
             let prob = g.prob_mean(EdgeId(1)).unwrap();
             let expected = alpha / (alpha + beta);
@@ -1250,13 +1859,10 @@ mod tests {
         });
 
         // Add edge with Beta(3, 7) → mean = 0.3
-        g.insert_edge(EdgeData {
-            id: EdgeId(1),
-            src: NodeId(1),
-            dst: NodeId(2),
-            ty: "R".into(),
-            exist: BetaPosterior { alpha: 3.0, beta: 7.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "R".into(),
+            BetaPosterior { alpha: 3.0, beta: 7.0 },
+        ));
 
         let prob = g.prob_mean(EdgeId(1)).unwrap();
         assert!((prob - 0.3).abs() < 1e-9, "Probability should be 0.3");
@@ -1295,22 +1901,22 @@ mod tests {
     #[test]
     fn adjacency_index_groups_edges_by_node_and_type() {
         let mut g = BeliefGraph::default();
-        g.insert_edge(EdgeData {
-            id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "LIKES".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(2), src: NodeId(1), dst: NodeId(3), ty: "LIKES".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(3), src: NodeId(1), dst: NodeId(4), ty: "KNOWS".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(4), src: NodeId(2), dst: NodeId(3), ty: "LIKES".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "LIKES".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(2), NodeId(1), NodeId(3), "LIKES".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(3), NodeId(1), NodeId(4), "KNOWS".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(4), NodeId(2), NodeId(3), "LIKES".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
 
         g.build_adjacency();
 
@@ -1332,18 +1938,18 @@ mod tests {
     fn adjacency_index_returns_sorted_edges() {
         let mut g = BeliefGraph::default();
         // Insert edges in non-sorted order
-        g.insert_edge(EdgeData {
-            id: EdgeId(5), src: NodeId(1), dst: NodeId(2), ty: "R".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(2), src: NodeId(1), dst: NodeId(3), ty: "R".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
-        g.insert_edge(EdgeData {
-            id: EdgeId(8), src: NodeId(1), dst: NodeId(4), ty: "R".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(5), NodeId(1), NodeId(2), "R".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(2), NodeId(1), NodeId(3), "R".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(8), NodeId(1), NodeId(4), "R".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
 
         g.build_adjacency();
         let edges = g.get_outgoing_edges(NodeId(1), "R");
@@ -1355,10 +1961,10 @@ mod tests {
     #[test]
     fn adjacency_index_handles_empty_neighborhoods() {
         let mut g = BeliefGraph::default();
-        g.insert_edge(EdgeData {
-            id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "R".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "R".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
 
         g.build_adjacency();
 
@@ -1374,10 +1980,10 @@ mod tests {
     #[test]
     fn adjacency_index_lazy_build() {
         let mut g = BeliefGraph::default();
-        g.insert_edge(EdgeData {
-            id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "R".into(),
-            exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "R".into(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ));
 
         // Don't explicitly call build_adjacency
         let edges = g.get_outgoing_edges(NodeId(1), "R");

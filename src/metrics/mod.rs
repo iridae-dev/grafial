@@ -525,8 +525,14 @@ mod tests {
                 ("b".into(), GaussianPosterior { mean: 4.0, precision: 1.0 }),
             ]),
         });
-        g.insert_edge(EdgeData { id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "REL".into(), exist: BetaPosterior { alpha: 9.0, beta: 1.0 } });
-        g.insert_edge(EdgeData { id: EdgeId(2), src: NodeId(2), dst: NodeId(1), ty: "REL".into(), exist: BetaPosterior { alpha: 1.0, beta: 9.0 } });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "REL".into(),
+            BetaPosterior { alpha: 9.0, beta: 1.0 },
+        ));
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(2), NodeId(2), NodeId(1), "REL".into(),
+            BetaPosterior { alpha: 1.0, beta: 9.0 },
+        ));
         g
     }
 

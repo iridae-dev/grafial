@@ -171,6 +171,62 @@ impl<'a> ExprContext for RuleExprContext<'a> {
                     _ => Err(ExecError::Internal("degree(): first argument must be a node variable".into())),
                 }
             }
+            "winner" => {
+                if pos_args.len() < 2 {
+                    return Err(ExecError::Internal("winner(): requires node and edge_type arguments".into()));
+                }
+                let mut epsilon = 0.01;
+                for a in all_args {
+                    if let CallArg::Named { name, value } = a {
+                        if name == "epsilon" {
+                            epsilon = eval_expr_core(value, graph, self)?;
+                        }
+                    }
+                }
+                let node_var = match &pos_args[0] {
+                    ExprAst::Var(v) => v,
+                    _ => return Err(ExecError::Internal("winner(): first argument must be a node variable".into())),
+                };
+                let edge_type = match &pos_args[1] {
+                    ExprAst::Var(v) => v.clone(),
+                    ExprAst::Number(_) => return Err(ExecError::Internal("winner(): edge_type must be a string identifier".into())),
+                    _ => return Err(ExecError::Internal("winner(): edge_type must be an identifier".into())),
+                };
+                
+                let nid = *self
+                    .bindings
+                    .node_vars
+                    .get(node_var)
+                    .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", node_var)))?;
+                
+                // Return winner destination node ID as f64, or -1.0 if None (to represent null)
+                // This allows expressions like winner(A, ROUTES_TO) == B where B is a node variable
+                match graph.winner(nid, &edge_type, epsilon) {
+                    Some(winner_node_id) => Ok(winner_node_id.0 as f64),
+                    None => Ok(-1.0), // Represent None as -1.0
+                }
+            }
+            "entropy" => {
+                if pos_args.len() < 2 {
+                    return Err(ExecError::Internal("entropy(): requires node and edge_type arguments".into()));
+                }
+                let node_var = match &pos_args[0] {
+                    ExprAst::Var(v) => v,
+                    _ => return Err(ExecError::Internal("entropy(): first argument must be a node variable".into())),
+                };
+                let edge_type = match &pos_args[1] {
+                    ExprAst::Var(v) => v.clone(),
+                    _ => return Err(ExecError::Internal("entropy(): edge_type must be an identifier".into())),
+                };
+                
+                let nid = *self
+                    .bindings
+                    .node_vars
+                    .get(node_var)
+                    .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", node_var)))?;
+                
+                graph.entropy(nid, &edge_type)
+            }
             other => Err(ExecError::Internal(format!("unknown function '{}'", other))),
         }
     }
@@ -276,8 +332,8 @@ fn compute_max_change(old: &BeliefGraph, new: &BeliefGraph) -> f64 {
             // Graph structure changed, return large delta
             return f64::INFINITY;
         }
-        let old_prob = old_edge.exist.mean_probability();
-        let new_prob = new_edge.exist.mean_probability();
+        let old_prob = old_edge.exist.mean_probability(&old.competing_groups).unwrap_or(0.0);
+        let new_prob = new_edge.exist.mean_probability(&new.competing_groups).unwrap_or(0.0);
         let delta = (old_prob - new_prob).abs();
         max_delta = max_delta.max(delta);
     }
@@ -435,13 +491,10 @@ mod tests {
             label: "Person".into(),
             attrs: HashMap::from([("x".into(), GaussianPosterior { mean: 5.0, precision: 1.0 })]),
         });
-        g.insert_edge(EdgeData {
-            id: EdgeId(1),
-            src: NodeId(1),
-            dst: NodeId(2),
-            ty: "KNOWS".into(),
-            exist: BetaPosterior { alpha: 5.0, beta: 5.0 },
-        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1), NodeId(1), NodeId(2), "KNOWS".into(),
+            BetaPosterior { alpha: 5.0, beta: 5.0 },
+        ));
         g
     }
 
