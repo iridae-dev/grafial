@@ -15,7 +15,10 @@
 //! - `ExprContext` trait: Defines how variables and functions are resolved
 //! - Core evaluator: Handles literals, operators, and delegates context-specific parts
 //!
-//! See baygraph_design.md:275-276 for expression semantics.
+//! Expression semantics:
+//! - `set_expectation` rule action updates attribute mean without changing precision
+//! - `E[node.attr]` returns the posterior mean (expected value)
+//! - `prob(edge)` returns the mean probability of edge existence
 
 use crate::engine::errors::ExecError;
 use crate::engine::graph::BeliefGraph;
