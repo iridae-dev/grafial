@@ -188,7 +188,8 @@ impl MetricFn for SumNodes {
         #[cfg(feature = "rayon")]
         {
             // Phase 7: Parallel implementation with deterministic pairwise summation
-            // See baygraph_design.md:518-521
+            // Process nodes in stable ID order, then use pairwise summation to reduce
+            // floating-point error accumulation compared to linear summation.
             let nodes: Vec<_> = nodes_sorted_by_id(graph.nodes())
                 .into_iter()
                 .filter(|n| n.label.as_ref() == label)
@@ -241,7 +242,9 @@ impl MetricFn for SumNodes {
 /// Recursively divides the array in half and sums each half, then combines.
 /// This reduces floating-point error accumulation compared to linear summation.
 ///
-/// See baygraph_design.md:520-521 for the numerical stability strategy.
+/// Uses a divide-and-conquer approach: recursively sum left and right halves,
+/// then combine. This improves numerical stability for large arrays by reducing
+/// the number of additions that accumulate rounding error.
 fn pairwise_sum(values: &[f64]) -> f64 {
     match values.len() {
         0 => 0.0,

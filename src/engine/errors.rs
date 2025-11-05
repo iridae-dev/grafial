@@ -10,7 +10,8 @@ use thiserror::Error;
 /// # Phase 7 Error Improvements
 ///
 /// Enhanced error types for better debugging and user feedback.
-/// See baygraph_design.md:533-536 for error handling strategy.
+/// All public APIs return Result<T, ExecError> to avoid panics in library code.
+/// Errors are converted to appropriate Python exceptions in bindings.
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum ExecError {

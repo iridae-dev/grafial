@@ -15,9 +15,11 @@
 //!
 //! ## Design
 //!
-//! The implementation follows the Bayesian inference specifications in baygraph_design.md:
-//! - Conjugate priors for efficient updates
-//! - Force operations for hard constraints (e.g., force_absent, force_value)
+//! The implementation uses conjugate priors for efficient Bayesian updates:
+//! - Normal-Normal conjugacy for Gaussian attributes (precision parameterization τ = 1/σ²)
+//! - Beta-Bernoulli conjugacy for independent edges (α, β parameters)
+//! - Dirichlet-Categorical conjugacy for competing edges (α_k concentrations)
+//! - Force operations for hard constraints (sets precision/concentrations to large finite values)
 //! - O(1) node/edge lookups via HashMap indexes
 //!
 //! ## Example
@@ -40,17 +42,24 @@ use smallvec::SmallVec;
 
 use crate::engine::errors::ExecError;
 
-// Bayesian inference constants per baygraph_design.md
-/// High precision value for force operations (baygraph_design.md:107, 133-135)
+// Bayesian inference constants
+/// High precision value for force operations.
+///
+/// Sets precision to 1e6 (large but finite) to create hard constraints while avoiding
+/// infinities. Used by force_value, force_present, force_absent, and force_choice.
 const FORCE_PRECISION: f64 = 1_000_000.0;
 
-/// Minimum precision for Gaussian posteriors (baygraph_design.md:203)
+/// Minimum precision for Gaussian posteriors.
+///
+/// Clips extremely small precision values to prevent division by zero in variance
+/// calculations (variance = 1/τ) and loss of significance.
 const MIN_PRECISION: f64 = 1e-6;
 
 /// Minimum observation precision to prevent numerical issues
 const MIN_OBS_PRECISION: f64 = 1e-12;
 
-/// Minimum Beta parameter value to enforce proper prior (baygraph_design.md:223)
+/// Minimum Beta parameter value to enforce proper prior.
+///
 /// Beta distribution requires α > 0 and β > 0 strictly. We enforce α ≥ 0.01, β ≥ 0.01
 /// as a numeric floor for stability and to prevent improper priors.
 const MIN_BETA_PARAM: f64 = 0.01;
@@ -59,13 +68,16 @@ const MIN_BETA_PARAM: f64 = 0.01;
 /// Dirichlet requires all α_k > 0. We enforce α_k ≥ 0.01 for numerical stability.
 const MIN_DIRICHLET_PARAM: f64 = 0.01;
 
-/// Maximum allowed deviation in standard deviations for outlier warnings
-/// See baygraph_design.md:211-213
+/// Maximum allowed deviation in standard deviations for outlier warnings.
+///
+/// If |x - μ| > OUTLIER_THRESHOLD_SIGMA × σ, issue a warning as this may indicate
+/// a potential outlier or data error.
 const OUTLIER_THRESHOLD_SIGMA: f64 = 10.0;
 
 /// A unique identifier for a node in the belief graph.
 ///
-/// See baygraph_design.md:471-486 for stable identifier requirements.
+/// NodeId implements Ord/PartialOrd for stable, deterministic iteration.
+/// Uses u32 internally for efficient storage and indexing.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -73,7 +85,8 @@ pub struct NodeId(pub u32);
 
 /// A unique identifier for an edge in the belief graph.
 ///
-/// See baygraph_design.md:471-486 for stable identifier requirements.
+/// EdgeId implements Ord/PartialOrd for stable, deterministic iteration.
+/// Uses u32 internally for efficient storage and indexing.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -82,7 +95,9 @@ pub struct EdgeId(pub u32);
 /// A Gaussian posterior distribution for continuous node attributes.
 ///
 /// Uses the precision parameterization (τ = 1/σ²) for efficient conjugate updates.
-/// See baygraph_design.md sections 93-101 for the update equations.
+/// Bayesian update formulas (Normal-Normal conjugacy):
+/// - τ_new = τ_old + τ_obs
+/// - μ_new = (τ_old × μ_old + τ_obs × x) / τ_new
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GaussianPosterior {
@@ -96,7 +111,8 @@ impl GaussianPosterior {
     /// Updates the expected value without changing precision.
     ///
     /// Soft update that adjusts the mean without increasing certainty.
-    /// See baygraph_design.md:275-276.
+    /// This is used by the `set_expectation` rule action to update attribute
+    /// expectations without modifying the precision (variance) of the posterior.
     pub fn set_expectation(&mut self, v: f64) {
         self.mean = v;
     }
@@ -114,7 +130,9 @@ impl GaussianPosterior {
     /// * `x` - The observed value
     /// * `tau_obs` - The observation precision (1/σ²_obs)
     ///
-    /// See baygraph_design.md:93-101.
+    /// Uses Normal-Normal conjugate update formulas:
+    /// - τ_new = τ_old + τ_obs
+    /// - μ_new = (τ_old × μ_old + τ_obs × x) / τ_new
     pub fn update(&mut self, x: f64, tau_obs: f64) {
         let tau_old = self.precision;
         let tau_obs = tau_obs.max(MIN_OBS_PRECISION);
@@ -128,7 +146,9 @@ impl GaussianPosterior {
     /// Forces the attribute to a specific value with very high certainty.
     ///
     /// Sets precision to FORCE_PRECISION (1e6), effectively creating a hard constraint.
-    /// See baygraph_design.md:107.
+    /// This corresponds to conditioning on an observation with effectively infinite
+    /// precision; subsequent finite-precision updates will have negligible effect
+    /// but remain well-defined.
     ///
     /// # Arguments
     ///
@@ -142,7 +162,8 @@ impl GaussianPosterior {
 /// A Beta posterior distribution for edge existence probability.
 ///
 /// Uses the Beta(α, β) parameterization for conjugate Bernoulli updates.
-/// The mean probability is α/(α+β). See baygraph_design.md:127-135.
+/// The mean probability is E[p] = α / (α + β).
+/// Bayesian update: increments α if present, β if absent.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BetaPosterior {
@@ -155,7 +176,8 @@ pub struct BetaPosterior {
 impl BetaPosterior {
     /// Forces the edge to be absent (α=1, β=1e6).
     ///
-    /// See baygraph_design.md:133-135.
+    /// Sets parameters to create a numerically stable approximation to a degenerate
+    /// belief (mean ≈ 0.000001). Further single observations will have negligible effect.
     pub fn force_absent(&mut self) {
         self.alpha = 1.0;
         self.beta = FORCE_PRECISION;
@@ -163,7 +185,8 @@ impl BetaPosterior {
 
     /// Forces the edge to be present (α=1e6, β=1).
     ///
-    /// See baygraph_design.md:133-135.
+    /// Sets parameters to create a numerically stable approximation to a degenerate
+    /// belief (mean ≈ 0.999999). Further single observations will have negligible effect.
     pub fn force_present(&mut self) {
         self.alpha = FORCE_PRECISION;
         self.beta = 1.0;
@@ -171,7 +194,8 @@ impl BetaPosterior {
 
     /// Performs a conjugate Beta-Bernoulli update.
     ///
-    /// Increments α if present, β if absent. See baygraph_design.md:127.
+    /// Increments α if present, β if absent. This is the standard conjugate update
+    /// for Beta-Bernoulli posteriors.
     ///
     /// # Arguments
     ///
@@ -194,8 +218,8 @@ impl BetaPosterior {
 /// A Dirichlet posterior distribution for competing edge probabilities.
 ///
 /// Uses Dirichlet(α_1, ..., α_K) parameterization for conjugate Categorical updates.
+/// Models mutually exclusive choices among K alternatives where probabilities sum to 1.
 /// The mean probabilities are E[π_k] = α_k / Σ_j α_j, with Σ_k π_k = 1.
-/// See competing_edges_design.md:§3.1 and baygraph_design.md:144-158.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DirichletPosterior {
@@ -384,7 +408,7 @@ pub struct CompetingGroupId(pub u32);
 /// A competing edge group representing mutually exclusive choices from a source.
 ///
 /// Groups edges from the same source node and edge type that share a Dirichlet posterior.
-/// See competing_edges_design.md:§2.1 and §7.
+/// This enforces the constraint that exactly one choice must be made (probabilities sum to 1).
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CompetingEdgeGroup {
@@ -577,7 +601,8 @@ pub struct EdgeData {
 /// Uses offset-based indexing into a contiguous edge ID array for O(1) access.
 /// This structure is precomputed and cached for performance.
 ///
-/// See baygraph_design.md:466-474 for the adjacency optimization strategy.
+/// The adjacency index stores ranges of edge IDs for each (node, edge_type) pair,
+/// allowing fast neighborhood queries without scanning all edges.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AdjacencyIndex {
@@ -733,8 +758,7 @@ pub(crate) enum GraphDelta {
 /// - Precomputed adjacency index with offset ranges for O(1) neighborhood access
 /// - Stable IDs (NodeId, EdgeId) for deterministic iteration
 /// - Structural sharing via Arc for efficient cloning
-///
-/// See baygraph_design.md:466-474 for optimization details.
+/// - Copy-on-write deltas for immutable graph semantics
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BeliefGraph {
@@ -1912,7 +1936,11 @@ impl BeliefGraph {
     /// Checks for NaN/Inf values, invalid precisions, Beta parameters outside
     /// valid range, and outlier values (> 10σ from mean).
     ///
-    /// See baygraph_design.md:199-227 for numerical stability requirements.
+    /// Validates numerical stability of all posteriors:
+    /// - Gaussian: precision ≥ MIN_PRECISION, no NaN/Inf in mean
+    /// - Beta: α ≥ MIN_BETA_PARAM, β ≥ MIN_BETA_PARAM, no NaN/Inf
+    /// - Dirichlet: all α_k ≥ MIN_DIRICHLET_PARAM, no NaN/Inf
+    /// - Outliers: warns if |x - μ| > 10σ for any attribute
     ///
     /// # Returns
     ///

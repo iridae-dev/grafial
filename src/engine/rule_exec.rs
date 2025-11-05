@@ -13,8 +13,9 @@
 //! 2. Evaluate the optional `where` clause with bound variables
 //! 3. Execute actions for each successful match (for_each mode) or first match
 //!
-//! See baygraph_design.md:524-527 for the execution model and baygraph_design.md:527
-//! for immutability requirements (working copies).
+//! Rules operate on immutable graphs: mutations are applied to a working copy (delta),
+//! and the original graph remains unchanged. The working copy is committed at the end
+//! of rule execution to produce the output graph.
 //!
 //! ## Expression Language
 //!
@@ -32,7 +33,8 @@
 //! ## Determinism
 //!
 //! Pattern matching iterates edges in stable order (sorted by EdgeId) to ensure
-//! deterministic rule execution. See baygraph_design.md:517-518.
+//! deterministic rule execution. This guarantees that the same input graph and rule
+//! always produce the same output, regardless of hash table iteration order.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -44,8 +46,10 @@ use crate::engine::query_plan::{QueryPlan, QueryPlanCache};
 use crate::frontend::ast::{ActionStmt, CallArg, ExprAst, PatternItem, RuleDef};
 
 // Phase 7: Fixpoint iteration configuration
-/// Maximum iterations for fixpoint rules to prevent infinite loops
-/// See baygraph_design.md:527-529
+/// Maximum iterations for fixpoint rules to prevent infinite loops.
+///
+/// If a fixpoint rule doesn't converge within this many iterations, execution
+/// terminates with an error to prevent infinite loops.
 const MAX_FIXPOINT_ITERATIONS: usize = 1000;
 
 /// Convergence tolerance for fixpoint rules
@@ -420,9 +424,9 @@ fn eval_where_with_exists(
 ///
 /// - `Let`: Evaluates an expression and stores it in a local variable
 /// - `SetExpectation`: Updates a node attribute's expected value (soft update)
+///   - Adjusts mean without changing precision (variance)
 /// - `ForceAbsent`: Forces an edge to be absent with high certainty
-///
-/// See baygraph_design.md:275-276 (set_expectation) and 133-135 (force_absent).
+///   - Sets Beta parameters to α=1, β=1e6 (mean ≈ 0.000001)
 pub fn execute_actions(
     graph: &mut BeliefGraph,
     actions: &[ActionStmt],
@@ -480,7 +484,9 @@ pub fn execute_actions(
 /// The maximum absolute difference across all attributes and probabilities.
 /// Returns 0.0 if graphs are identical or if either graph is empty.
 ///
-/// See baygraph_design.md:527-529 for fixpoint convergence strategy.
+/// Used to determine if a fixpoint rule has converged. Compares posterior means
+/// and probabilities between iterations to detect when changes fall below the
+/// convergence threshold.
 fn compute_max_change(old: &BeliefGraph, new: &BeliefGraph) -> f64 {
     let mut max_delta: f64 = 0.0;
 
@@ -522,7 +528,11 @@ fn compute_max_change(old: &BeliefGraph, new: &BeliefGraph) -> f64 {
 ///
 /// - Supports exactly one pattern item (no multi-pattern rules yet)
 ///
-/// See baygraph_design.md:524-527 for the execution model.
+/// Execution model:
+/// 1. Find all pattern matches (deterministic order by EdgeId)
+/// 2. Filter matches by where clause
+/// 3. Apply actions to working copy (immutable input preserved)
+/// 4. Return new graph with changes applied
 pub fn run_rule_for_each(input: &BeliefGraph, rule: &RuleDef) -> Result<BeliefGraph, ExecError> {
     run_rule_for_each_with_globals(input, rule, &HashMap::new())
 }
@@ -763,7 +773,11 @@ fn find_multi_pattern_matches(
 /// Applies the rule repeatedly until convergence (changes < FIXPOINT_TOLERANCE)
 /// or MAX_FIXPOINT_ITERATIONS is reached.
 ///
-/// See baygraph_design.md:527-529 for fixpoint iteration strategy.
+/// Fixpoint iteration strategy:
+/// - Run rule, compare output to input
+/// - If max change < FIXPOINT_TOLERANCE, converged
+/// - Otherwise, use output as new input and repeat
+/// - Terminates after MAX_FIXPOINT_ITERATIONS to prevent infinite loops
 pub fn run_rule_fixpoint(
     input: &BeliefGraph,
     rule: &RuleDef,
