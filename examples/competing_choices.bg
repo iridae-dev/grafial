@@ -1,0 +1,97 @@
+// Example: Competing Choices with Categorical Posterior
+// Demonstrates mutually exclusive routing where probabilities must sum to 1
+// This is fundamentally different from independent Bernoulli edges
+
+schema PacketRouting {
+  node Router {
+    latency: Real
+  }
+  edge ROUTES_TO { }
+}
+
+belief_model RoutingBeliefs on PacketRouting {
+  node Router {
+    latency ~ GaussianPosterior(prior_mean=50.0, prior_precision=0.1)
+  }
+  edge ROUTES_TO {
+    // Competing edges: each router routes to exactly ONE destination
+    // Probabilities sum to 1.0 within each group
+    exist ~ CategoricalPosterior(
+      group_by="source",
+      prior=uniform,
+      pseudo_count=1.0
+    )
+  }
+}
+
+evidence RoutingEvidence on RoutingBeliefs {
+  // Router R1 chooses R2 (probability increases for R2, decreases for others)
+  observe edge ROUTES_TO(Router["R1"], Router["R2"]) chosen
+  observe edge ROUTES_TO(Router["R1"], Router["R3"]) chosen  // R1 now uncertain between R2 and R3
+  
+  // Router R4 chooses R5
+  observe edge ROUTES_TO(Router["R4"], Router["R5"]) chosen
+  
+  // Dynamic discovery: R1 later routes to R6 (new category added automatically)
+  observe edge ROUTES_TO(Router["R1"], Router["R6"]) chosen
+}
+
+// Rule that uses winner() - deterministic decision when there's a clear winner
+rule OptimizeLatency on RoutingBeliefs {
+  pattern
+    (A:Router)-[ab:ROUTES_TO]->(B:Router)
+  
+  where
+    // Only apply if B is the clear winner (not tied)
+    winner(A, ROUTES_TO) == B
+    and E[B.latency] < E[A.latency]
+  
+  action {
+    // Route to faster destination
+    // But this is still probabilistic - we're updating beliefs, not forcing
+    set_expectation A.latency = E[A.latency] * 0.9
+  }
+  
+  mode: for_each
+}
+
+// Rule that detects high uncertainty (no clear winner)
+rule HandleUncertainRoute on RoutingBeliefs {
+  pattern
+    (A:Router)
+  
+  where
+    // High entropy means no clear winner - routing decision is uncertain
+    entropy(A, ROUTES_TO) > 1.0
+  
+  action {
+    // Flag for manual review or collect more evidence
+    // Could set a flag attribute or trigger alert
+  }
+  
+  mode: for_each
+}
+
+flow RoutingPipeline on RoutingBeliefs {
+  graph base = from_evidence RoutingEvidence
+  
+  // Apply optimization only when there's a clear winner
+  graph optimized = base |> apply_rule OptimizeLatency
+  
+  // Handle uncertain cases separately
+  graph reviewed = optimized |> apply_rule HandleUncertainRoute
+  
+  // Metrics that understand competing probabilities
+  metric avg_entropy = sum_nodes(
+    label=Router,
+    contrib=entropy(node, ROUTES_TO)
+  ) / count_nodes(label=Router)
+  
+  metric deterministic_routes = count_nodes(
+    label=Router,
+    where=entropy(node, ROUTES_TO) < 0.5
+  )
+  
+  export reviewed as "final_routing"
+}
+

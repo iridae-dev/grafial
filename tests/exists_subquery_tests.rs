@@ -59,7 +59,8 @@ fn exists_subquery_finds_matching_edge() {
     let result = run_rule_for_each(&g, &rule).unwrap();
     
     // Only e1 should match (has high prob and exists subquery finds n1 -> n2 with prob >= 0.9)
-    assert!(result.prob_mean(e1).unwrap() < 1e-5);
+    let prob = result.prob_mean(e1).unwrap();
+    assert!(prob < 1e-5, "Expected e1 prob < 1e-5, got {}", prob);
 }
 
 #[test]

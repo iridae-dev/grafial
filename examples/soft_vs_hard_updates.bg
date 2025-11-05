@@ -1,0 +1,107 @@
+// Example: Soft Updates vs Hard Constraints
+// Demonstrates the key difference: Bayesian updates preserve uncertainty,
+// while hard constraints would eliminate it. This is critical for probabilistic reasoning.
+
+schema ResourceAllocation {
+  node Resource {
+    allocation: Real
+    capacity: Real
+  }
+  edge ALLOCATED_TO { }
+}
+
+belief_model AllocationBeliefs on ResourceAllocation {
+  node Resource {
+    // Uncertain allocation: we observe usage but it's noisy
+    allocation ~ GaussianPosterior(
+      prior_mean=0.5,
+      prior_precision=0.1  // Weak prior - high uncertainty
+    )
+    capacity ~ GaussianPosterior(
+      prior_mean=1.0,
+      prior_precision=1.0
+    )
+  }
+  edge ALLOCATED_TO {
+    exist ~ BernoulliPosterior(prior=0.2, pseudo_count=5.0)
+  }
+}
+
+evidence InitialAllocation on AllocationBeliefs {
+  // Initial observations with uncertainty
+  observe Resource["R1"].allocation = 0.6
+  observe Resource["R2"].allocation = 0.4
+  observe Resource["R3"].allocation = 0.8
+  
+  observe edge ALLOCATED_TO(Resource["R1"], Resource["R1"]) present
+}
+
+// Rule that does SOFT updates: preserves uncertainty while shifting mean
+rule BalanceAllocation on AllocationBeliefs {
+  pattern
+    (A:Resource)-[ab:ALLOCATED_TO]->(B:Resource)
+  
+  where
+    prob(ab) >= 0.7
+    and E[A.allocation] > 0.8
+    and E[B.allocation] < 0.5
+  
+  action {
+    // SOFT UPDATE: set_expectation updates the mean but preserves precision
+    // The posterior distribution still has uncertainty - we're not forcing a value
+    let transfer = (E[A.allocation] - E[B.allocation]) * 0.2
+    set_expectation A.allocation = E[A.allocation] - transfer
+    set_expectation B.allocation = E[B.allocation] + transfer
+    
+    // Compare to a hard constraint (which we don't support):
+    // Hard: A.allocation = 0.7  (eliminates uncertainty)
+    // Soft: E[A.allocation] = 0.7  (preserves uncertainty, just shifts mean)
+  }
+  
+  mode: for_each
+}
+
+// Rule that uses force_absent: sets edge probability to near-zero
+// But this is still probabilistic (not exactly zero)
+rule DisconnectOverloaded on AllocationBeliefs {
+  pattern
+    (A:Resource)-[ab:ALLOCATED_TO]->(B:Resource)
+  
+  where
+    prob(ab) >= 0.5
+    and E[A.allocation] > 0.9
+    and E[B.allocation] > 0.9
+  
+  action {
+    // Force absent: sets probability to very low (but not exactly 0)
+    // This preserves the ability to update later if evidence changes
+    force_absent ab
+  }
+  
+  mode: for_each
+}
+
+flow AllocationFlow on AllocationBeliefs {
+  graph initial = from_evidence InitialAllocation
+  
+  // Soft updates: rebalance while preserving uncertainty
+  graph balanced = initial |> apply_rule BalanceAllocation
+  
+  // Hard actions: disconnect overloaded resources
+  graph disconnected = balanced |> apply_rule DisconnectOverloaded
+  
+  // Metrics that understand uncertainty
+  metric avg_allocation = sum_nodes(
+    label=Resource,
+    contrib=E[node.allocation]
+  ) / count_nodes(label=Resource)
+  
+  // Can compute probability of overload
+  metric overload_risk = sum_nodes(
+    label=Resource,
+    contrib=E[node.allocation] / E[node.capacity]
+  ) / count_nodes(label=Resource)
+  
+  export disconnected as "final_allocation"
+}
+

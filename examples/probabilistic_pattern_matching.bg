@@ -1,0 +1,134 @@
+// Example: Probabilistic Pattern Matching
+// Demonstrates how rules match based on probability distributions, not just
+// hard facts. This is fundamentally different from deterministic graph queries.
+
+schema SocialNetwork {
+  node Person {
+    influence: Real
+    trust_level: Real
+  }
+  edge FRIENDS { }
+  edge INFLUENCES { }
+}
+
+belief_model SocialBeliefs on SocialNetwork {
+  node Person {
+    influence ~ GaussianPosterior(prior_mean=0.5, prior_precision=0.1)
+    trust_level ~ GaussianPosterior(prior_mean=0.5, prior_precision=0.1)
+  }
+  // Friendship is uncertain - we observe connections but aren't 100% sure
+  edge FRIENDS {
+    exist ~ BernoulliPosterior(prior=0.1, pseudo_count=2.0)
+  }
+  edge INFLUENCES {
+    exist ~ BernoulliPosterior(prior=0.05, pseudo_count=5.0)
+  }
+}
+
+evidence SocialEvidence on SocialBeliefs {
+  // Initial observations: some friendships are more certain than others
+  observe edge FRIENDS(Person["Alice"], Person["Bob"]) present
+  observe edge FRIENDS(Person["Alice"], Person["Bob"]) present  // Repeated evidence strengthens belief
+  observe edge FRIENDS(Person["Bob"], Person["Carol"]) present
+  
+  // Influence relationships
+  observe edge INFLUENCES(Person["Alice"], Person["Bob"]) present
+  
+  // Person attributes
+  observe Person["Alice"].influence = 0.8
+  observe Person["Bob"].influence = 0.6
+  observe Person["Carol"].influence = 0.4
+}
+
+// Rule that matches probabilistically: find influential people who likely
+// influence their friends, even if we're not 100% certain
+rule PropagateInfluence on SocialBeliefs {
+  pattern
+    (A:Person)-[ab:FRIENDS]->(B:Person),
+    (A:Person)-[ai:INFLUENCES]->(B:Person)
+  
+  where
+    // Probabilistic matching: match if P(friends) >= 0.7 AND P(influences) >= 0.6
+    // This is a soft threshold - not a hard boolean
+    prob(ab) >= 0.7
+    and prob(ai) >= 0.6
+    and E[A.influence] > E[B.influence]
+  
+  action {
+    // Soft update: increase B's influence based on A's, but preserve uncertainty
+    let influence_transfer = (E[A.influence] - E[B.influence]) * 0.1
+    set_expectation B.influence = E[B.influence] + influence_transfer
+  }
+  
+  mode: for_each
+}
+
+// Rule that uses exists subquery to find indirect connections
+rule IndirectInfluence on SocialBeliefs {
+  pattern
+    (A:Person)-[ab:FRIENDS]->(B:Person)
+  
+  where
+    // A influences B if A influences someone who influences B
+    // This is a probabilistic reachability query
+    prob(ab) >= 0.8
+    and exists (A)-[ax:INFLUENCES]->(X) where prob(ax) >= 0.7
+    and exists (X)-[xb:INFLUENCES]->(B) where prob(xb) >= 0.7
+    and X != A
+    and X != B
+  
+  action {
+    // Indirect influence: weaker than direct
+    let influence_transfer = (E[A.influence] - E[B.influence]) * 0.05
+    set_expectation B.influence = E[B.influence] + influence_transfer
+  }
+  
+  mode: for_each
+}
+
+// Rule that prunes low-probability edges while preserving uncertainty
+rule PruneWeakConnections on SocialBeliefs {
+  pattern
+    (A:Person)-[ab:FRIENDS]->(B:Person)
+  
+  where
+    // Only remove if we're reasonably certain it doesn't exist
+    prob(ab) < 0.1
+  
+  action {
+    // Force absent: but this is still probabilistic (sets to near-zero, not exactly zero)
+    force_absent ab
+  }
+  
+  mode: for_each
+}
+
+flow SocialAnalysis on SocialBeliefs {
+  graph base = from_evidence SocialEvidence
+  
+  // Apply direct influence propagation
+  graph step1 = base |> apply_rule PropagateInfluence
+  
+  // Apply indirect influence
+  graph step2 = step1 |> apply_rule IndirectInfluence
+  
+  // Clean up weak connections
+  graph cleaned = step2 |> apply_rule PruneWeakConnections
+  
+  // Metrics that understand probabilistic structure
+  metric avg_influence = sum_nodes(
+    label=Person,
+    contrib=E[node.influence]
+  ) / count_nodes(label=Person)
+  
+  metric avg_strong_connections = avg_degree(Person, FRIENDS, min_prob=0.8)
+  
+  // Count nodes with many weak connections (uncertain structure)
+  metric uncertain_connections = count_nodes(
+    label=Person,
+    where=degree(node, min_prob=0.3) > degree(node, min_prob=0.7)
+  )
+  
+  export cleaned as "influence_graph"
+}
+

@@ -266,6 +266,10 @@ impl<'a> RuleExprContext<'a> {
         negated: bool,
         graph: &BeliefGraph,
     ) -> Result<f64, ExecError> {
+        // Need to ensure graph has deltas applied so find_candidate_edges can see all edges
+        // But we can't mutate graph, so we need find_candidate_edges to handle deltas
+        // Actually, find_candidate_edges uses graph.edges() which only returns base edges
+        // So we need to make find_candidate_edges delta-aware, or ensure graph has deltas applied
         let candidates = find_candidate_edges(graph, &pattern.edge.ty);
 
         for edge in candidates {
@@ -504,7 +508,9 @@ pub fn run_rule_for_each_with_globals(
     rule: &RuleDef,
     globals: &HashMap<String, f64>,
 ) -> Result<BeliefGraph, ExecError> {
+    // Clone and ensure deltas are applied so find_candidate_edges can see all edges
     let mut work = input.clone();
+    work.ensure_owned();
 
     if rule.patterns.is_empty() {
         return Err(ExecError::ValidationError("rule must have at least one pattern".into()));
@@ -513,6 +519,7 @@ pub fn run_rule_for_each_with_globals(
     // Single-pattern path: optimized for the common case (no join needed)
     if rule.patterns.len() == 1 {
         let pat = &rule.patterns[0];
+        // Use input graph for candidate finding (we want to iterate over original edges)
         let candidates = find_candidate_edges(input, &pat.edge.ty);
 
         for edge in candidates {
@@ -525,6 +532,8 @@ pub fn run_rule_for_each_with_globals(
             bindings.node_vars.insert(pat.dst.var.clone(), edge.dst);
             bindings.edge_vars.insert(pat.edge.var.clone(), edge.id);
 
+            // Evaluate where clause against input graph (original state)
+            // This ensures where clause evaluation is consistent and doesn't depend on action order
             if !evaluate_where_clause(&rule.where_expr, &bindings, globals, input)? {
                 continue;
             }
@@ -572,10 +581,30 @@ fn find_candidate_edges<'a>(
     graph: &'a BeliefGraph,
     edge_type: &str,
 ) -> Vec<&'a crate::engine::graph::EdgeData> {
-    let edges = graph.edges();
-    let mut candidates: Vec<_> = edges.iter()
-        .filter(|e| e.ty == edge_type)
-        .collect();
+    // Collect edges from both base and delta
+    let mut candidates: Vec<_> = Vec::new();
+    
+    // First, collect all edge IDs we've seen (to avoid duplicates)
+    let mut seen_ids = std::collections::HashSet::new();
+    
+    // Add edges from base graph
+    for edge in graph.edges() {
+        if edge.ty == edge_type {
+            seen_ids.insert(edge.id);
+            candidates.push(edge);
+        }
+    }
+    
+    // Add edges from delta (checking for duplicates)
+    for change in graph.delta() {
+        if let crate::engine::graph::GraphDelta::EdgeChange { id, edge } = change {
+            if edge.ty == edge_type && !seen_ids.contains(id) {
+                seen_ids.insert(*id);
+                candidates.push(edge);
+            }
+        }
+    }
+    
     candidates.sort_by_key(|e| e.id);
     candidates
 }

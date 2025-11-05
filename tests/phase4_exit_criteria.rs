@@ -240,6 +240,9 @@ fn build_evidence_graph(_evidence: &EvidenceDef) -> Result<BeliefGraph, ExecErro
         }), // prob = 0.05 < 0.5
     });
 
+    // Apply deltas before returning to ensure nodes() and edges() work correctly
+    graph.ensure_owned();
+
     Ok(graph)
 }
 

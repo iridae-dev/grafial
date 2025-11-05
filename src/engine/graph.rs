@@ -798,7 +798,7 @@ impl BeliefGraph {
     /// 
     /// This is called when we need exclusive access (e.g., for serialization, or when
     /// delta grows too large). If the inner data is shared, creates a copy and applies deltas.
-    pub(crate) fn ensure_owned(&mut self) {
+    pub fn ensure_owned(&mut self) {
         if Arc::strong_count(&self.inner) > 1 {
             // Clone the inner data to get exclusive ownership
             let inner = Arc::try_unwrap(self.inner.clone()).unwrap_or_else(|arc| (*arc).clone());
