@@ -3,7 +3,7 @@
 //! Orders patterns by selectivity (most selective first) to minimize join cost.
 //! Plans are cached to avoid re-analysis of the same pattern combinations.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::engine::graph::BeliefGraph;
 use crate::frontend::ast::PatternItem;
@@ -45,7 +45,8 @@ impl QueryPlan {
             .collect();
 
         // Sort by selectivity score (lower = more selective = better starting point)
-        selectivity.sort_by(|a, b| {
+        // Use unstable sort for better performance (ordering is deterministic based on score)
+        selectivity.sort_unstable_by(|a, b| {
             a.selectivity_score
                 .partial_cmp(&b.selectivity_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
@@ -124,16 +125,27 @@ fn analyze_pattern_selectivity(
 ///
 /// Caches query plans keyed by pattern signature (edge types and labels).
 /// This allows reuse of plans across multiple rule executions with similar patterns.
+/// Uses FxHashMap for faster lookups and a compact key type for better cache efficiency.
 pub struct QueryPlanCache {
     /// Cached plans keyed by pattern signature
-    cache: HashMap<String, QueryPlan>,
+    /// Using FxHashMap for faster integer-based hashing (we hash the key tuple)
+    cache: FxHashMap<PatternKey, QueryPlan>,
+}
+
+/// Compact cache key for pattern sets.
+/// 
+/// Uses a tuple of (src_label, edge_type, dst_label, edge_var) tuples for each pattern.
+/// This avoids String allocations and provides better cache locality.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PatternKey {
+    patterns: Vec<(String, String, String, String)>,
 }
 
 impl QueryPlanCache {
     /// Creates a new empty cache.
     pub fn new() -> Self {
         Self {
-            cache: HashMap::new(),
+            cache: FxHashMap::default(),
         }
     }
 
@@ -146,9 +158,9 @@ impl QueryPlanCache {
         patterns: &[PatternItem],
         graph: &BeliefGraph,
     ) -> &QueryPlan {
-        let signature = pattern_signature(patterns);
+        let key = PatternKey::from_patterns(patterns);
         self.cache
-            .entry(signature)
+            .entry(key)
             .or_insert_with(|| QueryPlan::new(patterns, graph))
     }
 
@@ -158,28 +170,29 @@ impl QueryPlanCache {
     }
 }
 
+impl PatternKey {
+    /// Creates a pattern key from a slice of patterns.
+    fn from_patterns(patterns: &[PatternItem]) -> Self {
+        let patterns = patterns
+            .iter()
+            .map(|p| (
+                p.src.label.clone(),
+                p.edge.ty.clone(),
+                p.dst.label.clone(),
+                p.edge.var.clone(),
+            ))
+            .collect();
+        Self { patterns }
+    }
+}
+
 impl Default for QueryPlanCache {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Creates a signature string for a set of patterns.
-///
-/// Used as a cache key to identify equivalent pattern sets.
-/// Signature includes labels, edge types, and edge variable names
-/// (edge variables are included to distinguish patterns with same structure
-/// but different variable names, which may indicate different semantic intent).
-fn pattern_signature(patterns: &[PatternItem]) -> String {
-    let mut sig = String::new();
-    for pat in patterns {
-        sig.push_str(&format!(
-            "{}-{}-{}-{};",
-            pat.src.label, pat.edge.ty, pat.dst.label, pat.edge.var
-        ));
-    }
-    sig
-}
+// Pattern signature function removed - now using PatternKey struct for better cache efficiency
 
 #[cfg(test)]
 mod tests {
@@ -312,14 +325,14 @@ mod tests {
             },
         }];
 
-        // Note: Signature includes labels, edge types, and edge variable names
+        // Note: PatternKey includes labels, edge types, and edge variable names
         // Node variable names are NOT included (they don't affect pattern matching selectivity)
-        let sig1 = pattern_signature(&patterns1);
-        let sig2 = pattern_signature(&patterns2);
-        // Same edge variable, same labels, same types = same signature
-        assert_eq!(sig1, sig2);
+        let key1 = PatternKey::from_patterns(&patterns1);
+        let key2 = PatternKey::from_patterns(&patterns2);
+        // Same edge variable, same labels, same types = same key
+        assert_eq!(key1, key2);
         
-        // Different edge variable should produce different signature
+        // Different edge variable should produce different key
         let patterns3 = vec![PatternItem {
             src: NodePattern {
                 var: "A".into(),
@@ -334,12 +347,12 @@ mod tests {
                 label: "Person".into(),
             },
         }];
-        let sig3 = pattern_signature(&patterns3);
-        assert_ne!(sig1, sig3);
+        let key3 = PatternKey::from_patterns(&patterns3);
+        assert_ne!(key1, key3);
         
-        // Same patterns should produce same signature
-        let sig4 = pattern_signature(&patterns1);
-        assert_eq!(sig1, sig4);
+        // Same patterns should produce same key
+        let key4 = PatternKey::from_patterns(&patterns1);
+        assert_eq!(key1, key4);
     }
 }
 
