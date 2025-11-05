@@ -35,6 +35,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::engine::errors::ExecError;
@@ -395,7 +396,7 @@ pub struct CompetingEdgeGroup {
     /// Destination nodes (categories) in order
     pub categories: Vec<NodeId>,
     /// Mapping from destination NodeId to category index
-    pub category_index: HashMap<NodeId, usize>,
+    pub category_index: FxHashMap<NodeId, usize>,
     /// Dirichlet posterior for the probability distribution
     pub posterior: DirichletPosterior,
 }
@@ -422,7 +423,7 @@ impl CompetingEdgeGroup {
             posterior.num_categories(),
             "Number of categories must match posterior dimensions"
         );
-        let category_index: HashMap<NodeId, usize> = categories
+        let category_index: FxHashMap<NodeId, usize> = categories
             .iter()
             .enumerate()
             .map(|(i, &node_id)| (node_id, i))
@@ -537,7 +538,7 @@ impl EdgePosterior {
     ///
     /// For independent edges: E[p] = α / (α + β)
     /// For competing edges: requires access to the group's Dirichlet posterior
-    pub fn mean_probability(&self, groups: &HashMap<CompetingGroupId, CompetingEdgeGroup>) -> Result<f64, ExecError> {
+    pub fn mean_probability(&self, groups: &FxHashMap<CompetingGroupId, CompetingEdgeGroup>) -> Result<f64, ExecError> {
         match self {
             Self::Independent(beta) => Ok(beta.mean_probability()),
             Self::Competing {
@@ -670,11 +671,11 @@ pub(crate) struct BeliefGraphInner {
     /// All edges in the graph
     pub(crate) edges: Vec<EdgeData>,
     /// Competing edge groups (for Dirichlet-Categorical posteriors)
-    pub(crate) competing_groups: HashMap<CompetingGroupId, CompetingEdgeGroup>,
+    pub(crate) competing_groups: FxHashMap<CompetingGroupId, CompetingEdgeGroup>,
     /// Index mapping NodeId to position in nodes vector
-    pub(crate) node_index: HashMap<NodeId, usize>,
+    pub(crate) node_index: FxHashMap<NodeId, usize>,
     /// Index mapping EdgeId to position in edges vector
-    pub(crate) edge_index: HashMap<EdgeId, usize>,
+    pub(crate) edge_index: FxHashMap<EdgeId, usize>,
     /// Cached adjacency index for fast neighborhood queries (Phase 7)
     pub(crate) adjacency: Option<AdjacencyIndex>,
 }
@@ -785,9 +786,9 @@ impl BeliefGraphInner {
         Self {
             nodes: Vec::new(),
             edges: Vec::new(),
-            competing_groups: HashMap::new(),
-            node_index: HashMap::new(),
-            edge_index: HashMap::new(),
+            competing_groups: FxHashMap::default(),
+            node_index: FxHashMap::default(),
+            edge_index: FxHashMap::default(),
             adjacency: None,
         }
     }
@@ -984,14 +985,14 @@ impl BeliefGraph {
     }
 
     /// Accessor for competing_groups (read-only).
-    pub fn competing_groups(&self) -> &HashMap<CompetingGroupId, CompetingEdgeGroup> {
+    pub fn competing_groups(&self) -> &FxHashMap<CompetingGroupId, CompetingEdgeGroup> {
         &self.inner.competing_groups
     }
 
     /// Gets mutable access to competing_groups, ensuring exclusive ownership first.
     /// 
     /// This is public for testing purposes only.
-    pub fn competing_groups_mut(&mut self) -> &mut HashMap<CompetingGroupId, CompetingEdgeGroup> {
+    pub fn competing_groups_mut(&mut self) -> &mut FxHashMap<CompetingGroupId, CompetingEdgeGroup> {
         self.ensure_owned();
         let inner = Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
         &mut inner.competing_groups
@@ -1205,9 +1206,29 @@ impl BeliefGraph {
     ///
     /// Number of outgoing edges meeting the probability threshold
     pub fn degree_outgoing(&self, node: NodeId, min_prob: f64) -> usize {
+        // Optimization: If adjacency is built and delta is empty, use fast path
+        if let Some(adj) = &self.inner.adjacency {
+            if self.delta.is_empty() {
+                // Fast path: use adjacency index to get only this node's edges
+                // O(neighbors) instead of O(E) - much better for sparse graphs
+                let edge_ids = adj.get_all_edges(node);
+                let mut count = 0;
+                for &eid in &edge_ids {
+                    if let Some(e) = self.edge(eid) {
+                        let prob = e.exist
+                            .mean_probability(&self.inner.competing_groups)
+                            .unwrap_or(0.0);
+                        if prob >= min_prob {
+                            count += 1;
+                        }
+                    }
+                }
+                return count;
+            }
+        }
+
+        // Slow path: scan all edges (current implementation handles delta correctly)
         // For iteration, we need to consider both base and delta
-        // Apply delta temporarily if needed (but we can't mutate self)
-        // Actually, we can iterate through known edge IDs and check each
         let mut count = 0;
         
         // Check base edges
@@ -1224,10 +1245,10 @@ impl BeliefGraph {
         
         // Check delta edges (new or modified)
         for change in &self.delta {
-            if let GraphDelta::EdgeChange { id, edge } = change {
+            if let GraphDelta::EdgeChange { id: _, edge } = change {
                 if edge.src == node {
                     // Check if this edge is in base (if so, we already counted it)
-                    let in_base = self.inner.edge_index.contains_key(id);
+                    let in_base = self.inner.edge_index.contains_key(&edge.id);
                     if !in_base {
                         // New edge from delta
                         let prob = edge.exist
@@ -1245,7 +1266,7 @@ impl BeliefGraph {
                             .unwrap_or(0.0);
                         if prob >= min_prob {
                             // Find the old edge to see if we counted it
-                            if let Some(&old_idx) = self.inner.edge_index.get(id) {
+                            if let Some(&old_idx) = self.inner.edge_index.get(&edge.id) {
                                 if let Some(old_e) = self.inner.edges.get(old_idx) {
                                     let old_prob = old_e.exist
                                         .mean_probability(&self.inner.competing_groups)
@@ -1259,7 +1280,7 @@ impl BeliefGraph {
                         } else {
                             // New version doesn't meet threshold
                             // Check if old version did
-                            if let Some(&old_idx) = self.inner.edge_index.get(id) {
+                            if let Some(&old_idx) = self.inner.edge_index.get(&edge.id) {
                                 if let Some(old_e) = self.inner.edges.get(old_idx) {
                                     let old_prob = old_e.exist
                                         .mean_probability(&self.inner.competing_groups)

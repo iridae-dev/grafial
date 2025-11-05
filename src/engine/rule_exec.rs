@@ -56,12 +56,36 @@ const FIXPOINT_TOLERANCE: f64 = 1e-6;
 /// Maps pattern variables (from rule patterns) to concrete graph elements.
 /// For example, pattern `(A:Person)-[e:KNOWS]->(B:Person)` creates bindings
 /// for variables A, B (nodes) and e (edge).
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct MatchBindings {
     /// Maps node variable names to node IDs
     pub node_vars: HashMap<String, NodeId>,
     /// Maps edge variable names to edge IDs
     pub edge_vars: HashMap<String, EdgeId>,
+}
+
+impl Default for MatchBindings {
+    fn default() -> Self {
+        Self {
+            node_vars: HashMap::new(),
+            edge_vars: HashMap::new(),
+        }
+    }
+}
+
+impl MatchBindings {
+    /// Creates bindings with pre-allocated capacity based on expected pattern count.
+    ///
+    /// Estimates: 2 nodes per pattern (src + dst), 1 edge per pattern.
+    /// This avoids multiple reallocations during pattern matching.
+    pub fn with_capacity(patterns: &[PatternItem]) -> Self {
+        let estimated_nodes = patterns.len() * 2;  // src + dst per pattern
+        let estimated_edges = patterns.len();
+        Self {
+            node_vars: HashMap::with_capacity(estimated_nodes),
+            edge_vars: HashMap::with_capacity(estimated_edges),
+        }
+    }
 }
 
 /// Local variable storage for rule action execution.
@@ -278,7 +302,11 @@ impl<'a> RuleExprContext<'a> {
             }
 
             // Build subquery bindings, validating compatibility with parent bindings
-            let mut subquery_bindings = MatchBindings::default();
+            // Subquery has single pattern, so estimate 2 nodes + 1 edge
+            let mut subquery_bindings = MatchBindings {
+                node_vars: HashMap::with_capacity(2),
+                edge_vars: HashMap::with_capacity(1),
+            };
             
             // Source node: must match parent binding if already bound
             if let Some(&parent_node) = self.bindings.node_vars.get(&pattern.src.var) {
@@ -508,10 +536,6 @@ pub fn run_rule_for_each_with_globals(
     rule: &RuleDef,
     globals: &HashMap<String, f64>,
 ) -> Result<BeliefGraph, ExecError> {
-    // Clone and ensure deltas are applied so find_candidate_edges can see all edges
-    let mut work = input.clone();
-    work.ensure_owned();
-
     if rule.patterns.is_empty() {
         return Err(ExecError::ValidationError("rule must have at least one pattern".into()));
     }
@@ -522,12 +546,14 @@ pub fn run_rule_for_each_with_globals(
         // Use input graph for candidate finding (we want to iterate over original edges)
         let candidates = find_candidate_edges(input, &pat.edge.ty);
 
+        // First pass: collect matches (read-only, no clone needed)
+        let mut matches = Vec::new();
         for edge in candidates {
             if !matches_node_labels(input, edge, pat)? {
                 continue;
             }
 
-            let mut bindings = MatchBindings::default();
+            let mut bindings = MatchBindings::with_capacity(&rule.patterns);
             bindings.node_vars.insert(pat.src.var.clone(), edge.src);
             bindings.node_vars.insert(pat.dst.var.clone(), edge.dst);
             bindings.edge_vars.insert(pat.edge.var.clone(), edge.id);
@@ -538,6 +564,21 @@ pub fn run_rule_for_each_with_globals(
                 continue;
             }
 
+            matches.push(bindings);
+        }
+
+        // If no matches, return input graph (no clone needed)
+        if matches.is_empty() {
+            return Ok(input.clone());
+        }
+
+        // Second pass: clone only if we have matches to process
+        // Clone and ensure deltas are applied so find_candidate_edges can see all edges
+        let mut work = input.clone();
+        work.ensure_owned();
+
+        // Apply actions for all matches
+        for bindings in matches {
             execute_actions(&mut work, &rule.actions, &bindings, globals)?;
         }
 
@@ -552,8 +593,10 @@ pub fn run_rule_for_each_with_globals(
         .map(|&idx| rule.patterns[idx].clone())
         .collect();
     
+    // First pass: collect all matches (read-only, no clone needed)
     let mut matches = Vec::new();
-    find_multi_pattern_matches(input, &ordered_patterns, 0, &MatchBindings::default(), &mut matches)?;
+    let initial_bindings = MatchBindings::with_capacity(&rule.patterns);
+    find_multi_pattern_matches(input, &ordered_patterns, 0, &initial_bindings, &mut matches)?;
 
     // Deterministic ordering: sort by EdgeId tuples for reproducibility
     matches.sort_by(|a, b| {
@@ -564,10 +607,25 @@ pub fn run_rule_for_each_with_globals(
         a_edges.cmp(&b_edges)
     });
 
+    // Filter matches by where clause (still read-only)
+    let mut filtered_matches = Vec::new();
     for bindings in matches {
-        if !evaluate_where_clause(&rule.where_expr, &bindings, globals, input)? {
-            continue;
+        if evaluate_where_clause(&rule.where_expr, &bindings, globals, input)? {
+            filtered_matches.push(bindings);
         }
+    }
+
+    // If no matches, return input graph (no clone needed)
+    if filtered_matches.is_empty() {
+        return Ok(input.clone());
+    }
+
+    // Second pass: clone only if we have matches to process
+    let mut work = input.clone();
+    work.ensure_owned();
+
+    // Apply actions to working copy
+    for bindings in filtered_matches {
         execute_actions(&mut work, &rule.actions, &bindings, globals)?;
     }
 
