@@ -2420,6 +2420,9 @@ mod tests {
         ));
 
         g.observe_edge(EdgeId(1), true).unwrap();
+        
+        // Apply fine-grained deltas to see the updated edge
+        g.ensure_owned();
 
         let edge = g.edge(EdgeId(1)).unwrap();
         if let EdgePosterior::Independent(beta) = &edge.exist {
@@ -2439,6 +2442,9 @@ mod tests {
         ));
 
         g.force_edge_present(EdgeId(1)).unwrap();
+        
+        // Apply fine-grained deltas to see the updated edge
+        g.ensure_owned();
 
         let edge = g.edge(EdgeId(1)).unwrap();
         if let EdgePosterior::Independent(beta) = &edge.exist {
@@ -2471,7 +2477,7 @@ mod tests {
         let mut g = BeliefGraph::default();
         g.insert_node(NodeData {
             id: NodeId(1),
-            label: "N".into(),
+            label: Arc::from("N"),
             attrs: HashMap::from([
                 ("x".into(), GaussianPosterior { mean: 0.0, precision: 1.0 }),
             ]),
@@ -2481,6 +2487,9 @@ mod tests {
 
         let mean = g.expectation(NodeId(1), "x").unwrap();
         assert!((mean - 42.0).abs() < 1e-9);
+        
+        // Apply fine-grained deltas to see the updated node
+        g.ensure_owned();
 
         let node = g.node(NodeId(1)).unwrap();
         let attr = node.attrs.get("x").unwrap();
