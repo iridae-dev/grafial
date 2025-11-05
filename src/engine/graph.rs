@@ -267,7 +267,7 @@ impl DirichletPosterior {
     /// Updates the posterior with an observation of a chosen category.
     ///
     /// Performs a conjugate Dirichlet-Categorical update: increments α_k for the chosen category.
-    /// See competing_edges_design.md:§4.2 and baygraph_design.md:154-156.
+    /// This is the standard update when observing that category k was chosen.
     ///
     /// # Arguments
     ///
@@ -283,7 +283,8 @@ impl DirichletPosterior {
     /// Updates the posterior with an observation that a category was not chosen.
     ///
     /// Distributes probability mass uniformly among all other categories.
-    /// This is a rare operation; see competing_edges_design.md:§4.2.
+    /// This is a rare operation used when observing negative evidence (that a specific
+    /// category was not chosen, but we don't know which one was).
     ///
     /// # Arguments
     ///
@@ -307,7 +308,8 @@ impl DirichletPosterior {
     /// Forces a specific category to be chosen with very high certainty.
     ///
     /// Sets α_k = 1e6 for the chosen category, α_j = 1.0 for others.
-    /// See competing_edges_design.md:§4.2.
+    /// This creates a numerically stable approximation to a degenerate distribution
+    /// where category k has probability ≈ 1.0.
     ///
     /// # Arguments
     ///
