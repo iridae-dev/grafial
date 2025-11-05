@@ -71,7 +71,7 @@ fn build_graph_from_evidence_creates_nodes() {
     // Should have created one node
     assert_eq!(graph.nodes().len(), 1);
     let node = &graph.nodes()[0];
-    assert_eq!(node.label, "Person");
+    assert_eq!(node.label.as_ref(), "Person");
     
     // Check that attribute was observed (mean should be updated from 0.0)
     let score = graph.expectation(node.id, "score").unwrap();
@@ -104,7 +104,7 @@ fn build_graph_from_evidence_creates_edges() {
     assert_eq!(graph.edges().len(), 1);
     
     let edge = &graph.edges()[0];
-    assert_eq!(edge.ty, "KNOWS");
+    assert_eq!(edge.ty.as_ref(), "KNOWS");
     
     // After observing present, probability should be > 0.5
     let prob = graph.prob_mean(edge.id).unwrap();

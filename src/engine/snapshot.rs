@@ -175,3 +175,168 @@ pub fn load_snapshot_binary(data: &[u8]) -> Result<Snapshot, ExecError> {
     Ok(snapshot)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::graph::BeliefGraph;
+    use std::sync::Arc;
+
+    fn create_test_graph() -> BeliefGraph {
+        use std::collections::HashMap;
+        use crate::engine::graph::{GaussianPosterior, BetaPosterior};
+        let mut g = BeliefGraph::default();
+        let n1 = g.add_node("Person".to_string(), HashMap::new());
+        let n2 = g.add_node("Person".to_string(), HashMap::new());
+        let beta = BetaPosterior { alpha: 1.0, beta: 1.0 };
+        let _e1 = g.add_edge(n1, n2, "REL".to_string(), beta);
+        g
+    }
+
+    #[test]
+    fn test_snapshot_new_without_registry_hash() {
+        let graph = create_test_graph();
+        let snapshot = Snapshot::new(graph, None);
+        
+        assert_eq!(snapshot.metadata.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(snapshot.metadata.registry_hash, None);
+        assert_eq!(snapshot.graph.nodes().len(), 2);
+        assert_eq!(snapshot.graph.edges().len(), 1);
+    }
+
+    #[test]
+    fn test_snapshot_new_with_registry_hash() {
+        let graph = create_test_graph();
+        let hash = Some("abc123".to_string());
+        let snapshot = Snapshot::new(graph, hash.clone());
+        
+        assert_eq!(snapshot.metadata.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(snapshot.metadata.registry_hash, hash);
+    }
+
+    #[test]
+    fn test_snapshot_new_applies_pending_deltas() {
+        use std::collections::HashMap;
+        use crate::engine::graph::GaussianPosterior;
+        let mut graph = BeliefGraph::default();
+        let mut attrs = HashMap::new();
+        attrs.insert("score".to_string(), GaussianPosterior { mean: 0.0, precision: 0.01 });
+        let n1 = graph.add_node("Person".to_string(), attrs);
+        let node_id = n1;
+        
+        // Make a mutation that creates a delta
+        graph.set_expectation(node_id, "score", 10.0).unwrap();
+        
+        // Create snapshot - should apply delta
+        let snapshot = Snapshot::new(graph, None);
+        
+        // Graph should be accessible and have the update
+        let value = snapshot.graph.expectation(node_id, "score").unwrap();
+        assert_eq!(value, 10.0);
+    }
+
+    #[test]
+    fn test_snapshot_metadata_contains_enabled_features() {
+        let graph = create_test_graph();
+        let _snapshot = Snapshot::new(graph, None);
+        
+        // Should always contain at least the features we enable
+        // (serde is enabled in tests, so we should see it)
+        #[cfg(feature = "serde")]
+        assert!(_snapshot.metadata.features.contains(&"serde".to_string()));
+    }
+
+    #[test]
+    fn test_validate_compatibility_succeeds_for_current_version() {
+        let graph = create_test_graph();
+        let snapshot = Snapshot::new(graph, None);
+        
+        // Should succeed for snapshot created with current version
+        assert!(snapshot.validate_compatibility().is_ok());
+    }
+
+    #[test]
+    fn test_validate_compatibility_fails_for_version_mismatch() {
+        let graph = create_test_graph();
+        let mut snapshot = Snapshot::new(graph, None);
+        
+        // Change version to something different
+        snapshot.metadata.version = "0.99.0".to_string();
+        
+        let result = snapshot.validate_compatibility();
+        assert!(result.is_err());
+        
+        if let Err(ExecError::ValidationError(msg)) = result {
+            assert!(msg.contains("version mismatch"));
+            assert!(msg.contains("0.99.0"));
+            assert!(msg.contains(env!("CARGO_PKG_VERSION")));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_validate_compatibility_fails_for_missing_feature() {
+        let graph = create_test_graph();
+        let mut snapshot = Snapshot::new(graph, None);
+        
+        // Add a feature that doesn't exist
+        snapshot.metadata.features.push("nonexistent_feature".to_string());
+        
+        let result = snapshot.validate_compatibility();
+        assert!(result.is_err());
+        
+        if let Err(ExecError::ValidationError(msg)) = result {
+            assert!(msg.contains("requires feature"));
+            assert!(msg.contains("nonexistent_feature"));
+            assert!(msg.contains("not enabled"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[test]
+    fn test_validate_compatibility_succeeds_with_subset_of_features() {
+        let graph = create_test_graph();
+        let mut snapshot = Snapshot::new(graph, None);
+        
+        // Remove all features (snapshot created with no features)
+        snapshot.metadata.features.clear();
+        
+        // Should still validate (snapshot doesn't require any features)
+        assert!(snapshot.validate_compatibility().is_ok());
+    }
+
+    #[test]
+    fn test_validate_compatibility_succeeds_with_available_features() {
+        let graph = create_test_graph();
+        let snapshot = Snapshot::new(graph, None);
+        
+        // Create a new snapshot with same features as current
+        // Just use the features from the original snapshot
+        let compatible_snapshot = Snapshot {
+            graph: snapshot.graph.clone(),
+            metadata: SnapshotMetadata {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                features: snapshot.metadata.features.clone(),
+                registry_hash: None,
+            },
+        };
+        
+        assert!(compatible_snapshot.validate_compatibility().is_ok());
+    }
+
+    #[test]
+    fn test_get_enabled_features() {
+        // Test that snapshot includes features
+        let graph = create_test_graph();
+        let snapshot = Snapshot::new(graph, None);
+        let features = &snapshot.metadata.features;
+        
+        // Features should be a Vec<String>
+        assert!(features.iter().all(|f| f.chars().all(|c| c.is_alphanumeric() || c == '_')));
+        
+        // Should include serde if feature is enabled
+        #[cfg(feature = "serde")]
+        assert!(features.contains(&"serde".to_string()));
+    }
+}

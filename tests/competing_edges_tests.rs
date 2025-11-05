@@ -6,6 +6,7 @@ use baygraph::engine::errors::ExecError;
 use baygraph::engine::graph::*;
 use baygraph::engine::rule_exec::*;
 use baygraph::frontend::ast::*;
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
 // ============================================================================
@@ -595,7 +596,7 @@ fn rule_context_entropy_function() {
 fn edge_posterior_independent_mean_probability() {
     let beta = BetaPosterior { alpha: 2.0, beta: 3.0 };
     let posterior = EdgePosterior::Independent(beta);
-    let groups = HashMap::new();
+    let groups = FxHashMap::default();
     
     let prob = posterior.mean_probability(&groups).unwrap();
     assert!((prob - 2.0 / 5.0).abs() < 1e-10);
@@ -603,7 +604,7 @@ fn edge_posterior_independent_mean_probability() {
 
 #[test]
 fn edge_posterior_competing_mean_probability() {
-    let mut groups = HashMap::new();
+    let mut groups = FxHashMap::default();
     let dirichlet = DirichletPosterior::new(vec![1.0, 2.0, 3.0]);
     let group = CompetingEdgeGroup::new(
         CompetingGroupId(1),
@@ -626,7 +627,7 @@ fn edge_posterior_competing_mean_probability() {
 
 #[test]
 fn edge_posterior_competing_mean_probability_errors_on_missing_group() {
-    let groups = HashMap::new();
+    let groups = FxHashMap::default();
     let posterior = EdgePosterior::Competing {
         group_id: CompetingGroupId(999),
         category_index: 0,
@@ -891,11 +892,11 @@ fn dynamic_category_discovery_adds_new_categories_to_existing_group() {
     // Verify both destinations are in the group
     // Find destinations by looking at edges
     let s2_id = edges2.iter()
-        .find(|e| e.ty == "ROUTES_TO" && e.src == s1_id2)
+        .find(|e| e.ty.as_ref() == "ROUTES_TO" && e.src == s1_id2)
         .map(|e| e.dst)
         .expect("Should find S2 edge");
     let s3_id = edges2.iter()
-        .find(|e| e.ty == "ROUTES_TO" && e.src == s1_id2 && e.dst != s2_id)
+        .find(|e| e.ty.as_ref() == "ROUTES_TO" && e.src == s1_id2 && e.dst != s2_id)
         .map(|e| e.dst)
         .expect("Should find S3 edge");
     assert!(group2.categories.contains(&s2_id));
