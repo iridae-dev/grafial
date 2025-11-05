@@ -600,11 +600,13 @@ pub fn run_rule_for_each_with_globals(
     find_multi_pattern_matches(input, &ordered_patterns, 0, &initial_bindings, &mut matches)?;
 
     // Deterministic ordering: sort by EdgeId tuples for reproducibility
-    matches.sort_by(|a, b| {
+    // Use unstable sort (faster) since EdgeId ordering is stable and deterministic
+    matches.sort_unstable_by(|a, b| {
+        // Collect and sort edge IDs for comparison
         let mut a_edges: Vec<_> = a.edge_vars.values().cloned().collect();
         let mut b_edges: Vec<_> = b.edge_vars.values().cloned().collect();
-        a_edges.sort();
-        b_edges.sort();
+        a_edges.sort_unstable();
+        b_edges.sort_unstable();
         a_edges.cmp(&b_edges)
     });
 
@@ -665,7 +667,8 @@ fn find_candidate_edges<'a>(
         }
     }
     
-    candidates.sort_by_key(|e| e.id);
+    // Use unstable sort (faster) since EdgeId ordering is stable and deterministic
+    candidates.sort_unstable_by_key(|e| e.id);
     candidates
 }
 

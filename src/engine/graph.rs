@@ -646,7 +646,7 @@ impl AdjacencyIndex {
                 result.extend_from_slice(&self.edge_ids[*start..*end]);
             }
         }
-        result.sort(); // Maintain deterministic order
+        result.sort_unstable(); // Maintain deterministic order (unstable sort is faster)
         result
     }
 }
