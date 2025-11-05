@@ -607,9 +607,9 @@ impl AdjacencyIndex {
             map.entry((e.src, e.ty.clone())).or_default().push(e.id);
         }
 
-        // Sort each adjacency list for determinism
+        // Sort each adjacency list for determinism (unstable sort is faster)
         for v in map.values_mut() {
-            v.sort();
+            v.sort_unstable();
         }
 
         // Flatten into contiguous storage with offset ranges
@@ -1500,8 +1500,8 @@ impl BeliefGraph {
             }
         }
         
-        // Keep deterministic order by stable EdgeId
-        for v in map.values_mut() { v.sort(); }
+        // Keep deterministic order by stable EdgeId (unstable sort is faster)
+        for v in map.values_mut() { v.sort_unstable(); }
         map
     }
 
