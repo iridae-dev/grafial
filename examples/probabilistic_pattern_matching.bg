@@ -64,25 +64,41 @@ rule PropagateInfluence on SocialBeliefs {
 }
 
 // Rule that uses exists subquery to find indirect connections
+// NOTE: Current implementation supports single-hop exists patterns only
+// Two-hop patterns (A->X->B) require fixpoint iteration instead
 rule IndirectInfluence on SocialBeliefs {
   pattern
     (A:Person)-[ab:FRIENDS]->(B:Person)
-  
+
   where
-    // A influences B if A influences someone who influences B
-    // This is a probabilistic reachability query
+    // A has high-probability influence on someone (one-hop check)
+    // For multi-hop inference, use fixpoint mode instead (see transitive_closure.bg)
     prob(ab) >= 0.8
-    and exists (A)-[ax:INFLUENCES]->(X) where prob(ax) >= 0.7
-    and exists (X)-[xb:INFLUENCES]->(B) where prob(xb) >= 0.7
-    and X != A
-    and X != B
-  
+    and exists (A:Person)-[ax:INFLUENCES]->(X:Person) where prob(ax) >= 0.7 and X != B
+
   action {
     // Indirect influence: weaker than direct
     let influence_transfer = (E[A.influence] - E[B.influence]) * 0.05
     set_expectation B.influence = E[B.influence] + influence_transfer
   }
-  
+
+  mode: for_each
+}
+
+// Rule demonstrating 'not exists' for finding isolated nodes
+rule BoostIsolatedNodes on SocialBeliefs {
+  pattern
+    (A:Person)-[dummy:FRIENDS]->(A:Person)  // Self-reference pattern
+
+  where
+    // Check if A lacks strong outgoing friendships
+    not exists (A:Person)-[af:FRIENDS]->(F:Person) where prob(af) >= 0.5 and F != A
+
+  action {
+    // Boost influence for isolated but valuable nodes
+    set_expectation A.influence = E[A.influence] * 1.1
+  }
+
   mode: for_each
 }
 

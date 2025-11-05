@@ -23,10 +23,13 @@ belief_model FraudBeliefs on FraudDetection {
     )
   }
   edge SUSPICIOUS {
-    // Rare event: only 1% of transactions are suspicious
+    // Prior: only 1% of transactions are suspicious (rare event)
+    // Beta(α, β) where α = prior × pseudo_count, β = (1-prior) × pseudo_count
     exist ~ BernoulliPosterior(
       prior=0.01,
-      pseudo_count=100.0  // Strong prior - requires strong evidence to shift
+      pseudo_count=10.0  // Moderate prior: Beta(0.1, 9.9)
+      // After 1 positive observation: Beta(1.1, 9.9) → mean ≈ 0.10 (10x increase)
+      // For stronger resistance to change, use pseudo_count=1000.0
     )
   }
 }
@@ -42,14 +45,23 @@ evidence InitialEvidence on FraudBeliefs {
 }
 
 evidence AdditionalEvidence on FraudBeliefs {
-  // Later: more evidence comes in
-  observe Transaction["T1"].risk_score = 0.9  // Updates posterior mean
-  
+  // Sequential updates: this evidence builds on InitialEvidence
+  // Bayesian inference combines ALL observations cumulatively
+  observe Transaction["T1"].risk_score = 0.9
+
+  // Bayesian update mechanics:
+  // - Prior from InitialEvidence: risk_score ~ N(μ₁, τ₁) after first 0.8 observation
+  // - New observation: 0.9 with precision τ_obs = 1.0 (default)
+  // - Posterior: τ_new = τ₁ + 1.0, μ_new = (τ₁×μ₁ + 1.0×0.9) / τ_new
+  // - Both 0.8 and 0.9 contribute to final posterior (not replacement)
+
   // Now we have direct edge evidence
   observe edge SUSPICIOUS(Transaction["T1"], Transaction["T1"]) present
-  
-  // But notice: even with strong prior (0.01), one observation doesn't
-  // make it certain - posterior is still uncertain
+
+  // Edge update: Beta(0.1, 9.9) + 1 success → Beta(1.1, 9.9)
+  // Mean shifts from 0.01 to 0.10 (10x increase, substantial for one observation)
+  // Posterior variance decreases: more certain but still uncertain
+  // This is proper Bayesian learning: gradual belief updates from evidence
 }
 
 // Rule that reasons probabilistically: flag transactions that are
@@ -83,8 +95,13 @@ flow FraudAnalysis on FraudBeliefs {
   
   // Metrics that reason about uncertainty
   metric avg_risk = sum_nodes(label=Transaction, contrib=E[node.risk_score]) / count_nodes(label=Transaction)
-  // Note: Can't directly sum probabilities in metrics - would need to match edges first
-  // This demonstrates the limitation: metrics operate on nodes, not edges directly
+
+  // Note: Can't use prob() in metrics because metrics operate on node sets,
+  // not individual edges. Use degree() to count high-probability edges instead:
+  metric suspicious_count = count_nodes(
+    label=Transaction,
+    where=E[node.risk_score] > 0.7
+  )
   
   export flagged as "flagged_transactions"
 }

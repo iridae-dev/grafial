@@ -1,1 +1,53 @@
+// Minimal Example: Core Baygraph Workflow
+// This demonstrates the basic structure of a Baygraph program.
+// Start here to understand schemas, beliefs, evidence, and flows.
 
+schema Minimal {
+  node Entity {
+    value: Real
+  }
+  edge CONNECTED { }
+}
+
+belief_model MinimalBeliefs on Minimal {
+  node Entity {
+    // Prior: value is around 0, but we're quite uncertain
+    // High variance (σ² = 100) means we're open to evidence
+    value ~ GaussianPosterior(
+      prior_mean=0.0,
+      prior_precision=0.01  // τ = 0.01 → σ² = 100
+    )
+  }
+  edge CONNECTED {
+    // Prior: 50% chance edges exist (maximum uncertainty)
+    // Beta(α=1, β=1) is uniform distribution over [0,1]
+    exist ~ BernoulliPosterior(
+      prior=0.5,
+      pseudo_count=2.0  // Weak prior: 2 pseudo-observations total
+    )
+  }
+}
+
+evidence MinimalEvidence on MinimalBeliefs {
+  // Observe: Entity A has value 1.0
+  // Bayesian update: posterior combines prior N(0, 100) with observation
+  // Result: posterior mean ≈ 0.99 (data dominates weak prior)
+  observe Entity["A"].value = 1.0
+
+  // Observe: A is connected to B
+  // Bayesian update: Beta(1, 1) + 1 success → Beta(2, 1)
+  // Result: P(connected) = 2/3 ≈ 0.67
+  observe edge CONNECTED(Entity["A"], Entity["B"]) present
+}
+
+flow MinimalFlow on MinimalBeliefs {
+  // Build graph from evidence (applies Bayesian updates)
+  graph g = from_evidence MinimalEvidence
+
+  // Compute total value across all entities
+  // E[A.value] ≈ 0.99, all other entities remain at prior E[value] ≈ 0
+  metric total = sum_nodes(label=Entity, contrib=E[node.value])
+
+  // Export graph for downstream use or visualization
+  export g as "output"
+}
