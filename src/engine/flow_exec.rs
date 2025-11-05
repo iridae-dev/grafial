@@ -9,9 +9,10 @@
 use std::collections::HashMap;
 
 use crate::engine::errors::ExecError;
+use crate::engine::expr_eval::{eval_expr_core, ExprContext};
 use crate::engine::graph::{BeliefGraph, EdgeId};
-use crate::engine::rule_exec::{run_rule_for_each, run_rule_for_each_with_globals};
-use crate::frontend::ast::{ExprAst, ProgramAst, Transform};
+use crate::engine::rule_exec::run_rule_for_each_with_globals;
+use crate::frontend::ast::{CallArg, ExprAst, ProgramAst, Transform};
 use crate::metrics::{eval_metric_expr, MetricContext, MetricRegistry};
 
 /// The result of running a flow: named graphs and exported aliases.
@@ -204,66 +205,53 @@ fn prune_edges(input: &BeliefGraph, edge_type: &str, predicate: &ExprAst) -> Res
     keep.sort();
 
     // Rebuild graph with kept edges only
-    // Note: We cannot mutate edge_index directly (it's private), so we rebuild via insert methods
-    let mut rebuilt = BeliefGraph::default();
-    for n in &input.nodes {
-        rebuilt.insert_node(n.clone());
-    }
-    for eid in keep {
-        let e = input.edge(eid)
-            .ok_or_else(|| ExecError::Internal("missing edge during prune rebuild".into()))?
-            .clone();
-        rebuilt.insert_edge(e);
-    }
-    Ok(rebuilt)
+    input.rebuild_with_edges(&input.nodes, &keep)
 }
 
-fn eval_prune_predicate(expr: &ExprAst, graph: &BeliefGraph, edge: EdgeId) -> Result<f64, ExecError> {
-    match expr {
-        ExprAst::Number(v) => Ok(*v),
-        ExprAst::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-        ExprAst::Var(_name) => Err(ExecError::ValidationError("unexpected bare variable in prune predicate".into())),
-        ExprAst::Field { .. } => Err(ExecError::ValidationError("field access not allowed in prune predicate".into())),
-        ExprAst::Call { name, args } => match name.as_str() {
+/// Expression evaluation context for prune predicates.
+///
+/// Only allows `prob(edge)` function calls and prohibits variables/fields.
+struct PruneExprContext {
+    edge: EdgeId,
+}
+
+impl ExprContext for PruneExprContext {
+    fn resolve_var(&self, _name: &str) -> Option<f64> {
+        None // No variables allowed in prune predicates
+    }
+
+    fn eval_function(
+        &self,
+        name: &str,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        match name {
             "prob" => {
-                if args.len() != 1 { return Err(ExecError::ValidationError("prob(): expected single positional argument".into())); }
-                match &args[0] {
-                    crate::frontend::ast::CallArg::Positional(ExprAst::Var(v)) if v == "edge" => {
-                        graph.prob_mean(edge)
-                    }
+                if !all_args.is_empty() && matches!(all_args[0], CallArg::Named { .. }) {
+                    return Err(ExecError::ValidationError("prob() does not accept named arguments".into()));
+                }
+                if pos_args.len() != 1 {
+                    return Err(ExecError::ValidationError("prob(): expected single positional argument".into()));
+                }
+                match &pos_args[0] {
+                    ExprAst::Var(v) if v == "edge" => graph.prob_mean(self.edge),
                     _ => Err(ExecError::ValidationError("prob(): argument must be 'edge' in prune predicate".into())),
                 }
             }
             _ => Err(ExecError::ValidationError(format!("unsupported function '{}' in prune predicate", name))),
-        },
-        ExprAst::Unary { op, expr } => {
-            let v = eval_prune_predicate(expr, graph, edge)?;
-            match op {
-                crate::frontend::ast::UnaryOp::Neg => Ok(-v),
-                crate::frontend::ast::UnaryOp::Not => Ok(if v == 0.0 { 1.0 } else { 0.0 }),
-            }
-        }
-        ExprAst::Binary { op, left, right } => {
-            let l = eval_prune_predicate(left, graph, edge)?;
-            let r = eval_prune_predicate(right, graph, edge)?;
-            use crate::frontend::ast::BinaryOp as B;
-            const EPS: f64 = 1e-12;
-            Ok(match op {
-                B::Add => l + r,
-                B::Sub => l - r,
-                B::Mul => l * r,
-                B::Div => l / r,
-                B::Eq => ((l - r).abs() < EPS) as i32 as f64,
-                B::Ne => ((l - r).abs() >= EPS) as i32 as f64,
-                B::Lt => (l < r) as i32 as f64,
-                B::Le => (l <= r) as i32 as f64,
-                B::Gt => (l > r) as i32 as f64,
-                B::Ge => (l >= r) as i32 as f64,
-                B::And => ((l != 0.0) && (r != 0.0)) as i32 as f64,
-                B::Or => ((l != 0.0) || (r != 0.0)) as i32 as f64,
-            })
         }
     }
+
+    fn eval_field(&self, _target: &ExprAst, _field: &str, _graph: &BeliefGraph) -> Result<f64, ExecError> {
+        Err(ExecError::ValidationError("field access not allowed in prune predicate".into()))
+    }
+}
+
+fn eval_prune_predicate(expr: &ExprAst, graph: &BeliefGraph, edge: EdgeId) -> Result<f64, ExecError> {
+    let ctx = PruneExprContext { edge };
+    eval_expr_core(expr, graph, &ctx)
 }
 
 #[cfg(test)]

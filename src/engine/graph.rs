@@ -52,10 +52,16 @@ const MIN_OBS_PRECISION: f64 = 1e-12;
 const MIN_BETA_PARAM: f64 = 0.01;
 
 /// A unique identifier for a node in the belief graph.
+///
+/// See baygraph_design.md:471-486 for stable identifier requirements.
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct NodeId(pub u32);
 
 /// A unique identifier for an edge in the belief graph.
+///
+/// See baygraph_design.md:471-486 for stable identifier requirements.
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct EdgeId(pub u32);
 
@@ -332,6 +338,37 @@ impl BeliefGraph {
         let idx = self.edges.len();
         self.edge_index.insert(edge.id, idx);
         self.edges.push(edge);
+    }
+
+    /// Rebuilds a graph from a subset of nodes and edges.
+    ///
+    /// This is a utility function for graph transformations that need to
+    /// create a new graph with a filtered set of nodes and edges.
+    /// The resulting graph maintains the same structure but with a subset
+    /// of the original elements.
+    ///
+    /// # Arguments
+    ///
+    /// * `nodes` - All nodes to include in the rebuilt graph
+    /// * `edge_ids` - Edge IDs to include (must exist in the original graph)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(BeliefGraph)` - The rebuilt graph
+    /// * `Err(ExecError)` - If any edge ID doesn't exist
+    pub fn rebuild_with_edges(&self, nodes: &[NodeData], edge_ids: &[EdgeId]) -> Result<Self, ExecError> {
+        let mut rebuilt = BeliefGraph::default();
+        for node in nodes {
+            rebuilt.insert_node(node.clone());
+        }
+        for eid in edge_ids {
+            let e = self
+                .edge(*eid)
+                .ok_or_else(|| ExecError::Internal("missing edge during rebuild".into()))?
+                .clone();
+            rebuilt.insert_edge(e);
+        }
+        Ok(rebuilt)
     }
 
     pub fn expectation(&self, node: NodeId, attr: &str) -> Result<f64, ExecError> {

@@ -38,7 +38,7 @@ fn phase4_exit_criteria_complete_flow_execution() {
     assert!(prob > 0.8, "remaining edge has high probability ({})", prob);
 
     // VERIFY 5: Can verify node beliefs
-    let node = cleaned_graph.node(NodeId(1)).expect("node 1 exists");
+    let _node = cleaned_graph.node(NodeId(1)).expect("node 1 exists");
     let expectation = cleaned_graph.expectation(NodeId(1), "score").expect("can read expectation");
     assert_eq!(expectation, 100.0, "node expectation is correct");
 

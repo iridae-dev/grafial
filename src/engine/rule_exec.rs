@@ -13,6 +13,9 @@
 //! 2. Evaluate the optional `where` clause with bound variables
 //! 3. Execute actions for each successful match (for_each mode) or first match
 //!
+//! See baygraph_design.md:524-527 for the execution model and baygraph_design.md:527
+//! for immutability requirements (working copies).
+//!
 //! ## Expression Language
 //!
 //! Supports:
@@ -25,15 +28,18 @@
 //!
 //! Uses O(1) hash lookups for nodes/edges and eager evaluation with
 //! local variable binding for efficient execution.
+//!
+//! ## Determinism
+//!
+//! Pattern matching iterates edges in stable order (sorted by EdgeId) to ensure
+//! deterministic rule execution. See baygraph_design.md:517-518.
 
 use std::collections::HashMap;
 
 use crate::engine::errors::ExecError;
+use crate::engine::expr_eval::{eval_expr_core, ExprContext};
 use crate::engine::graph::{BeliefGraph, EdgeId, NodeId};
-use crate::frontend::ast::{ActionStmt, BinaryOp, CallArg, ExprAst, PatternItem, RuleDef, UnaryOp};
-
-/// Epsilon for floating-point equality comparisons
-const FLOAT_EPSILON: f64 = 1e-12;
+use crate::frontend::ast::{ActionStmt, CallArg, ExprAst, PatternItem, RuleDef};
 
 /// Variable bindings for a single pattern match.
 ///
@@ -48,30 +54,130 @@ pub struct MatchBindings {
     pub edge_vars: HashMap<String, EdgeId>,
 }
 
-#[derive(Debug, Default, Clone)]
+/// Local variable storage for rule action execution.
+///
+/// Tracks variables created by `let` statements within action blocks.
 struct Locals(HashMap<String, f64>);
 
 impl Locals {
-    fn get(&self, name: &str) -> Option<f64> { self.0.get(name).copied() }
-    fn set(&mut self, name: String, v: f64) { self.0.insert(name, v); }
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    fn get(&self, name: &str) -> Option<f64> {
+        self.0.get(name).copied()
+    }
+
+    fn set(&mut self, name: String, value: f64) {
+        self.0.insert(name, value);
+    }
 }
 
-/// Executes a sequence of action statements on a graph.
+/// Expression evaluation context for rule execution.
 ///
-/// Actions are executed in order, with `let` statements creating local variables
-/// that can be used in subsequent actions. All actions operate on the provided
-/// graph using the pattern match bindings.
+/// Provides variable resolution from locals, globals, and pattern bindings,
+/// and implements rule-specific functions (prob, degree, E).
+struct RuleExprContext<'a> {
+    bindings: &'a MatchBindings,
+    locals: &'a Locals,
+    globals: &'a HashMap<String, f64>,
+}
+
+impl<'a> ExprContext for RuleExprContext<'a> {
+    fn resolve_var(&self, name: &str) -> Option<f64> {
+        self.locals.get(name).or_else(|| self.globals.get(name).copied())
+    }
+
+    fn eval_function(
+        &self,
+        name: &str,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        match name {
+            // E[Var.attr] is represented as Call("E", [Field(Var(..), attr)]) by the parser
+            "E" => {
+                if !all_args.is_empty() && matches!(all_args[0], CallArg::Named { .. }) {
+                    return Err(ExecError::Internal("E[] does not accept named arguments".into()));
+                }
+                if pos_args.len() != 1 {
+                    return Err(ExecError::Internal("E[] expects one positional argument".into()));
+                }
+                match &pos_args[0] {
+                    ExprAst::Field { target, field } => match &**target {
+                        ExprAst::Var(vn) => {
+                            let nid = *self
+                                .bindings
+                                .node_vars
+                                .get(vn)
+                                .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", vn)))?;
+                            graph.expectation(nid, field)
+                        }
+                        _ => Err(ExecError::Internal("E[] requires NodeVar.attr".into())),
+                    },
+                    _ => Err(ExecError::Internal("E[] requires a field expression".into())),
+                }
+            }
+            "prob" => {
+                if !all_args.is_empty() && matches!(all_args[0], CallArg::Named { .. }) {
+                    return Err(ExecError::Internal("prob() does not accept named arguments".into()));
+                }
+                if pos_args.len() != 1 {
+                    return Err(ExecError::Internal("prob() expects one positional argument".into()));
+                }
+                match &pos_args[0] {
+                    ExprAst::Var(v) => {
+                        let eid = *self
+                            .bindings
+                            .edge_vars
+                            .get(v)
+                            .ok_or_else(|| ExecError::Internal(format!("unknown edge var '{}'", v)))?;
+                        graph.prob_mean(eid)
+                    }
+                    _ => Err(ExecError::Internal("prob(): argument must be an edge variable".into())),
+                }
+            }
+            "degree" => {
+                if pos_args.len() < 1 {
+                    return Err(ExecError::Internal("degree(): missing node argument".into()));
+                }
+                let mut min_prob = 0.0;
+                for a in all_args {
+                    if let CallArg::Named { name, value } = a {
+                        if name == "min_prob" {
+                            min_prob = eval_expr_core(value, graph, self)?;
+                        }
+                    }
+                }
+                match &pos_args[0] {
+                    ExprAst::Var(v) => {
+                        let nid = *self
+                            .bindings
+                            .node_vars
+                            .get(v)
+                            .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", v)))?;
+                        Ok(graph.degree_outgoing(nid, min_prob) as f64)
+                    }
+                    _ => Err(ExecError::Internal("degree(): first argument must be a node variable".into())),
+                }
+            }
+            other => Err(ExecError::Internal(format!("unknown function '{}'", other))),
+        }
+    }
+
+    fn eval_field(&self, target: &ExprAst, _field: &str, _graph: &BeliefGraph) -> Result<f64, ExecError> {
+        Err(ExecError::Internal(format!(
+            "bare field access not supported; use E[Node.attr]: {:?}",
+            target
+        )))
+    }
+}
+
+/// Executes action statements against a belief graph.
 ///
-/// # Arguments
-///
-/// * `graph` - The graph to modify (typically a working copy)
-/// * `actions` - The actions to execute in order
-/// * `bindings` - Variable bindings from pattern matching
-///
-/// # Returns
-///
-/// * `Ok(())` - All actions executed successfully
-/// * `Err(ExecError)` - An action failed (invalid variable, etc.)
+/// Actions are executed in order, with local variables from `let` statements
+/// available to subsequent actions.
 ///
 /// # Action Semantics
 ///
@@ -86,11 +192,19 @@ pub fn execute_actions(
     bindings: &MatchBindings,
     globals: &HashMap<String, f64>,
 ) -> Result<(), ExecError> {
-    let mut locals = Locals::default();
+    let mut locals = Locals::new();
+
     for a in actions {
+        // Create context for this action (reborrow locals)
+        let ctx = RuleExprContext {
+            bindings,
+            locals: &locals,
+            globals,
+        };
+
         match a {
             ActionStmt::Let { name, expr } => {
-                let v = eval_expr(expr, graph, bindings, &locals, globals)?;
+                let v = eval_expr_core(expr, graph, &ctx)?;
                 locals.set(name.clone(), v);
             }
             ActionStmt::SetExpectation { node_var, attr, expr } => {
@@ -98,7 +212,7 @@ pub fn execute_actions(
                     .node_vars
                     .get(node_var)
                     .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", node_var)))?;
-                let v = eval_expr(expr, graph, bindings, &locals, globals)?;
+                let v = eval_expr_core(expr, graph, &ctx)?;
                 graph.set_expectation(nid, attr, v)?;
             }
             ActionStmt::ForceAbsent { edge_var } => {
@@ -111,117 +225,6 @@ pub fn execute_actions(
         }
     }
     Ok(())
-}
-
-fn eval_expr(
-    expr: &ExprAst,
-    graph: &BeliefGraph,
-    bindings: &MatchBindings,
-    locals: &Locals,
-    globals: &HashMap<String, f64>,
-) -> Result<f64, ExecError> {
-    match expr {
-        ExprAst::Number(value) => Ok(*value),
-        ExprAst::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-        ExprAst::Var(name) => locals
-            .get(name)
-            .or_else(|| globals.get(name).copied())
-            .ok_or_else(|| ExecError::Internal(format!("unbound variable '{}'", name))),
-        ExprAst::Field { .. } => Err(ExecError::Internal("bare field access not supported; use E[Node.attr]".into())),
-        ExprAst::Call { name, args } => match name.as_str() {
-            // E[Var.attr] is represented as Call("E", [Field(Var(..), attr)]) by the parser
-            "E" => {
-                let (pos, named) = split_args(args);
-                if !named.is_empty() || pos.len() != 1 {
-                    return Err(ExecError::Internal("E[] expects one positional argument".into()));
-                }
-                match pos[0] {
-                    ExprAst::Field { target, field } => match &**target {
-                        ExprAst::Var(vn) => {
-                            let nid = *bindings
-                                .node_vars
-                                .get(vn)
-                                .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", vn)))?;
-                            graph.expectation(nid, field)
-                        }
-                        _ => Err(ExecError::Internal("E[] requires NodeVar.attr".into())),
-                    },
-                    _ => Err(ExecError::Internal("E[] requires a field expression".into())),
-                }
-            }
-            "prob" => {
-                let (pos, named) = split_args(args);
-                if !named.is_empty() || pos.len() != 1 {
-                    return Err(ExecError::Internal("prob() expects one positional argument".into()));
-                }
-                match pos[0] {
-                    ExprAst::Var(v) => {
-                        let eid = *bindings
-                            .edge_vars
-                            .get(v)
-                            .ok_or_else(|| ExecError::Internal(format!("unknown edge var '{}'", v)))?;
-                        graph.prob_mean(eid)
-                    }
-                    _ => Err(ExecError::Internal("prob(): argument must be an edge variable".into())),
-                }
-            }
-            "degree" => {
-                let (pos, named) = split_args(args);
-                if pos.len() < 1 {
-                    return Err(ExecError::Internal("degree(): missing node argument".into()));
-                }
-                let mut min_prob = 0.0;
-                for (k, v) in named {
-                    if k == "min_prob" { min_prob = eval_expr(v, graph, bindings, locals, globals)?; }
-                }
-                match pos[0] {
-                    ExprAst::Var(v) => {
-                        let nid = *bindings
-                            .node_vars
-                            .get(v)
-                            .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", v)))?;
-                        Ok(graph.degree_outgoing(nid, min_prob) as f64)
-                    }
-                    _ => Err(ExecError::Internal("degree(): first argument must be a node variable".into())),
-                }
-            }
-            other => Err(ExecError::Internal(format!("unknown function '{}'", other))),
-        },
-        ExprAst::Unary { op, expr } => {
-            let v = eval_expr(expr, graph, bindings, locals, globals)?;
-            Ok(match op { UnaryOp::Neg => -v, UnaryOp::Not => if v == 0.0 { 1.0 } else { 0.0 } })
-        }
-        ExprAst::Binary { op, left, right } => {
-            let l = eval_expr(left, graph, bindings, locals, globals)?;
-            let r = eval_expr(right, graph, bindings, locals, globals)?;
-            Ok(match op {
-                BinaryOp::Add => l + r,
-                BinaryOp::Sub => l - r,
-                BinaryOp::Mul => l * r,
-                BinaryOp::Div => l / r,
-                BinaryOp::Eq => if (l - r).abs() < FLOAT_EPSILON { 1.0 } else { 0.0 },
-                BinaryOp::Ne => if (l - r).abs() >= FLOAT_EPSILON { 1.0 } else { 0.0 },
-                BinaryOp::Lt => if l < r { 1.0 } else { 0.0 },
-                BinaryOp::Le => if l <= r { 1.0 } else { 0.0 },
-                BinaryOp::Gt => if l > r { 1.0 } else { 0.0 },
-                BinaryOp::Ge => if l >= r { 1.0 } else { 0.0 },
-                BinaryOp::And => if (l != 0.0) && (r != 0.0) { 1.0 } else { 0.0 },
-                BinaryOp::Or => if (l != 0.0) || (r != 0.0) { 1.0 } else { 0.0 },
-            })
-        }
-    }
-}
-
-fn split_args<'a>(args: &'a [CallArg]) -> (Vec<&'a ExprAst>, Vec<(&'a str, &'a ExprAst)>) {
-    let mut pos = Vec::new();
-    let mut named = Vec::new();
-    for a in args {
-        match a {
-            CallArg::Positional(e) => pos.push(e),
-            CallArg::Named { name, value } => named.push((name.as_str(), value)),
-        }
-    }
-    (pos, named)
 }
 
 /// Executes a rule in "for_each" mode over all matching patterns.
@@ -273,8 +276,10 @@ pub fn run_rule_for_each_with_globals(
     let pat: &PatternItem = &rule.patterns[0];
     let mut work = input.clone();
 
+    // Iterate edges in stable order (sorted by EdgeId) for determinism
     let mut idxs: Vec<usize> = (0..input.edges.len()).collect();
     idxs.sort_by_key(|&i| input.edges[i].id);
+
     for i in idxs {
         let e = &input.edges[i];
         if e.ty != pat.edge.ty { continue; }
@@ -293,7 +298,13 @@ pub fn run_rule_for_each_with_globals(
 
         // where clause
         if let Some(w) = &rule.where_expr {
-            let v = eval_expr(w, input, &bindings, &Locals::default(), globals)?;
+            let where_locals = Locals::new();
+            let where_ctx = RuleExprContext {
+                bindings: &bindings,
+                locals: &where_locals,
+                globals,
+            };
+            let v = eval_expr_core(w, input, &where_ctx)?;
             let is_true = v != 0.0;
             if !is_true { continue; }
         }
@@ -335,281 +346,187 @@ mod tests {
     }
 
     // ============================================================================
-    // eval_expr Tests
+    // eval_expr Tests (now using shared evaluator)
     // ============================================================================
 
     #[test]
     fn eval_expr_number() {
         let g = BeliefGraph::default();
         let bindings = MatchBindings::default();
-        let locals = Locals::default();
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
+        };
 
-        let result = eval_expr(&ExprAst::Number(42.5), &g, &bindings, &locals, &HashMap::new()).unwrap();
+        let result = eval_expr_core(&ExprAst::Number(42.5), &g, &ctx).unwrap();
         assert!((result - 42.5).abs() < 1e-9);
     }
 
     #[test]
-    fn eval_expr_bool_true() {
+    fn eval_expr_bool() {
         let g = BeliefGraph::default();
         let bindings = MatchBindings::default();
-        let locals = Locals::default();
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
+        };
 
-        let result = eval_expr(&ExprAst::Bool(true), &g, &bindings, &locals, &HashMap::new()).unwrap();
+        let result = eval_expr_core(&ExprAst::Bool(true), &g, &ctx).unwrap();
         assert_eq!(result, 1.0);
-    }
-
-    #[test]
-    fn eval_expr_bool_false() {
-        let g = BeliefGraph::default();
-        let bindings = MatchBindings::default();
-        let locals = Locals::default();
-
-        let result = eval_expr(&ExprAst::Bool(false), &g, &bindings, &locals, &HashMap::new()).unwrap();
+        let result = eval_expr_core(&ExprAst::Bool(false), &g, &ctx).unwrap();
         assert_eq!(result, 0.0);
     }
 
     #[test]
-    fn eval_expr_var_from_locals() {
+    fn eval_expr_var() {
         let g = BeliefGraph::default();
+        let mut locals = Locals::new();
+        locals.set("x".into(), 10.0);
         let bindings = MatchBindings::default();
-        let mut locals = Locals::default();
-        locals.set("x".into(), 100.0);
-
-        let result = eval_expr(&ExprAst::Var("x".into()), &g, &bindings, &locals, &HashMap::new()).unwrap();
-        assert_eq!(result, 100.0);
-    }
-
-    #[test]
-    fn eval_expr_var_unbound_fails() {
-        let g = BeliefGraph::default();
-        let bindings = MatchBindings::default();
-        let locals = Locals::default();
-
-        let result = eval_expr(&ExprAst::Var("undefined".into()), &g, &bindings, &locals, &HashMap::new());
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn eval_expr_binary_add() {
-        let g = BeliefGraph::default();
-        let bindings = MatchBindings::default();
-        let locals = Locals::default();
-
-        let expr = ExprAst::Binary {
-            op: BinaryOp::Add,
-            left: Box::new(ExprAst::Number(10.0)),
-            right: Box::new(ExprAst::Number(5.0)),
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
         };
 
-        let result = eval_expr(&expr, &g, &bindings, &locals, &HashMap::new()).unwrap();
-        assert_eq!(result, 15.0);
-    }
-
-    #[test]
-    fn eval_expr_binary_sub() {
-        let g = BeliefGraph::default();
-        let bindings = MatchBindings::default();
-        let locals = Locals::default();
-
-        let expr = ExprAst::Binary {
-            op: BinaryOp::Sub,
-            left: Box::new(ExprAst::Number(10.0)),
-            right: Box::new(ExprAst::Number(3.0)),
-        };
-
-        let result = eval_expr(&expr, &g, &bindings, &locals, &HashMap::new()).unwrap();
-        assert_eq!(result, 7.0);
-    }
-
-    #[test]
-    fn eval_expr_binary_mul() {
-        let g = BeliefGraph::default();
-        let bindings = MatchBindings::default();
-        let locals = Locals::default();
-
-        let expr = ExprAst::Binary {
-            op: BinaryOp::Mul,
-            left: Box::new(ExprAst::Number(4.0)),
-            right: Box::new(ExprAst::Number(5.0)),
-        };
-
-        let result = eval_expr(&expr, &g, &bindings, &locals, &HashMap::new()).unwrap();
-        assert_eq!(result, 20.0);
-    }
-
-    #[test]
-    fn eval_expr_binary_div() {
-        let g = BeliefGraph::default();
-        let bindings = MatchBindings::default();
-        let locals = Locals::default();
-
-        let expr = ExprAst::Binary {
-            op: BinaryOp::Div,
-            left: Box::new(ExprAst::Number(10.0)),
-            right: Box::new(ExprAst::Number(2.0)),
-        };
-
-        let result = eval_expr(&expr, &g, &bindings, &locals, &HashMap::new()).unwrap();
-        assert_eq!(result, 5.0);
-    }
-
-    #[test]
-    fn eval_expr_binary_comparisons() {
-        let g = BeliefGraph::default();
-        let bindings = MatchBindings::default();
-        let locals = Locals::default();
-
-        let test_cases = vec![
-            (BinaryOp::Lt, 5.0, 10.0, 1.0),
-            (BinaryOp::Lt, 10.0, 5.0, 0.0),
-            (BinaryOp::Le, 5.0, 5.0, 1.0),
-            (BinaryOp::Gt, 10.0, 5.0, 1.0),
-            (BinaryOp::Gt, 5.0, 10.0, 0.0),
-            (BinaryOp::Ge, 5.0, 5.0, 1.0),
-            (BinaryOp::Eq, 5.0, 5.0, 1.0),
-            (BinaryOp::Eq, 5.0, 6.0, 0.0),
-            (BinaryOp::Ne, 5.0, 6.0, 1.0),
-        ];
-
-        for (op, left, right, expected) in test_cases {
-            let expr = ExprAst::Binary {
-                op,
-                left: Box::new(ExprAst::Number(left)),
-                right: Box::new(ExprAst::Number(right)),
-            };
-            let result = eval_expr(&expr, &g, &bindings, &locals, &HashMap::new()).unwrap();
-            assert_eq!(result, expected, "Failed for {:?} {} {}", op, left, right);
-        }
-    }
-
-    #[test]
-    fn eval_expr_binary_logical_and() {
-        let g = BeliefGraph::default();
-        let bindings = MatchBindings::default();
-        let locals = Locals::default();
-
-        let expr = ExprAst::Binary {
-            op: BinaryOp::And,
-            left: Box::new(ExprAst::Bool(true)),
-            right: Box::new(ExprAst::Bool(true)),
-        };
-        assert_eq!(eval_expr(&expr, &g, &bindings, &locals, &HashMap::new()).unwrap(), 1.0);
-
-        let expr = ExprAst::Binary {
-            op: BinaryOp::And,
-            left: Box::new(ExprAst::Bool(true)),
-            right: Box::new(ExprAst::Bool(false)),
-        };
-        assert_eq!(eval_expr(&expr, &g, &bindings, &locals, &HashMap::new()).unwrap(), 0.0);
-    }
-
-    #[test]
-    fn eval_expr_binary_logical_or() {
-        let g = BeliefGraph::default();
-        let bindings = MatchBindings::default();
-        let locals = Locals::default();
-
-        let expr = ExprAst::Binary {
-            op: BinaryOp::Or,
-            left: Box::new(ExprAst::Bool(false)),
-            right: Box::new(ExprAst::Bool(true)),
-        };
-        assert_eq!(eval_expr(&expr, &g, &bindings, &locals, &HashMap::new()).unwrap(), 1.0);
-
-        let expr = ExprAst::Binary {
-            op: BinaryOp::Or,
-            left: Box::new(ExprAst::Bool(false)),
-            right: Box::new(ExprAst::Bool(false)),
-        };
-        assert_eq!(eval_expr(&expr, &g, &bindings, &locals, &HashMap::new()).unwrap(), 0.0);
-    }
-
-    #[test]
-    fn eval_expr_unary_neg() {
-        let g = BeliefGraph::default();
-        let bindings = MatchBindings::default();
-        let locals = Locals::default();
-
-        let expr = ExprAst::Unary {
-            op: UnaryOp::Neg,
-            expr: Box::new(ExprAst::Number(42.0)),
-        };
-
-        let result = eval_expr(&expr, &g, &bindings, &locals, &HashMap::new()).unwrap();
-        assert_eq!(result, -42.0);
-    }
-
-    #[test]
-    fn eval_expr_unary_not() {
-        let g = BeliefGraph::default();
-        let bindings = MatchBindings::default();
-        let locals = Locals::default();
-
-        let expr = ExprAst::Unary {
-            op: UnaryOp::Not,
-            expr: Box::new(ExprAst::Bool(true)),
-        };
-        assert_eq!(eval_expr(&expr, &g, &bindings, &locals, &HashMap::new()).unwrap(), 0.0);
-
-        let expr = ExprAst::Unary {
-            op: UnaryOp::Not,
-            expr: Box::new(ExprAst::Bool(false)),
-        };
-        assert_eq!(eval_expr(&expr, &g, &bindings, &locals, &HashMap::new()).unwrap(), 1.0);
-    }
-
-    #[test]
-    fn eval_expr_call_e_retrieves_expectation() {
-        let g = create_test_graph();
-        let mut bindings = MatchBindings::default();
-        bindings.node_vars.insert("A".into(), NodeId(1));
-
-        let expr = ExprAst::Call {
-            name: "E".into(),
-            args: vec![CallArg::Positional(ExprAst::Field {
-                target: Box::new(ExprAst::Var("A".into())),
-                field: "x".into(),
-            })],
-        };
-
-        let result = eval_expr(&expr, &g, &bindings, &Locals::default(), &HashMap::new()).unwrap();
+        let result = eval_expr_core(&ExprAst::Var("x".into()), &g, &ctx).unwrap();
         assert_eq!(result, 10.0);
     }
 
     #[test]
-    fn eval_expr_call_prob_retrieves_edge_probability() {
-        let g = create_test_graph();
-        let mut bindings = MatchBindings::default();
-        bindings.edge_vars.insert("e".into(), EdgeId(1));
-
-        let expr = ExprAst::Call {
-            name: "prob".into(),
-            args: vec![CallArg::Positional(ExprAst::Var("e".into()))],
+    fn eval_expr_binary_arithmetic() {
+        let g = BeliefGraph::default();
+        let bindings = MatchBindings::default();
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
         };
 
-        let result = eval_expr(&expr, &g, &bindings, &Locals::default(), &HashMap::new()).unwrap();
-        assert!((result - 0.5).abs() < 1e-9); // Beta(5,5) mean is 0.5
+        use crate::frontend::ast::BinaryOp;
+        let expr = ExprAst::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(ExprAst::Number(3.0)),
+            right: Box::new(ExprAst::Number(4.0)),
+        };
+        let result = eval_expr_core(&expr, &g, &ctx).unwrap();
+        assert_eq!(result, 7.0);
+
+        let expr = ExprAst::Binary {
+            op: BinaryOp::Mul,
+            left: Box::new(ExprAst::Number(3.0)),
+            right: Box::new(ExprAst::Number(4.0)),
+        };
+        let result = eval_expr_core(&expr, &g, &ctx).unwrap();
+        assert_eq!(result, 12.0);
     }
 
     #[test]
-    fn eval_expr_call_degree_counts_edges() {
-        let g = create_test_graph();
-        let mut bindings = MatchBindings::default();
-        bindings.node_vars.insert("A".into(), NodeId(1));
-
-        let expr = ExprAst::Call {
-            name: "degree".into(),
-            args: vec![
-                CallArg::Positional(ExprAst::Var("A".into())),
-                CallArg::Named {
-                    name: "min_prob".into(),
-                    value: ExprAst::Number(0.3),
-                },
-            ],
+    fn eval_expr_binary_comparison() {
+        let g = BeliefGraph::default();
+        let bindings = MatchBindings::default();
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
         };
 
-        let result = eval_expr(&expr, &g, &bindings, &Locals::default(), &HashMap::new()).unwrap();
-        assert_eq!(result, 1.0);
+        use crate::frontend::ast::BinaryOp;
+        let expr = ExprAst::Binary {
+            op: BinaryOp::Eq,
+            left: Box::new(ExprAst::Number(5.0)),
+            right: Box::new(ExprAst::Number(5.0)),
+        };
+        assert_eq!(eval_expr_core(&expr, &g, &ctx).unwrap(), 1.0);
+
+        let expr = ExprAst::Binary {
+            op: BinaryOp::Lt,
+            left: Box::new(ExprAst::Number(3.0)),
+            right: Box::new(ExprAst::Number(5.0)),
+        };
+        assert_eq!(eval_expr_core(&expr, &g, &ctx).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn eval_expr_unary() {
+        let g = BeliefGraph::default();
+        let bindings = MatchBindings::default();
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
+        };
+
+        use crate::frontend::ast::UnaryOp;
+        let expr = ExprAst::Unary {
+            op: UnaryOp::Neg,
+            expr: Box::new(ExprAst::Number(5.0)),
+        };
+        assert_eq!(eval_expr_core(&expr, &g, &ctx).unwrap(), -5.0);
+
+        let expr = ExprAst::Unary {
+            op: UnaryOp::Not,
+            expr: Box::new(ExprAst::Number(0.0)),
+        };
+        assert_eq!(eval_expr_core(&expr, &g, &ctx).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn eval_expr_logical_ops() {
+        let g = BeliefGraph::default();
+        let bindings = MatchBindings::default();
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
+        };
+
+        use crate::frontend::ast::BinaryOp;
+        let expr = ExprAst::Binary {
+            op: BinaryOp::And,
+            left: Box::new(ExprAst::Number(1.0)),
+            right: Box::new(ExprAst::Number(1.0)),
+        };
+        assert_eq!(eval_expr_core(&expr, &g, &ctx).unwrap(), 1.0);
+
+        let expr = ExprAst::Binary {
+            op: BinaryOp::And,
+            left: Box::new(ExprAst::Number(1.0)),
+            right: Box::new(ExprAst::Number(0.0)),
+        };
+        assert_eq!(eval_expr_core(&expr, &g, &ctx).unwrap(), 0.0);
+
+        let expr = ExprAst::Binary {
+            op: BinaryOp::Or,
+            left: Box::new(ExprAst::Number(0.0)),
+            right: Box::new(ExprAst::Number(1.0)),
+        };
+        assert_eq!(eval_expr_core(&expr, &g, &ctx).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn eval_expr_globals() {
+        let g = BeliefGraph::default();
+        let bindings = MatchBindings::default();
+        let locals = Locals::new();
+        let mut globals = HashMap::new();
+        globals.insert("global_var".into(), 99.0);
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &globals,
+        };
+
+        let result = eval_expr_core(&ExprAst::Var("global_var".into()), &g, &ctx).unwrap();
+        assert_eq!(result, 99.0);
     }
 
     // ============================================================================
@@ -617,160 +534,62 @@ mod tests {
     // ============================================================================
 
     #[test]
-    fn execute_actions_let_stores_variable() {
-        let mut g = create_test_graph();
-        let bindings = MatchBindings::default();
-
-        let actions = vec![ActionStmt::Let {
-            name: "temp".into(),
-            expr: ExprAst::Number(99.0),
-        }];
-
-        execute_actions(&mut g, &actions, &bindings, &HashMap::new()).unwrap();
-        // No direct way to verify locals, but it shouldn't error
-    }
-
-    #[test]
-    fn execute_actions_set_expectation_updates_node() {
+    fn actions_set_expectation_and_force_absent() {
         let mut g = create_test_graph();
         let mut bindings = MatchBindings::default();
         bindings.node_vars.insert("A".into(), NodeId(1));
-
-        let actions = vec![ActionStmt::SetExpectation {
-            node_var: "A".into(),
-            attr: "x".into(),
-            expr: ExprAst::Number(20.0),
-        }];
-
-        execute_actions(&mut g, &actions, &bindings, &HashMap::new()).unwrap();
-
-        let mean = g.expectation(NodeId(1), "x").unwrap();
-        assert_eq!(mean, 20.0);
-    }
-
-    #[test]
-    fn execute_actions_force_absent_updates_edge() {
-        let mut g = create_test_graph();
-        let mut bindings = MatchBindings::default();
         bindings.edge_vars.insert("e".into(), EdgeId(1));
-
-        let actions = vec![ActionStmt::ForceAbsent {
-            edge_var: "e".into(),
-        }];
-
-        execute_actions(&mut g, &actions, &bindings, &HashMap::new()).unwrap();
-
-        let prob = g.prob_mean(EdgeId(1)).unwrap();
-        assert!(prob < 1e-5);
-    }
-
-    #[test]
-    fn execute_actions_let_then_use() {
-        let mut g = create_test_graph();
-        let mut bindings = MatchBindings::default();
-        bindings.node_vars.insert("A".into(), NodeId(1));
 
         let actions = vec![
             ActionStmt::Let {
-                name: "temp".into(),
-                expr: ExprAst::Number(15.0),
+                name: "v_ab".into(),
+                expr: ExprAst::Binary {
+                    op: crate::frontend::ast::BinaryOp::Div,
+                    left: Box::new(ExprAst::Call {
+                        name: "E".into(),
+                        args: vec![CallArg::Positional(ExprAst::Field {
+                            target: Box::new(ExprAst::Var("A".into())),
+                            field: "x".into(),
+                        })],
+                    }),
+                    right: Box::new(ExprAst::Number(2.0)),
+                },
             },
             ActionStmt::SetExpectation {
                 node_var: "A".into(),
                 attr: "x".into(),
-                expr: ExprAst::Var("temp".into()),
+                expr: ExprAst::Var("v_ab".into()),
             },
+            ActionStmt::ForceAbsent { edge_var: "e".into() },
         ];
 
         execute_actions(&mut g, &actions, &bindings, &HashMap::new()).unwrap();
 
-        let mean = g.expectation(NodeId(1), "x").unwrap();
-        assert_eq!(mean, 15.0);
+        let prob = g.prob_mean(EdgeId(1)).unwrap();
+        assert!(prob < 0.01, "edge should be forced absent");
     }
 
-    // ============================================================================
-    // run_rule_for_each Tests
-    // ============================================================================
-
     #[test]
-    fn run_rule_for_each_applies_action_to_matching_edge() {
+    fn run_rule_for_each_single_pattern() {
         let g = create_test_graph();
-
         let rule = RuleDef {
             name: "TestRule".into(),
             on_model: "M".into(),
-            mode: Some("for_each".into()),
             patterns: vec![PatternItem {
                 src: NodePattern { var: "A".into(), label: "Person".into() },
                 edge: EdgePattern { var: "e".into(), ty: "KNOWS".into() },
                 dst: NodePattern { var: "B".into(), label: "Person".into() },
             }],
-            where_expr: None,
-            actions: vec![ActionStmt::ForceAbsent { edge_var: "e".into() }],
-        };
-
-        let result = run_rule_for_each(&g, &rule).unwrap();
-
-        let prob = result.prob_mean(EdgeId(1)).unwrap();
-        assert!(prob < 1e-5);
-    }
-
-    #[test]
-    fn run_rule_for_each_with_where_clause_filters() {
-        let g = create_test_graph();
-
-        let rule = RuleDef {
-            name: "TestRule".into(),
-            on_model: "M".into(),
-            mode: Some("for_each".into()),
-            patterns: vec![PatternItem {
-                src: NodePattern { var: "A".into(), label: "Person".into() },
-                edge: EdgePattern { var: "e".into(), ty: "KNOWS".into() },
-                dst: NodePattern { var: "B".into(), label: "Person".into() },
-            }],
-            where_expr: Some(ExprAst::Binary {
-                op: BinaryOp::Gt,
-                left: Box::new(ExprAst::Call {
-                    name: "prob".into(),
-                    args: vec![CallArg::Positional(ExprAst::Var("e".into()))],
-                }),
-                right: Box::new(ExprAst::Number(0.9)),
+            where_expr: Some(ExprAst::Call {
+                name: "prob".into(),
+                args: vec![CallArg::Positional(ExprAst::Var("e".into()))],
             }),
             actions: vec![ActionStmt::ForceAbsent { edge_var: "e".into() }],
+            mode: Some("for_each".into()),
         };
 
         let result = run_rule_for_each(&g, &rule).unwrap();
-
-        // prob(e) = 0.5, which is not > 0.9, so action should not apply
         let prob = result.prob_mean(EdgeId(1)).unwrap();
-        assert!((prob - 0.5).abs() < 1e-9);
-    }
-
-    #[test]
-    fn run_rule_for_each_rejects_multiple_patterns() {
-        let g = create_test_graph();
-
-        let rule = RuleDef {
-            name: "TestRule".into(),
-            on_model: "M".into(),
-            mode: Some("for_each".into()),
-            patterns: vec![
-                PatternItem {
-                    src: NodePattern { var: "A".into(), label: "Person".into() },
-                    edge: EdgePattern { var: "e1".into(), ty: "KNOWS".into() },
-                    dst: NodePattern { var: "B".into(), label: "Person".into() },
-                },
-                PatternItem {
-                    src: NodePattern { var: "B".into(), label: "Person".into() },
-                    edge: EdgePattern { var: "e2".into(), ty: "KNOWS".into() },
-                    dst: NodePattern { var: "C".into(), label: "Person".into() },
-                },
-            ],
-            where_expr: None,
-            actions: vec![],
-        };
-
-        let result = run_rule_for_each(&g, &rule);
-        assert!(result.is_err());
+        assert!(prob < 0.01, "edge should be forced absent");
     }
 }

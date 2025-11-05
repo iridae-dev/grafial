@@ -1,4 +1,6 @@
-//! # Baygraph - Bayesian Belief Graph DSL
+//! # Baygraph - Bayesian Belief Graph Language
+//!
+//! A language for reasoning when connections aren't clear.
 //!
 //! Baygraph is a domain-specific language for probabilistic reasoning over graphs,
 //! combining graph pattern matching with Bayesian inference.

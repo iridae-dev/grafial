@@ -16,7 +16,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::engine::errors::ExecError;
-use crate::engine::graph::{BeliefGraph, EdgeId, NodeId};
+use crate::engine::expr_eval::{eval_expr_core, ExprContext};
+use crate::engine::graph::{BeliefGraph, NodeId};
 use crate::frontend::ast::{BinaryOp, CallArg, ExprAst, UnaryOp};
 
 /// Context passed during metric evaluation.
@@ -333,8 +334,85 @@ fn parse_scalar(e: &ExprAst) -> Result<f64, ExecError> {
     }
 }
 
-/// Evaluate an expression in the context of a specific node.
-/// Supports `E[node.attr]`, `degree(node, ...)`, arithmetic and logical ops.
+/// Expression evaluation context for metric node expressions.
+///
+/// Provides variable resolution from metric context and accumulator value,
+/// and implements metric-specific functions (E, degree).
+struct MetricExprContext<'a> {
+    node: NodeId,
+    metric_ctx: &'a MetricContext,
+    acc_value: Option<f64>,
+}
+
+impl<'a> ExprContext for MetricExprContext<'a> {
+    fn resolve_var(&self, name: &str) -> Option<f64> {
+        if name == "value" {
+            self.acc_value
+        } else if name == "node" {
+            None // Special error case handled below
+        } else {
+            self.metric_ctx.metrics.get(name).copied()
+        }
+    }
+
+    fn eval_function(
+        &self,
+        name: &str,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        match name {
+            // E[Var.attr] is represented as Call("E", [Field(Var(..), attr)])
+            "E" => {
+                if !all_args.is_empty() && matches!(all_args[0], CallArg::Named { .. }) {
+                    return Err(ExecError::ValidationError("E[] does not accept named arguments".into()));
+                }
+                if pos_args.len() != 1 {
+                    return Err(ExecError::ValidationError("E[] expects one positional argument".into()));
+                }
+                match &pos_args[0] {
+                    ExprAst::Field { target, field } => match &**target {
+                        ExprAst::Var(v) if v == "node" => graph.expectation(self.node, field),
+                        _ => Err(ExecError::ValidationError("E[] requires node.attr with 'node' variable".into())),
+                    },
+                    _ => Err(ExecError::ValidationError("E[] requires a field expression".into())),
+                }
+            }
+            "degree" => {
+                if pos_args.is_empty() {
+                    return Err(ExecError::ValidationError("degree(): missing node argument".into()));
+                }
+                // Only allow degree(node, min_prob=...)
+                let mut min_prob = 0.0;
+                for a in all_args {
+                    if let CallArg::Named { name: n, value } = a {
+                        if n == "min_prob" {
+                            let ctx = MetricExprContext {
+                                node: self.node,
+                                metric_ctx: self.metric_ctx,
+                                acc_value: self.acc_value,
+                            };
+                            min_prob = eval_expr_core(value, graph, &ctx)?;
+                        }
+                    }
+                }
+                match &pos_args[0] {
+                    ExprAst::Var(v) if v == "node" => Ok(graph.degree_outgoing(self.node, min_prob) as f64),
+                    _ => Err(ExecError::ValidationError("degree(): first argument must be 'node'".into())),
+                }
+            }
+            other => Err(ExecError::ValidationError(format!("unsupported function '{}' in node metric expression", other))),
+        }
+    }
+
+    fn eval_field(&self, _target: &ExprAst, _field: &str, _graph: &BeliefGraph) -> Result<f64, ExecError> {
+        Err(ExecError::ValidationError("bare field access not supported in metric; use E[node.attr]".into()))
+    }
+}
+
+/// Evaluates an expression in the context of a specific node during metric computation.
+///
 /// If `acc_value` is Some(v), a Var("value") resolves to v (used in fold_nodes).
 fn eval_node_expr(
     expr: &ExprAst,
@@ -343,84 +421,29 @@ fn eval_node_expr(
     ctx: &MetricContext,
     acc_value: Option<f64>,
 ) -> Result<f64, ExecError> {
-    match expr {
-        ExprAst::Number(v) => Ok(*v),
-        ExprAst::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
-        ExprAst::Var(name) => {
-            if name == "value" {
-                acc_value.ok_or_else(|| ExecError::ValidationError("'value' is only valid inside fold_nodes step".into()))
-            } else if name == "node" {
-                Err(ExecError::ValidationError("bare 'node' variable not allowed; use E[node.attr] or degree(node, ...)".into()))
-            } else {
-                ctx.metrics
-                    .get(name)
-                    .copied()
-                    .ok_or_else(|| ExecError::ValidationError(format!("unknown variable '{}' in node expression", name)))
-            }
+    let eval_ctx = MetricExprContext {
+        node,
+        metric_ctx: ctx,
+        acc_value,
+    };
+
+    // Special handling for "node" variable (not allowed)
+    if let ExprAst::Var(name) = expr {
+        if name == "node" {
+            return Err(ExecError::ValidationError(
+                "bare 'node' variable not allowed; use E[node.attr] or degree(node, ...)".into()
+            ));
         }
-        ExprAst::Field { .. } => Err(ExecError::ValidationError("bare field access not supported in metric; use E[node.attr]".into())),
-        ExprAst::Unary { op, expr } => {
-            let v = eval_node_expr(expr, graph, node, ctx, acc_value)?;
-            Ok(match op { UnaryOp::Neg => -v, UnaryOp::Not => if v == 0.0 { 1.0 } else { 0.0 } })
-        }
-        ExprAst::Binary { op, left, right } => {
-            let l = eval_node_expr(left, graph, node, ctx, acc_value)?;
-            let r = eval_node_expr(right, graph, node, ctx, acc_value)?;
-            let result = match op {
-                BinaryOp::Add => l + r,
-                BinaryOp::Sub => l - r,
-                BinaryOp::Mul => l * r,
-                BinaryOp::Div => {
-                    if r.abs() < 1e-15 {
-                        return Err(ExecError::ValidationError("division by zero in node expression".into()));
-                    }
-                    l / r
-                }
-                BinaryOp::Eq => if (l - r).abs() < 1e-12 { 1.0 } else { 0.0 },
-                BinaryOp::Ne => if (l - r).abs() >= 1e-12 { 1.0 } else { 0.0 },
-                BinaryOp::Lt => if l < r { 1.0 } else { 0.0 },
-                BinaryOp::Le => if l <= r { 1.0 } else { 0.0 },
-                BinaryOp::Gt => if l > r { 1.0 } else { 0.0 },
-                BinaryOp::Ge => if l >= r { 1.0 } else { 0.0 },
-                BinaryOp::And => if (l != 0.0) && (r != 0.0) { 1.0 } else { 0.0 },
-                BinaryOp::Or => if (l != 0.0) || (r != 0.0) { 1.0 } else { 0.0 },
-            };
-            if !result.is_finite() {
-                return Err(ExecError::ValidationError(format!("node expression produced non-finite value: {}", result)));
-            }
-            Ok(result)
-        }
-        ExprAst::Call { name, args } => match name.as_str() {
-            // E[Var.attr] is represented as Call("E", [Field(Var(..), attr)])
-            "E" => {
-                let a = MetricArgs::from_call_args(args);
-                if !a.named.is_empty() || a.pos.len() != 1 {
-                    return Err(ExecError::ValidationError("E[] expects one positional argument".into()));
-                }
-                match a.pos[0] {
-                    ExprAst::Field { target, field } => match &**target {
-                        ExprAst::Var(v) if v == "node" => graph.expectation(node, field),
-                        _ => Err(ExecError::ValidationError("E[] requires node.attr with 'node' variable".into())),
-                    },
-                    _ => Err(ExecError::ValidationError("E[] requires a field expression".into())),
-                }
-            }
-            "degree" => {
-                let a = MetricArgs::from_call_args(args);
-                if a.pos.is_empty() {
-                    return Err(ExecError::ValidationError("degree(): missing node argument".into()));
-                }
-                // Only allow degree(node, min_prob=...)
-                let mut min_prob = 0.0;
-                if let Some(mp) = a.named.get("min_prob").copied() { min_prob = eval_node_expr(mp, graph, node, ctx, acc_value)?; }
-                match a.pos[0] {
-                    ExprAst::Var(v) if v == "node" => Ok(graph.degree_outgoing(node, min_prob) as f64),
-                    _ => Err(ExecError::ValidationError("degree(): first argument must be 'node'".into())),
-                }
-            }
-            other => Err(ExecError::ValidationError(format!("unsupported function '{}' in node metric expression", other))),
-        },
     }
+
+    // Special handling for "value" variable (must be in fold_nodes context)
+    if let ExprAst::Var(name) = expr {
+        if name == "value" && acc_value.is_none() {
+            return Err(ExecError::ValidationError("'value' is only valid inside fold_nodes step".into()));
+        }
+    }
+
+    eval_expr_core(expr, graph, &eval_ctx)
 }
 
 /// Helper function to iterate nodes in deterministic order by NodeId.
@@ -434,7 +457,7 @@ fn nodes_sorted_by_id(nodes: &[crate::engine::graph::NodeData]) -> Vec<&crate::e
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::graph::{BeliefGraph, GaussianPosterior, NodeData, BetaPosterior, EdgeData};
+    use crate::engine::graph::{BeliefGraph, EdgeData, EdgeId, GaussianPosterior, NodeData, BetaPosterior};
 
     fn demo_graph() -> BeliefGraph {
         use std::collections::HashMap;

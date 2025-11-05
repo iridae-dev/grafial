@@ -541,7 +541,10 @@ fn build_expr(pair: pest::iterators::Pair<Rule>) -> ExprAst {
                             ">=" => BinaryOp::Ge,
                             "and" => BinaryOp::And,
                             "or" => BinaryOp::Or,
-                            _ => unreachable!(),
+                            _ => {
+                                // Grammar should only produce valid operators
+                                unreachable!("unexpected binary operator: {:?}", op_or_rhs.as_rule())
+                            }
                         };
                         node = ExprAst::Binary { op, left: Box::new(node), right: Box::new(rhs) };
                     }
@@ -557,7 +560,14 @@ fn build_expr(pair: pest::iterators::Pair<Rule>) -> ExprAst {
             let first = it.next().unwrap();
             match first.as_rule() {
                 Rule::op_unary | Rule::KW_not => {
-                    let op = match first.as_str() { "-" => UnaryOp::Neg, "not" => UnaryOp::Not, _ => unreachable!() };
+                    let op = match first.as_str() {
+                        "-" => UnaryOp::Neg,
+                        "not" => UnaryOp::Not,
+                        _ => {
+                            // Grammar should only produce valid unary operators
+                            unreachable!("unexpected unary operator: '{}'", first.as_str())
+                        }
+                    };
                     let expr = build_expr(it.next().unwrap());
                     ExprAst::Unary { op, expr: Box::new(expr) }
                 }
@@ -635,7 +645,11 @@ fn build_expr(pair: pest::iterators::Pair<Rule>) -> ExprAst {
             ExprAst::Number(value)
         }
         Rule::boolean => match pair.as_str() { "true" => ExprAst::Bool(true), _ => ExprAst::Bool(false) },
-        _ => unreachable!("unknown expr rule: {:?}", pair.as_rule()),
+        _ => {
+            // This should never happen if the grammar is correct
+            // If it does, it indicates a grammar/Pest parser mismatch
+            unreachable!("unexpected expression rule: {:?}", pair.as_rule())
+        }
     }
 }
 
