@@ -35,11 +35,12 @@ bernoulli_posterior = { "BernoulliPosterior" ~ "(" ~ bernoulli_param ~ ("," ~ be
 bernoulli_param = { (ident ~ "=" ~ number) }
 categorical_posterior = { "CategoricalPosterior" ~ "(" ~ categorical_param ~ ("," ~ categorical_param)* ~ ")" }
 categorical_param = {
-    ("group_by" ~ "=" ~ string) |
-    ("prior" ~ "=" ~ (prior_array | "uniform")) |
-    ("pseudo_count" ~ "=" ~ number) |
-    ("categories" ~ "=" ~ "[" ~ string ~ ("," ~ string)* ~ "]")
+    (ident ~ "=" ~ categorical_param_value)
 }
+categorical_param_value = {
+    string | prior_array | "uniform" | number | categorical_categories_array
+}
+categorical_categories_array = { "[" ~ string ~ ("," ~ string)* ~ "]" }
 prior_array = { "[" ~ number ~ ("," ~ number)* ~ "]" }
 
 evidence_decl = { KW_evidence ~ ident ~ KW_on ~ ident ~ evidence_body }
@@ -125,7 +126,7 @@ paren_expr = { "(" ~ expr ~ ")" }
 e_bracket = { "E" ~ "[" ~ (ident ~ "." ~ ident) ~ "]" }
 exists_expr = { KW_exists ~ pattern_item ~ (KW_where ~ expr)? }
 not_exists_expr = { KW_not ~ KW_exists ~ pattern_item ~ (KW_where ~ expr)? }
-number = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+number = @{ ("-")? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 boolean = _{ KW_true | KW_false }
 
 // Keywords with word boundaries (atomic match wrapped in silent rule)

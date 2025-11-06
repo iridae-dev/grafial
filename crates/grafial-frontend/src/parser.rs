@@ -361,30 +361,50 @@ fn build_posterior_type(pair: pest::iterators::Pair<Rule>) -> Result<PosteriorTy
             for p in actual_pair.into_inner() {
                 match p.as_rule() {
                     Rule::categorical_param => {
+                        // Parse categorical_param - similar to gaussian_param/bernoulli_param
+                        // Structure: ident ~ "=" ~ categorical_param_value
                         let mut cp = p.into_inner();
-                        let param_name = cp.next().unwrap().as_str();
+                        let param_name_pair = cp.next().ok_or_else(|| {
+                            FrontendError::ParseError("Missing parameter name in categorical_param".to_string())
+                        })?;
+                        let param_name = param_name_pair.as_str();
+                        
+                        // Skip "="
+                        cp.next();
+                        
+                        // Get the value - it should be categorical_param_value
+                        let value_wrapper = cp.next().ok_or_else(|| {
+                            FrontendError::ParseError("Missing parameter value in categorical_param".to_string())
+                        })?;
+                        
+                        // Extract the actual value from categorical_param_value
+                        let value_pair = value_wrapper.into_inner().next().ok_or_else(|| {
+                            FrontendError::ParseError("Empty categorical_param_value".to_string())
+                        })?;
+                        
                         match param_name {
                             "group_by" => {
-                                cp.next(); // skip "="
-                                let value = cp.next().unwrap().as_str();
-                                // Remove quotes from string
-                                group_by = Some(value.trim_matches('"').to_string());
+                                if let Rule::string = value_pair.as_rule() {
+                                    let value_str = value_pair.as_str().trim_matches('"');
+                                    group_by = Some(value_str.to_string());
+                                } else {
+                                    return Err(FrontendError::ParseError(
+                                        "group_by parameter must be a string".to_string(),
+                                    ));
+                                }
                             }
                             "prior" => {
-                                cp.next(); // skip "="
-                                let next = cp.next().unwrap();
-                                match next.as_rule() {
+                                match value_pair.as_rule() {
                                     Rule::prior_array => {
                                         let mut concentrations = Vec::new();
-                                        for n in next.into_inner() {
+                                        for n in value_pair.clone().into_inner() {
                                             if let Rule::number = n.as_rule() {
-                                                let val =
-                                                    n.as_str().parse::<f64>().map_err(|e| {
-                                                        FrontendError::ParseError(format!(
-                                                            "Invalid number: {}",
-                                                            e
-                                                        ))
-                                                    })?;
+                                                let val = n.as_str().parse::<f64>().map_err(|e| {
+                                                    FrontendError::ParseError(format!(
+                                                        "Invalid number: {}",
+                                                        e
+                                                    ))
+                                                })?;
                                                 concentrations.push(val);
                                             }
                                         }
@@ -397,31 +417,41 @@ fn build_posterior_type(pair: pest::iterators::Pair<Rule>) -> Result<PosteriorTy
                                 }
                             }
                             "pseudo_count" => {
-                                cp.next(); // skip "="
-                                let value =
-                                    cp.next().unwrap().as_str().parse::<f64>().map_err(|e| {
+                                if let Rule::number = value_pair.as_rule() {
+                                    let value = value_pair.as_str().parse::<f64>().map_err(|e| {
                                         FrontendError::ParseError(format!("Invalid number: {}", e))
                                     })?;
-                                prior = Some(CategoricalPrior::Uniform {
-                                    pseudo_count: value,
-                                });
+                                    prior = Some(CategoricalPrior::Uniform {
+                                        pseudo_count: value,
+                                    });
+                                } else {
+                                    return Err(FrontendError::ParseError(
+                                        "pseudo_count parameter must be a number".to_string(),
+                                    ));
+                                }
                             }
                             "categories" => {
-                                cp.next(); // skip "="
-                                let mut cats = Vec::new();
-                                // Skip "["
-                                let array_pair = cp.find(|c| c.as_str().starts_with('['));
-                                if let Some(arr) = array_pair {
-                                    for s in arr.into_inner() {
+                                if let Rule::categorical_categories_array = value_pair.as_rule() {
+                                    let mut cats = Vec::new();
+                                    for s in value_pair.clone().into_inner() {
                                         if let Rule::string = s.as_rule() {
                                             let val = s.as_str().trim_matches('"').to_string();
                                             cats.push(val);
                                         }
                                     }
+                                    categories = Some(cats);
+                                } else {
+                                    return Err(FrontendError::ParseError(
+                                        "categories parameter must be an array of strings".to_string(),
+                                    ));
                                 }
-                                categories = Some(cats);
                             }
-                            _ => {}
+                            _ => {
+                                return Err(FrontendError::ParseError(format!(
+                                    "Unknown categorical parameter: {}",
+                                    param_name
+                                )));
+                            }
                         }
                     }
                     _ => {}
