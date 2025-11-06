@@ -8,24 +8,35 @@ This document describes how to build and install the Grafial engine and CLI tool
 - **Cargo**: Included with Rust installation
 - **Nix** (optional): For development environment with pinned toolchains (see `shell.nix`)
 
-## Building the Library
+## Building the Workspace
 
-To build the Grafial library:
+Grafial is organized as a Cargo workspace with multiple crates. Build all crates:
 
 ```bash
-cargo build --release
+cargo build --workspace --release
 ```
 
-This produces a release-optimized library in `target/release/libgrafial.rlib`.
+Build a specific crate:
+
+```bash
+# Build core library
+cargo build -p grafial-core --release
+
+# Build CLI tool
+cargo build -p grafial-cli --release
+
+# Build Python bindings
+cargo build -p grafial-python --release
+```
 
 ## Building the CLI Tool
 
-The Grafial CLI is included as a binary target in the main crate.
+The Grafial CLI is in the `grafial-cli` crate.
 
 ### Development Build
 
 ```bash
-cargo build --bin grafial
+cargo build -p grafial-cli
 ```
 
 The binary will be at `target/debug/grafial`.
@@ -33,7 +44,7 @@ The binary will be at `target/debug/grafial`.
 ### Release Build
 
 ```bash
-cargo build --release --bin grafial
+cargo build -p grafial-cli --release
 ```
 
 The optimized binary will be at `target/release/grafial`.
@@ -43,7 +54,7 @@ The optimized binary will be at `target/release/grafial`.
 Install the CLI tool system-wide using Cargo:
 
 ```bash
-cargo install --path .
+cargo install --path crates/grafial-cli
 ```
 
 This installs `grafial` to `~/.cargo/bin/` (or `$CARGO_HOME/bin` if set). Make sure this directory is in your `PATH`.
@@ -53,7 +64,7 @@ This installs `grafial` to `~/.cargo/bin/` (or `$CARGO_HOME/bin` if set). Make s
 To install directly from a git repository:
 
 ```bash
-cargo install --git <repository-url>
+cargo install --git <repository-url> --path crates/grafial-cli
 ```
 
 ## CLI Usage
@@ -62,19 +73,19 @@ Once installed, the `grafial` command is available:
 
 ```bash
 # Validate a Grafial program
-grafial examples/social.grafial
+grafial crates/grafial-examples/social.grafial
 
 # List all flows in a program
-grafial examples/social.grafial --list-flows
+grafial crates/grafial-examples/social.grafial --list-flows
 
 # Execute a specific flow
-grafial examples/social.grafial --flow Demo
+grafial crates/grafial-examples/social.grafial --flow Demo
 
 # Output results as JSON (requires serde feature)
-grafial examples/social.grafial --flow Demo -o json
+grafial crates/grafial-examples/social.grafial --flow Demo -o json
 
 # Get detailed debug output
-grafial examples/social.grafial --flow Demo -o debug
+grafial crates/grafial-examples/social.grafial --flow Demo -o debug
 ```
 
 ### Command-Line Options
@@ -88,22 +99,43 @@ grafial examples/social.grafial --flow Demo -o debug
 
 ## Testing
 
-Run all tests:
+Run all tests in the workspace:
 
 ```bash
-cargo test
+cargo test --workspace
+```
+
+Run tests for a specific crate:
+
+```bash
+# Test core engine
+cargo test -p grafial-core
+
+# Test frontend (parser, AST, validation)
+cargo test -p grafial-frontend
+
+# Test integration tests
+cargo test -p grafial-tests
 ```
 
 Run tests with verbose output:
 
 ```bash
-RUST_LOG=debug cargo test -- --nocapture
+RUST_LOG=debug cargo test --workspace -- --nocapture
 ```
 
-Run only integration tests:
+Run a specific test:
 
 ```bash
-cargo test --test integration_tests
+cargo test -p grafial-tests --test integration_tests -- parses_social_example
+```
+
+## Benchmarks
+
+Run performance benchmarks:
+
+```bash
+cargo bench -p grafial-benches
 ```
 
 ## Development Environment
@@ -118,7 +150,7 @@ nix-shell
 
 This provides:
 - Rust toolchain (pinned version)
-- Python toolchain (for future Python bindings)
+- Python toolchain (for Python bindings)
 - `PYO3_PYTHON` environment variable set correctly
 
 ### Without Nix
@@ -134,12 +166,37 @@ Grafial supports optional features that can be enabled during build:
 - `serde`: Enable serialization support (required for JSON output in CLI)
 - `tracing`: Enable structured logging
 - `rayon`: Enable parallel execution (experimental)
+- `bincode`: Enable binary serialization
 
 Build with features:
 
 ```bash
-cargo build --release --features serde,rayon
+# Build CLI with serde support
+cargo build -p grafial-cli --release --features serde
+
+# Build core with all features
+cargo build -p grafial-core --release --features serde,tracing,rayon
 ```
+
+## Python Bindings
+
+Build Python bindings:
+
+```bash
+cd crates/grafial-python
+maturin develop --release
+```
+
+Or using `uv`:
+
+```bash
+cd crates/grafial-python
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+uv pip install -e .
+```
+
+See `PYTHON_PLAN.md` for detailed Python integration instructions.
 
 ## Troubleshooting
 
@@ -158,20 +215,35 @@ Add this to your shell configuration file (`.bashrc`, `.zshrc`, etc.) to make it
 JSON output requires the `serde` feature. Build with:
 
 ```bash
-cargo build --release --features serde
-cargo install --path . --features serde
+cargo build -p grafial-cli --release --features serde
+cargo install --path crates/grafial-cli --features serde
 ```
 
 ### Build errors
 
 - Ensure you're using Rust 1.70 or later: `rustc --version`
-- Try cleaning and rebuilding: `cargo clean && cargo build`
+- Try cleaning and rebuilding: `cargo clean && cargo build --workspace`
 - Check that all dependencies are available: `cargo update`
+
+### Workspace build issues
+
+If you encounter issues building the workspace:
+
+```bash
+# Clean all build artifacts
+cargo clean
+
+# Update dependencies
+cargo update
+
+# Rebuild from scratch
+cargo build --workspace --release
+```
 
 ## Next Steps
 
 - See `LANGUAGE_GUIDE.md` for Grafial syntax and semantics
 - See `ENGINE_ARCHITECTURE.md` for engine internals
+- See `ROADMAP.md` for future development plans
 - See `PYTHON_PLAN.md` for Python bindings roadmap
-- Check `examples/` for sample Grafial programs
-
+- Check `crates/grafial-examples/` for sample Grafial programs

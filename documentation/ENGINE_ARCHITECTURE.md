@@ -1,26 +1,38 @@
 # Grafial Engine Architecture
 
-**A concise guide to the Rust engine's internal structure for contributors and maintainers.**
+A concise guide to the Rust engine's internal structure for contributors and maintainers.
 
 ---
 
-## Module Structure
+## Monorepo Structure
 
 ```
-src/
-├── frontend/       # pest parser + AST builder
-├── ir/             # intermediate representations (canonical lowered forms)
-├── engine/         # belief graph + rule + flow execution
-├── metrics/        # registry of metric/aggregator functions
-├── storage/        # graph storage, ids, arenas, indices
-└── bindings/       # Python + CLI integration (future)
+baygraph/
+├── crates/
+│   ├── grafial-frontend/    # Parser, AST, validation
+│   ├── grafial-ir/          # Intermediate representation
+│   ├── grafial-core/        # Core engine (graph, rules, flows, metrics)
+│   ├── grafial-cli/         # Command-line interface
+│   ├── grafial-python/      # Python bindings (PyO3)
+│   ├── grafial-tests/       # Integration and unit tests
+│   ├── grafial-benches/     # Performance benchmarks
+│   └── grafial-vscode/      # VSCode extension
+└── documentation/           # Project documentation
 ```
 
-### Frontend (`src/frontend/`)
+---
 
-- **Parser** (`parser.rs`): pest grammar → typed AST
-- **AST** (`ast.rs`): Typed representation of schemas, rules, flows, metrics
-- **Validation** (`validate.rs`): Semantic validation and type checking
+## Crate Overview
+
+### grafial-frontend
+
+**Location:** `crates/grafial-frontend/`
+
+**Modules:**
+- **Parser** (`src/parser.rs`): pest grammar → typed AST
+- **AST** (`src/ast.rs`): Typed representation of schemas, rules, flows, metrics
+- **Validation** (`src/validate.rs`): Semantic validation and type checking
+- **Errors** (`src/errors.rs`): Frontend error types (`FrontendError`)
 
 **Responsibilities:**
 - Parse Grafial DSL source code
@@ -28,23 +40,39 @@ src/
 - Validate schemas, belief models, and references
 - Produce `ProgramAst` for execution
 
-### IR (`src/ir/`)
+**Public API:**
+- `parse_program(source: &str) -> Result<ProgramAst, FrontendError>`
+- `validate_program(ast: &ProgramAst) -> Result<(), FrontendError>`
 
-- **Purpose**: Canonical lowered representation (`RuleIR`, `FlowIR`, `ProgramIR`)
-- **Status**: Currently minimal; designed to decouple frontend from engine
-- **Future**: Optimization surface for query plans, rule rewriting, etc.
+### grafial-ir
 
-### Engine (`src/engine/`)
+**Location:** `crates/grafial-ir/`
 
-Core execution engine implementing:
+**Modules:**
+- **RuleIR** (`src/rule.rs`): Lowered rule representation
+- **FlowIR** (`src/flow.rs`): Lowered flow representation
+- **ProgramIR** (`src/program.rs`): Complete program IR
 
-- **`graph.rs`**: `BeliefGraph` data structure with Bayesian posteriors
-- **`evidence.rs`**: Evidence ingestion and graph building
-- **`rule_exec.rs`**: Pattern matching and rule execution
-- **`flow_exec.rs`**: Flow transform interpreter and pipeline execution
-- **`expr_eval.rs`**: Expression evaluation core
-- **`query_plan.rs`**: Query plan optimization and caching
-- **`errors.rs`**: Error types (`ExecError`)
+**Purpose:** Canonical lowered representation designed to decouple frontend from engine.
+
+**Status:** Infrastructure exists with lowering functions, but engine currently uses AST directly. See ROADMAP.md for migration plans.
+
+### grafial-core
+
+**Location:** `crates/grafial-core/`
+
+**Modules:**
+- **`engine/graph.rs`**: `BeliefGraph` data structure with Bayesian posteriors
+- **`engine/evidence.rs`**: Evidence ingestion and graph building
+- **`engine/rule_exec.rs`**: Pattern matching and rule execution
+- **`engine/flow_exec.rs`**: Flow transform interpreter and pipeline execution
+- **`engine/expr_eval.rs`**: Expression evaluation core
+- **`engine/expr_utils.rs`**: Expression utility functions
+- **`engine/query_plan.rs`**: Query plan optimization and caching
+- **`engine/snapshot.rs`**: Graph snapshot serialization
+- **`engine/errors.rs`**: Error types (`ExecError`)
+- **`metrics/mod.rs`**: Metric function registry
+- **`storage/mod.rs`**: Storage utilities (currently minimal)
 
 **Design Goals:**
 - Zero-copy between phases where feasible
@@ -52,16 +80,9 @@ Core execution engine implementing:
 - Thread-safe (`Send + Sync`) structures for parallel evaluation
 - Immutable graphs between transforms
 
-### Metrics (`src/metrics/`)
-
-- **Registry**: Immutable map of metric functions `Arc<HashMap<String, Arc<dyn MetricFn>>>`
-- **Built-ins**: `sum_nodes`, `fold_nodes`, `count_nodes`, `avg_degree`
-- **Extension**: Implement `MetricFn` trait and register in Rust
-
-### Storage (`src/storage/`)
-
-- **Purpose**: Graph storage utilities, ID management
-- **Status**: Currently minimal; IDs live in `engine/graph.rs`
+**Public API:**
+- `parse_and_validate(source: &str) -> Result<ProgramAst, ExecError>`
+- `run_flow(program: &ProgramAst, flow_name: &str, evidence: &EvidenceDef) -> Result<FlowResult, ExecError>`
 
 ---
 
@@ -177,6 +198,16 @@ pub enum EdgePosterior {
 
 ### Error Types
 
+**Frontend errors** (`grafial-frontend`):
+```rust
+#[non_exhaustive]
+pub enum FrontendError {
+    ParseError(String),
+    ValidationError(String),
+}
+```
+
+**Engine errors** (`grafial-core`):
 ```rust
 #[non_exhaustive]
 pub enum ExecError {
@@ -193,6 +224,7 @@ pub enum ExecError {
 - No panics in library code (except debug assertions)
 - Validate user inputs at boundaries (parser/typechecker)
 - Use `thiserror` for automatic error formatting
+- Frontend errors convert to `ExecError` via `From` trait
 
 **Error conversion:**
 - Python bindings: Convert `ExecError` to appropriate Python exceptions
@@ -247,7 +279,7 @@ pub enum ExecError {
 **Example: Adding a new metric**
 
 ```rust
-// In src/metrics/mod.rs
+// In crates/grafial-core/src/metrics/mod.rs
 pub struct MyCustomMetric;
 
 impl MetricFn for MyCustomMetric {
@@ -294,7 +326,7 @@ pub trait MetricFn: Send + Sync + 'static {
 
 ### Integration Tests
 
-- Located in `tests/` directory
+- Located in `crates/grafial-tests/tests/`
 - End-to-end flow execution
 - Evidence building and application
 - Rule pattern matching
@@ -307,6 +339,7 @@ pub trait MetricFn: Send + Sync + 'static {
 
 ### Benchmarks
 
+- Located in `crates/grafial-benches/benches/`
 - Use `criterion` for performance tracking
 - Bench evidence application, rule evaluation, metric scans
 - Track allocations with profiling tools
@@ -315,7 +348,7 @@ pub trait MetricFn: Send + Sync + 'static {
 
 ## Performance Optimizations
 
-**Implemented (Phase 1 & 2):**
+**Implemented:**
 - Fine-grained delta compression (store only changed values)
 - String interning (`Arc<str>` for edge types, node labels)
 - FxHashMap for integer-keyed maps (faster hashing)
@@ -323,14 +356,13 @@ pub trait MetricFn: Send + Sync + 'static {
 - Copy-on-write semantics (reduce cloning)
 - Iterator optimizations (unstable sort, pre-allocated capacity)
 
-**Future (see ROADMAP.md):**
-- Parallelization (`rayon` feature)
-- Algorithmic improvements
-- Memory layout optimizations
+**Future:** See `ROADMAP.md` for planned optimizations including parallelization, algorithmic improvements, and memory layout optimizations.
 
 ---
 
-## Python Bindings (Future)
+## Python Bindings
+
+**Location:** `crates/grafial-python/`
 
 **Design principles:**
 - Thin wrappers over stable Rust types
@@ -339,7 +371,7 @@ pub trait MetricFn: Send + Sync + 'static {
 - Release GIL for long-running operations
 - Convert `ExecError` to Python exceptions
 
-See `Python_Plan.md` for detailed implementation plan.
+**Status:** Placeholder implementation exists. See `PYTHON_PLAN.md` for detailed implementation plan.
 
 ---
 
@@ -357,6 +389,5 @@ See `Python_Plan.md` for detailed implementation plan.
 
 - **Language Guide**: `LANGUAGE_GUIDE.md` - User-facing language documentation
 - **Roadmap**: `ROADMAP.md` - Future work and performance improvements
-- **Python Plan**: `Python_Plan.md` - Python bindings implementation plan
-- **Code Comments**: Self-contained explanations in source code (no external doc references)
-
+- **Python Plan**: `PYTHON_PLAN.md` - Python bindings implementation plan
+- **Building**: `BUILDING.md` - Build and development setup

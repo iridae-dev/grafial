@@ -2,7 +2,7 @@
 
 **Goal:** Make Grafial usable without writing Rust, providing a complete Python API for Bayesian belief graph inference.
 
-**Status:** Planning phase - bindings module exists as placeholder (`src/bindings/mod.rs`)
+**Status:** Planning phase - bindings crate exists at `crates/grafial-python/` with placeholder implementation.
 
 ---
 
@@ -22,16 +22,16 @@ The Python bindings will expose Grafial's core functionality through PyO3, allow
 ### Module-Level Functions
 
 ```python
-import Grafial
+import grafial
 
 # Compile a Grafial program from source
-program = Grafial.compile(source: str) -> Program
+program = grafial.compile(source: str) -> Program
 
 # Run a flow (uses static evidence from program)
-ctx = Grafial.run_flow(program: Program, flow_name: str) -> Context
+ctx = grafial.run_flow(program: Program, flow_name: str) -> Context
 
 # Run a flow with runtime evidence
-ctx = Grafial.run_flow_with_evidence(
+ctx = grafial.run_flow_with_evidence(
     program: Program,
     flow_name: str,
     evidence: Evidence,
@@ -39,7 +39,7 @@ ctx = Grafial.run_flow_with_evidence(
 ) -> Context
 
 # Chain flows (pass context with graphs/metrics between flows)
-ctx = Grafial.run_flow_with_context(
+ctx = grafial.run_flow_with_context(
     program: Program,
     flow_name: str,
     ctx: Context
@@ -61,7 +61,7 @@ Builder for runtime evidence (observations not in the `.grafial` file).
 
 **Constructor:**
 ```python
-evidence = Grafial.Evidence(
+evidence = grafial.Evidence(
     name: str,
     model: str  # Belief model name
 )
@@ -144,19 +144,14 @@ Represents a group of competing edges (CategoricalPosterior).
 
 **Module Structure:**
 ```
-src/bindings/
-├── mod.rs              # Main module
-├── python/
-│   ├── mod.rs          # Python module initialization
-│   ├── program.rs      # Program wrapper
-│   ├── evidence.rs     # Evidence builder
-│   ├── context.rs      # Context wrapper
-│   ├── graph.rs        # BeliefGraph wrapper
-│   ├── node_view.rs    # NodeView wrapper
-│   ├── edge_view.rs    # EdgeView wrapper
-│   └── competing_group.rs  # CompetingGroup wrapper
-└── errors.rs           # Error conversion utilities
+crates/grafial-python/
+├── src/
+│   └── lib.rs              # Main PyO3 module
+├── Cargo.toml              # Rust dependencies
+└── pyproject.toml          # Python package metadata
 ```
+
+The implementation will be in `crates/grafial-python/src/lib.rs` with helper modules as needed.
 
 ### GIL Management
 
@@ -198,14 +193,14 @@ impl BeliefGraph {
 ```rust
 use pyo3::exceptions::{PyValueError, PyRuntimeError, PyTypeError};
 
-impl From<ExecError> for PyErr {
-    fn from(err: ExecError) -> Self {
+impl From<grafial_core::ExecError> for PyErr {
+    fn from(err: grafial_core::ExecError) -> Self {
         match err {
             ExecError::ParseError(msg) => PyValueError::new_err(format!("Parse error: {}", msg)),
             ExecError::ValidationError(msg) => PyValueError::new_err(format!("Validation error: {}", msg)),
-            ExecError::TypeError(msg) => PyTypeError::new_err(format!("Type error: {}", msg)),
+            ExecError::Execution(msg) => PyRuntimeError::new_err(format!("Execution error: {}", msg)),
+            ExecError::Numerical(msg) => PyRuntimeError::new_err(format!("Numerical error: {}", msg)),
             ExecError::Internal(msg) => PyRuntimeError::new_err(format!("Internal error: {}", msg)),
-            // ... map all variants
         }
     }
 }
@@ -259,7 +254,7 @@ impl BeliefGraph {
 ```rust
 #[pyclass]
 pub struct BeliefGraph {
-    inner: Arc<engine::graph::BeliefGraph>,
+    inner: Arc<grafial_core::engine::graph::BeliefGraph>,
 }
 
 #[pymethods]
@@ -319,65 +314,69 @@ def to_networkx(self, threshold: float = 0.0) -> nx.Graph:
 
 ### Maturin Setup
 
-**Cargo.toml additions:**
+**Cargo.toml** (already configured in `crates/grafial-python/Cargo.toml`):
 ```toml
 [lib]
-name = "Grafial"
+name = "grafial"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+grafial-core = { path = "../grafial-core" }
 pyo3 = { version = "0.21", features = ["auto-initialize"] }
-
-[features]
-python = ["pyo3"]
 ```
 
-**pyproject.toml (create):**
+**pyproject.toml** (already exists in `crates/grafial-python/pyproject.toml`):
 ```toml
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "Grafial"
+name = "grafial"
 requires-python = ">=3.8"
-classifiers = [
-    "Programming Language :: Rust",
-    "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
-]
 ```
 
 ### Development Build
 
+**Using maturin:**
 ```bash
-# Install maturin
-pip install maturin
-
-# Develop mode (editable install)
+cd crates/grafial-python
 maturin develop --release
+```
 
-# Or in nix-shell
-cd /path/to/Grafial
+**Using uv (recommended):**
+```bash
+cd crates/grafial-python
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+uv pip install -e .
+```
+
+**In nix-shell:**
+```bash
+cd crates/grafial-python
+# uv is available if installed separately
+uv venv && uv pip install -e .
+# Or use maturin if available
 maturin develop --release
 ```
 
 ### Testing
 
 **Python Tests:**
-Create `tests/python/` directory:
+Create `crates/grafial-python/tests/` directory:
 ```python
-# tests/python/test_basic.py
-import Grafial
+# crates/grafial-python/tests/test_basic.py
+import grafial
 
 def test_compile():
     source = """
     schema Test { node Person { } edge REL { } }
     belief_model TestBeliefs on Test {
-        edge REL { exist ~ BernoulliPosterior() }
+        edge REL { exist ~ BernoulliPosterior(prior=0.5, pseudo_count=2.0) }
     }
     """
-    program = Grafial.compile(source)
+    program = grafial.compile(source)
     assert program is not None
 
 def test_run_flow():
@@ -386,11 +385,12 @@ def test_run_flow():
 
 **Run tests:**
 ```bash
-# From Rust side
-cargo test --features python
+# From workspace root
+cargo test -p grafial-python
 
-# From Python side (after maturin develop)
-pytest tests/python/
+# From Python side (after installation)
+cd crates/grafial-python
+pytest tests/
 ```
 
 ---
@@ -400,15 +400,15 @@ pytest tests/python/
 ### Basic Usage
 
 ```python
-import Grafial
+import grafial
 
 # Compile program
-with open("model.grafial", "r") as f:
+with open("crates/grafial-examples/social.grafial", "r") as f:
     source = f.read()
-program = Grafial.compile(source)
+program = grafial.compile(source)
 
 # Run flow with static evidence
-ctx = Grafial.run_flow(program, "MyFlow")
+ctx = grafial.run_flow(program, "Demo")
 print(f"Result metric: {ctx.metrics['my_metric']}")
 
 # Get exported graph
@@ -421,19 +421,19 @@ for node in graph.nodes():
 
 ```python
 # Build runtime evidence
-evidence = Grafial.Evidence("RuntimeEvidence", model="SocialBeliefs")
+evidence = grafial.Evidence("RuntimeEvidence", model="SocialBeliefs")
 evidence.observe_edge("Person", "Alice", "KNOWS", "Person", "Bob", present=True)
 evidence.observe_numeric("Person", "Alice", "score", 10.0)
 
 # Run flow with evidence
-ctx = Grafial.run_flow_with_evidence(program, "ComputeBudget", evidence)
+ctx = grafial.run_flow_with_evidence(program, "ComputeBudget", evidence)
 ```
 
 ### Competing Edges
 
 ```python
 # Observe competing edge choices
-evidence = Grafial.Evidence("RoutingEvidence", model="NetworkBeliefs")
+evidence = grafial.Evidence("RoutingEvidence", model="NetworkBeliefs")
 evidence.observe_edge_chosen("Server", "S1", "ROUTES_TO", "Server", "S2")
 evidence.observe_edge_chosen("Server", "S1", "ROUTES_TO", "S2")  # Again
 evidence.observe_edge_chosen("Server", "S1", "ROUTES_TO", "S3")  # Different choice
@@ -464,28 +464,28 @@ nx.draw(G, with_labels=True)
 
 ## Implementation Phases
 
-### Phase 1: Core Infrastructure (Week 1)
-- [ ] Set up PyO3 project structure (`src/bindings/python/`)
+### Phase 1: Core Infrastructure
+- [ ] Set up PyO3 module structure in `crates/grafial-python/src/lib.rs`
 - [ ] Implement `Program` wrapper
 - [ ] Implement `compile()` function
 - [ ] Basic error conversion (`ExecError` → Python exceptions)
 - [ ] GIL management for compile
 
-### Phase 2: Flow Execution (Week 1-2)
+### Phase 2: Flow Execution
 - [ ] Implement `Context` wrapper
 - [ ] Implement `run_flow()` function
 - [ ] Implement `run_flow_with_evidence()` function
 - [ ] Implement `run_flow_with_context()` function
 - [ ] GIL management for flow execution
 
-### Phase 3: Evidence Builder (Week 2)
+### Phase 3: Evidence Builder
 - [ ] Implement `Evidence` class
 - [ ] Implement `observe_edge()` methods
 - [ ] Implement `observe_numeric()` method
 - [ ] Implement competing edge evidence methods
 - [ ] Validation and error handling
 
-### Phase 4: Graph Inspection (Week 2-3)
+### Phase 4: Graph Inspection
 - [ ] Implement `BeliefGraph` wrapper
 - [ ] Implement `NodeView` and `EdgeView`
 - [ ] Implement `nodes()` and `edges()` iterators
@@ -493,12 +493,12 @@ nx.draw(G, with_labels=True)
 - [ ] Implement `competing_groups()` iterator
 - [ ] Implement `CompetingGroup` wrapper
 
-### Phase 5: Convenience Exports (Week 3)
+### Phase 5: Convenience Exports
 - [ ] Implement `to_pandas()` (optional pandas dependency)
 - [ ] Implement `to_networkx()` (optional networkx dependency)
 - [ ] Handle missing dependencies gracefully
 
-### Phase 6: Testing and Documentation (Week 3-4)
+### Phase 6: Testing and Documentation
 - [ ] Python unit tests for all APIs
 - [ ] Integration tests with example programs
 - [ ] API documentation (docstrings)
@@ -509,33 +509,33 @@ nx.draw(G, with_labels=True)
 
 ## Exit Criteria
 
-✅ **Complete when:**
+**Complete when:**
 
 1. **From Python, you can:**
-   - ✅ `compile()` a `.grafial` file source string
-   - ✅ Build an `Evidence` object with runtime observations
-   - ✅ `run_flow()` with static or dynamic evidence
-   - ✅ `run_flow_with_context()` to chain flows
-   - ✅ Read metrics from `Context.metrics`
-   - ✅ Inspect graphs via `nodes()` and `edges()` iterators
-   - ✅ Access posterior beliefs via `E()` and `Var()`
-   - ✅ Inspect competing edge groups
-   - ✅ Export to pandas/NetworkX
+   - `compile()` a `.grafial` file source string
+   - Build an `Evidence` object with runtime observations
+   - `run_flow()` with static or dynamic evidence
+   - `run_flow_with_context()` to chain flows
+   - Read metrics from `Context.metrics`
+   - Inspect graphs via `nodes()` and `edges()` iterators
+   - Access posterior beliefs via `E()` and `Var()`
+   - Inspect competing edge groups
+   - Export to pandas/NetworkX
 
 2. **Performance:**
-   - ✅ GIL released for long-running operations
-   - ✅ No unnecessary Python ↔ Rust round trips
-   - ✅ Memory usage reasonable (no leaks)
+   - GIL released for long-running operations
+   - No unnecessary Python ↔ Rust round trips
+   - Memory usage reasonable (no leaks)
 
 3. **Error Handling:**
-   - ✅ All Rust errors converted to appropriate Python exceptions
-   - ✅ Clear error messages with context
-   - ✅ No panics reach Python code
+   - All Rust errors converted to appropriate Python exceptions
+   - Clear error messages with context
+   - No panics reach Python code
 
 4. **Testing:**
-   - ✅ Python unit tests pass
-   - ✅ Integration tests with real `.grafial` files
-   - ✅ Edge cases handled (empty graphs, missing nodes, etc.)
+   - Python unit tests pass
+   - Integration tests with real `.grafial` files
+   - Edge cases handled (empty graphs, missing nodes, etc.)
 
 ---
 
@@ -543,11 +543,11 @@ nx.draw(G, with_labels=True)
 
 - **PyO3 Documentation:** https://pyo3.rs/
 - **Maturin Documentation:** https://maturin.rs/
-- **Design Doc Section 5.11:** Python FFI guidelines (GIL, errors, zero-copy)
-- **Design Doc Section 6:** Python integration examples and API table
-- **Rust Engine:** `src/engine/` - Core types to wrap
-- **Flow Execution:** `src/engine/flow_exec.rs` - `run_flow` implementation
-- **Errors:** `src/engine/errors.rs` - `ExecError` enum to convert
+- **uv Documentation:** https://github.com/astral-sh/uv
+- **Rust Engine:** `crates/grafial-core/src/engine/` - Core types to wrap
+- **Flow Execution:** `crates/grafial-core/src/engine/flow_exec.rs` - `run_flow` implementation
+- **Errors:** `crates/grafial-core/src/engine/errors.rs` - `ExecError` enum to convert
+- **Frontend:** `crates/grafial-frontend/` - Parser and AST types
 
 ---
 
@@ -557,4 +557,5 @@ nx.draw(G, with_labels=True)
 - **Type Hints:** Add Python type hints for better IDE support
 - **Docstrings:** All public methods should have Google-style docstrings
 - **Versioning:** Python package version should match Rust crate version
-- **Distribution:** Eventually publish to PyPI as `Grafial` (check availability)
+- **Distribution:** Eventually publish to PyPI as `grafial` (check availability)
+- **Module Name:** Python module is `grafial` (lowercase), not `Grafial`
