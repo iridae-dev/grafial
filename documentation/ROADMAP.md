@@ -43,6 +43,77 @@
 
 ## Medium Priority
 
+### VSCode Language Server Protocol (LSP) Implementation
+
+**Location:** `crates/grafial-lsp/` (new crate), `crates/grafial-vscode/`
+
+**Problem:** Current VSCode extension only provides syntax highlighting. Missing IntelliSense, error checking, hover docs, and navigation features.
+
+**Solution:** Implement Rust-based LSP server with binary distribution. Reuse existing parser/validator. Bundle platform-specific binaries with extension (no Rust toolchain required on client).
+
+**Implementation Phases:**
+
+1. **Phase 1: Diagnostics** (2-3 days)
+   - Real-time error checking with red squiggles
+   - Parse errors with line/column positions (convert Pest spans → LSP ranges)
+   - Validation errors (e.g., "prob() used on non-edge variable")
+   - Publish diagnostics on file open, save, and change
+
+2. **Phase 2: Hover Documentation** (1-2 days)
+   - Markdown tooltips for built-in functions (`prob()`, `E[]`, `winner()`, `entropy()`, etc.)
+   - Documentation for posterior types (`GaussianPosterior`, `CategoricalPosterior`, etc.)
+   - Schema/belief model/rule/flow definition information
+
+3. **Phase 3: Code Completion (IntelliSense)** (3-4 days)
+   - Keyword completion (`schema`, `belief_model`, `rule`, `flow`, etc.)
+   - Built-in function completion (`prob`, `E`, `winner`, `entropy`, etc.)
+   - Schema/belief model/rule/flow name completion
+   - Context-aware suggestions (rule patterns → pattern variables, after `prob(` → edge variables)
+
+4. **Phase 4: Go to Definition** (2-3 days)
+   - Navigate to schema definitions from references
+   - Jump to rule/flow definitions
+   - Cross-file navigation (when imports are added)
+
+5. **Phase 5: Document Symbols** (1-2 days)
+   - Outline view: hierarchical tree of schemas, rules, flows
+   - Symbol search (`Cmd+Shift+O`)
+
+6. **Phase 6: Code Actions** (optional, 3-5 days)
+   - Quick fixes (e.g., "Did you mean `E[A.attr]`?")
+   - Auto-format on save
+
+**Architecture:**
+- Create `grafial-lsp` crate using `tower-lsp`
+- Convert Pest parse errors → LSP diagnostics with position conversion
+- Bundle platform-specific binaries (macOS Intel/Apple Silicon, Windows, Linux)
+- VSCode extension auto-detects platform and launches correct binary
+- Alternative: WebAssembly approach if binary distribution is problematic (slower but universal)
+
+**Impact:** Major productivity boost for developers writing Grafial code  
+**Risk:** Low - LSP is well-established, incremental implementation  
+
+---
+
+### Enhanced Syntax Highlighting
+
+**Location:** `crates/grafial-vscode/syntaxes/grafial.tmLanguage.json`
+
+**Problem:** Current syntax highlighting is basic. Could be more granular with better scoping for semantic features.
+
+**Solution:** Enhance TextMate grammar with more granular scoping:
+- Distinguish built-in functions from user-defined names
+- Highlight posterior type parameters differently
+- Color-code evidence modes (`present`, `absent`, `chosen`, `unchosen`, `forced_choice`)
+- Scope expression operators with consistent styling
+- Highlight pattern matching syntax distinctly
+- Better scoping for metric expressions (`sum_nodes`, `count_nodes`, etc.)
+
+**Impact:** Improved code readability and visual distinction between language constructs  
+**Risk:** Low - cosmetic improvements only  
+
+---
+
 ### Incremental Adjacency Index Updates
 
 **Location:** `crates/grafial-core/src/engine/graph.rs`
