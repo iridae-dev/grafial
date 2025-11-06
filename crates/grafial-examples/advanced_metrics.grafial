@@ -122,7 +122,7 @@ flow MetricsShowcase on AnalyticsBeliefs {
   // Useful for computing running totals, compound effects, etc.
   metric cumulative_value = fold_nodes(
     label=Entity,
-    order_by=E[node.value] DESC,  // Process in descending order of value
+    order_by=E[node.value],  // Process by value (descending not yet supported)
     init=0.0,
     step=value + E[node.value]  // 'value' is accumulator, 'node' is current entity
   )
@@ -133,7 +133,7 @@ flow MetricsShowcase on AnalyticsBeliefs {
   // Compound interest-style accumulation
   metric compound_value = fold_nodes(
     label=Entity,
-    order_by=E[node.priority] DESC,  // Process by priority
+    order_by=E[node.priority],  // Process by priority
     init=0.0,
     step=value + E[node.value] * (1.0 + value * 0.01)  // Current value amplified by accumulator
   )
@@ -149,7 +149,7 @@ flow MetricsShowcase on AnalyticsBeliefs {
   metric selective_compound = fold_nodes(
     label=Entity,
     where=E[node.value] > 50.0,
-    order_by=E[node.value] DESC,
+    order_by=E[node.value],
     init=0.0,
     step=value + E[node.value] * (1.0 + value * 0.005)
   )

@@ -29,6 +29,10 @@ path = "tests/phase4_exit_criteria.rs"
 name = "property_tests"
 path = "tests/property_tests.rs"
 
+[[test]]
+name = "examples_tests"
+path = "tests/examples_tests.rs"
+
 [dependencies]
 grafial-core = { path = "../grafial-core", features = ["serde"] }
 grafial-frontend = { path = "../grafial-frontend" }

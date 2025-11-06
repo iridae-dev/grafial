@@ -266,7 +266,6 @@ impl<'a> RuleExprContext<'a> {
             ExprAst::Var(var_name) => {
                 let eid = self.resolve_edge_var(var_name)?;
                 let result = graph.prob_mean(eid)?;
-                eprintln!("  >> prob({}) = {:.6} (EdgeId {:?})", var_name, result, eid);
                 Ok(result)
             }
             _ => Err(ExecError::Internal(
@@ -500,17 +499,7 @@ fn evaluate_where_clause(
     };
 
     // DEBUG: Print edge probabilities for diagnosis
-    eprintln!("=== WHERE CLAUSE EVALUATION ===");
-    eprintln!("Edge bindings: {:?}", bindings.edge_vars);
-    for (var_name, edge_id) in &bindings.edge_vars {
-        if let Ok(prob) = graph.prob_mean(*edge_id) {
-            eprintln!("  Edge '{}' ({:?}): prob = {:.6}", var_name, edge_id, prob);
-        }
-    }
-
     let v = eval_where_with_exists(expr, graph, &where_ctx)?;
-    eprintln!("Where clause result: {} (evaluated to: {})", v, v != 0.0);
-    eprintln!("===============================");
 
     Ok(v != 0.0)
 }
@@ -524,7 +513,6 @@ fn eval_where_with_exists(
     graph: &BeliefGraph,
     ctx: &RuleExprContext,
 ) -> Result<f64, ExecError> {
-    eprintln!("  [eval_where_with_exists] Evaluating: {:?}", expr);
     let result = match expr {
         ExprAst::Exists {
             pattern,
@@ -532,11 +520,8 @@ fn eval_where_with_exists(
             negated,
         } => ctx.eval_exists(pattern, where_expr, *negated, graph),
         ExprAst::Binary { op, left, right } => {
-            eprintln!("    Binary op: {:?}", op);
             let l = eval_where_with_exists(left, graph, ctx)?;
-            eprintln!("    Left result: {}", l);
             let r = eval_where_with_exists(right, graph, ctx)?;
-            eprintln!("    Right result: {}", r);
             eval_binary_op(*op, l, r)
         }
         ExprAst::Unary { op, expr } => {
@@ -548,7 +533,6 @@ fn eval_where_with_exists(
             eval_expr_core(expr, graph, ctx)
         }
     };
-    eprintln!("  [eval_where_with_exists] Result: {:?}", result);
     result
 }
 
@@ -764,63 +748,30 @@ pub fn run_rule_for_each_with_globals(
     });
 
     // Filter matches by where clause (still read-only)
-    eprintln!("\n=== MULTI-PATTERN RULE: {} ===", rule.name);
-    eprintln!(
-        "Found {} potential matches before where clause",
-        matches.len()
-    );
+    // Debug logging removed for clean output
 
     let mut filtered_matches = Vec::new();
-    for (idx, bindings) in matches.iter().enumerate() {
-        eprintln!("\nMatch {}:", idx);
-        eprintln!("  Nodes: {:?}", bindings.node_vars);
-        eprintln!("  Edges: {:?}", bindings.edge_vars);
-
+    for (_idx, bindings) in matches.iter().enumerate() {
         if evaluate_where_clause(&rule.where_expr, bindings, globals, input)? {
-            eprintln!("  -> PASSED where clause");
             filtered_matches.push(bindings.clone());
         } else {
-            eprintln!("  -> FAILED where clause");
         }
     }
 
     // If no matches, return input graph (no clone needed)
     if filtered_matches.is_empty() {
-        eprintln!("No matches passed where clause - rule will not fire");
         return Ok(input.clone());
     }
 
-    eprintln!(
-        "\n{} matches passed where clause - applying actions",
-        filtered_matches.len()
-    );
+    // Debug logging removed for clean output
 
     // Second pass: clone only if we have matches to process
     let mut work = input.clone();
     work.ensure_owned();
 
     // Apply actions to working copy
-    for (idx, bindings) in filtered_matches.iter().enumerate() {
-        eprintln!("\nApplying actions for match {}:", idx);
-        for (var, eid) in &bindings.edge_vars {
-            if let Ok(prob_before) = work.prob_mean(*eid) {
-                eprintln!(
-                    "  Edge '{}' ({:?}) BEFORE: prob = {:.6}",
-                    var, eid, prob_before
-                );
-            }
-        }
-
+    for (_idx, bindings) in filtered_matches.iter().enumerate() {
         execute_actions(&mut work, &rule.actions, bindings, globals)?;
-
-        for (var, eid) in &bindings.edge_vars {
-            if let Ok(prob_after) = work.prob_mean(*eid) {
-                eprintln!(
-                    "  Edge '{}' ({:?}) AFTER: prob = {:.6}",
-                    var, eid, prob_after
-                );
-            }
-        }
     }
 
     Ok(work)

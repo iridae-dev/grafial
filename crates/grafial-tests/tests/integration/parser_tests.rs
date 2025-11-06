@@ -44,3 +44,11 @@ fn parses_social_example() {
         _ => panic!("expected pipeline"),
     }
 }
+
+#[test]
+fn parses_exists_and_not_exists_syntax() {
+    // Ensure textual `exists` and `not exists` in where clauses parse correctly
+    let src = include_str!("../../../grafial-examples/probabilistic_pattern_matching.grafial");
+    let ast = parse_program(&src).expect("parse probabilistic_pattern_matching");
+    assert!(ast.rules.iter().any(|r| r.name == "IndirectInfluence"));
+}

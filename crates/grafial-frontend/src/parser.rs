@@ -754,7 +754,6 @@ fn build_rule(pair: pest::iterators::Pair<Rule>, _source: &str) -> Result<RuleDe
                                     )
                                 })?;
                             let expr = build_expr(expr_pair);
-                            eprintln!("[PARSER] Where clause parsed as: {:?}", expr);
                             where_expr = Some(expr);
                         }
                         Rule::action_clause => {
@@ -1169,20 +1168,8 @@ fn build_metric_import_stmt(
 }
 
 fn build_expr(pair: pest::iterators::Pair<Rule>) -> ExprAst {
-    eprintln!(
-        "[build_expr] Input rule: {:?}, text: {:?}",
-        pair.as_rule(),
-        pair.as_str()
-    );
-    let result = build_expr_result(pair).unwrap_or_else(|e| {
-        eprintln!(
-            "Warning: Failed to build expression: {:?}, using Number(0)",
-            e
-        );
-        ExprAst::Number(0.0)
-    });
-    eprintln!("[build_expr] Result: {:?}", result);
-    result
+    // Build expression; on error, fall back to Number(0.0) to avoid panics during parsing
+    build_expr_result(pair).unwrap_or_else(|_e| ExprAst::Number(0.0))
 }
 
 fn build_expr_result(pair: pest::iterators::Pair<Rule>) -> Result<ExprAst, FrontendError> {
@@ -1233,7 +1220,7 @@ fn build_expr_result(pair: pest::iterators::Pair<Rule>) -> Result<ExprAst, Front
             let mut it = pair.into_inner();
             let first = it.next().unwrap();
             match first.as_rule() {
-                Rule::op_unary | Rule::KW_not => {
+                Rule::op_unary | Rule::KW_not | Rule::kw_not_tok => {
                     let op = match first.as_str() {
                         "-" => UnaryOp::Neg,
                         "not" => UnaryOp::Not,

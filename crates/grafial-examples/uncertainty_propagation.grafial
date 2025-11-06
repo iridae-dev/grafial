@@ -68,7 +68,7 @@ evidence AdditionalEvidence on FraudBeliefs {
 // likely (but not certain) to be suspicious
 rule FlagHighRisk on FraudBeliefs {
   pattern
-    (T:Transaction)-[s:SUSPICIOUS]->(T)
+    (T:Transaction)-[s:SUSPICIOUS]->(T:Transaction)
   
   where
     // Probabilistic threshold: flag if P(suspicious) > 0.3
@@ -105,4 +105,3 @@ flow FraudAnalysis on FraudBeliefs {
   
   export flagged as "flagged_transactions"
 }
-

@@ -121,7 +121,8 @@ field_access = { "." ~ ident }
 call_suffix = { "(" ~ (arg ~ ("," ~ arg)*)? ~ ")" }
 arg = _{ named_arg | expr }
 named_arg = { ident ~ "=" ~ expr }
-primary = { number | boolean | e_bracket | ident | paren_expr | exists_expr | not_exists_expr }
+// Put exists/not exists before ident so keywords aren't captured as identifiers
+primary = { number | boolean | e_bracket | paren_expr | exists_expr | not_exists_expr | ident }
 paren_expr = { "(" ~ expr ~ ")" }
 e_bracket = { "E" ~ "[" ~ (ident ~ "." ~ ident) ~ "]" }
 exists_expr = { KW_exists ~ pattern_item ~ (KW_where ~ expr)? }
