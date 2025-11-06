@@ -236,7 +236,10 @@ fn apply_transform(
             Ok(current)
         }
         Transform::Snapshot { name } => {
-            result.snapshots.insert(name.clone(), graph.clone());
+            // Ensure deltas are applied before snapshotting
+            let mut snapshot_graph = graph.clone();
+            snapshot_graph.ensure_owned();
+            result.snapshots.insert(name.clone(), snapshot_graph);
             Ok(graph.clone())
         }
         Transform::PruneEdges { edge_type, predicate } => {

@@ -1,4 +1,4 @@
-//! Flow IR for Baygraph
+//! Flow IR for Grafial
 //!
 //! This IR closely follows the AST shapes but decouples execution from
 //! parsing structures. It is intentionally minimal for Phase 4.

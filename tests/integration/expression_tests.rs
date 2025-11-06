@@ -1,4 +1,4 @@
-use baygraph::{parse_program, validate};
+use grafial::{parse_program, validate};
 
 #[test]
 fn invalid_prob_on_node_var_in_rule_where() {
@@ -51,7 +51,7 @@ flow F on M {
 
 #[test]
 fn valid_avg_degree_metric_and_rule_where() {
-    let src = include_str!("../examples/social.bg");
+    let src = include_str!("../../examples/social.grafial");
     let ast = parse_program(src).expect("parse");
     validate::validate_program(&ast).expect("validation");
 }

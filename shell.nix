@@ -1,7 +1,7 @@
 { pkgs ? import <nixpkgs> {} }:
 
 pkgs.mkShell {
-  # Core developer toolchain for baygraph
+  # Core developer toolchain for Grafial
   packages = with pkgs; [
     # LLVM coverage tools (the main thing we need for coverage)
     llvmPackages.llvm        # provides llvm-cov, llvm-profdata
@@ -30,7 +30,7 @@ pkgs.mkShell {
   PYO3_PYTHON = "${pkgs.python312}/bin/python3";
 
   shellHook = ''
-    echo "baygraph dev shell loaded"
+    echo "Grafial dev shell loaded"
     echo "- Using system Rust toolchain (if available)"
     echo "- rustc:       $(rustc --version 2>/dev/null || echo 'not found - install via rustup')"
     echo "- cargo:       $(cargo --version 2>/dev/null || echo 'not found - install via rustup')"

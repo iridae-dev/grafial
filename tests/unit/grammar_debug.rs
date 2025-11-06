@@ -1,4 +1,4 @@
-use baygraph::parse_program;
+use grafial::parse_program;
 
 #[test]
 fn test_program_rule() {

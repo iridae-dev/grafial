@@ -145,7 +145,7 @@ rule MisunderstoodForceAbsent on ExampleBeliefs {
 // - Preserves probabilistic semantics
 // - Avoids numerical issues with exact zeros
 // - Effectively removes edge from consideration
-// - Cannot create true hard constraints in Baygraph (by design)
+// - Cannot create true hard constraints in Grafial (by design)
 
 // ========================================
 // MISTAKE 5: Using prob() on nodes instead of edges

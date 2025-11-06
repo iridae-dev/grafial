@@ -1,4 +1,4 @@
-# Baygraph Engine Architecture
+# Grafial Engine Architecture
 
 **A concise guide to the Rust engine's internal structure for contributors and maintainers.**
 
@@ -23,7 +23,7 @@ src/
 - **Validation** (`validate.rs`): Semantic validation and type checking
 
 **Responsibilities:**
-- Parse Baygraph DSL source code
+- Parse Grafial DSL source code
 - Build typed AST from parse tree
 - Validate schemas, belief models, and references
 - Produce `ProgramAst` for execution
@@ -260,7 +260,7 @@ impl MetricFn for MyCustomMetric {
 registry.insert("my_metric", Arc::new(MyCustomMetric));
 ```
 
-No DSL changes required - users can call `my_metric(...)` in their `.bg` files.
+No DSL changes required - users can call `my_metric(...)` in their `.grafial` files.
 
 ### Metric Function Registry
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Setup script for code coverage tools
 
-echo "Setting up code coverage for Baygraph..."
+echo "Setting up code coverage for Grafial..."
 echo ""
 
 # Install llvm-tools-preview

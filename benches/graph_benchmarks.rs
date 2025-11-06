@@ -1,4 +1,4 @@
-//! # Baygraph Performance Benchmarks
+//! # Grafial Performance Benchmarks
 //!
 //! Phase 7 benchmarks for scale testing (10k-100k nodes).
 //! Tests key operations:
@@ -7,14 +7,13 @@
 //! - Metric computation
 //! - Adjacency queries
 //!
-//! See baygraph_design.md:561-565 for benchmark strategy.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::collections::HashMap;
 
-use baygraph::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, GaussianPosterior, NodeData, NodeId, EdgeId};
-use baygraph::engine::rule_exec::run_rule_for_each;
-use baygraph::frontend::ast::{ActionStmt, EdgePattern, ExprAst, NodePattern, PatternItem, RuleDef, CallArg};
+use grafial::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, GaussianPosterior, NodeData, NodeId, EdgeId};
+use grafial::engine::rule_exec::run_rule_for_each;
+use grafial::frontend::ast::{ActionStmt, EdgePattern, ExprAst, NodePattern, PatternItem, RuleDef, CallArg};
 
 /// Creates a synthetic belief graph for benchmarking.
 ///
@@ -111,7 +110,7 @@ fn bench_rule_evaluation(c: &mut Criterion) {
                     },
                 }],
                 where_expr: Some(ExprAst::Binary {
-                    op: baygraph::frontend::ast::BinaryOp::Gt,
+                    op: grafial::frontend::ast::BinaryOp::Gt,
                     left: Box::new(ExprAst::Call {
                         name: "prob".to_string(),
                         args: vec![CallArg::Positional(ExprAst::Var("e".to_string()))],

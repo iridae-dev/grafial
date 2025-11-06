@@ -1,4 +1,4 @@
-use baygraph::parse_program;
+use grafial::parse_program;
 
 #[test]
 fn parses_min_schema() {
@@ -9,7 +9,7 @@ fn parses_min_schema() {
 
 #[test]
 fn parses_social_example() {
-    let src = std::fs::read_to_string("examples/social.bg").expect("read example");
+    let src = std::fs::read_to_string("examples/social.grafial").expect("read example");
     let ast = parse_program(&src).expect("parse");
     // Basic shape checks
     assert_eq!(ast.schemas.len(), 1);
@@ -30,14 +30,16 @@ fn parses_social_example() {
 
     let flow = &ast.flows[0];
     assert_eq!(flow.name, "Demo");
-    assert_eq!(flow.graphs.len(), 2);
+    assert_eq!(flow.graphs.len(), 3); // base, transferred, cleaned
     assert_eq!(flow.metrics.len(), 1);
     assert_eq!(flow.exports.len(), 1);
     // Check metric and transform expressions parsed
     assert!(!flow.metrics[0].name.is_empty());
+    // flow.graphs[1] is "transferred" which has 1 transform (apply_rule)
+    // flow.graphs[2] is "cleaned" which also has 1 transform (prune_edges)
     match &flow.graphs[1].expr {
-        baygraph::ast::GraphExpr::Pipeline { transforms, .. } => {
-            assert_eq!(transforms.len(), 2);
+        grafial::ast::GraphExpr::Pipeline { transforms, .. } => {
+            assert_eq!(transforms.len(), 1); // transferred has one transform
         }
         _ => panic!("expected pipeline"),
     }

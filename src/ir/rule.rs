@@ -1,4 +1,4 @@
-//! Rule IR for Baygraph
+//! Rule IR for Grafial
 //!
 //! This IR closely follows the AST shapes but decouples execution from
 //! parsing structures. It is intentionally minimal.

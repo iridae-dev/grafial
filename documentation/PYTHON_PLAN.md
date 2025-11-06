@@ -1,6 +1,6 @@
 # Python Bindings Implementation Plan
 
-**Goal:** Make Baygraph usable without writing Rust, providing a complete Python API for Bayesian belief graph inference.
+**Goal:** Make Grafial usable without writing Rust, providing a complete Python API for Bayesian belief graph inference.
 
 **Status:** Planning phase - bindings module exists as placeholder (`src/bindings/mod.rs`)
 
@@ -8,8 +8,8 @@
 
 ## Overview
 
-The Python bindings will expose Baygraph's core functionality through PyO3, allowing Python users to:
-- Compile Baygraph programs from source
+The Python bindings will expose Grafial's core functionality through PyO3, allowing Python users to:
+- Compile Grafial programs from source
 - Build and apply evidence dynamically
 - Execute flows and inspect results
 - Access graphs, metrics, and posterior beliefs
@@ -22,16 +22,16 @@ The Python bindings will expose Baygraph's core functionality through PyO3, allo
 ### Module-Level Functions
 
 ```python
-import baygraph
+import Grafial
 
-# Compile a Baygraph program from source
-program = baygraph.compile(source: str) -> Program
+# Compile a Grafial program from source
+program = Grafial.compile(source: str) -> Program
 
 # Run a flow (uses static evidence from program)
-ctx = baygraph.run_flow(program: Program, flow_name: str) -> Context
+ctx = Grafial.run_flow(program: Program, flow_name: str) -> Context
 
 # Run a flow with runtime evidence
-ctx = baygraph.run_flow_with_evidence(
+ctx = Grafial.run_flow_with_evidence(
     program: Program,
     flow_name: str,
     evidence: Evidence,
@@ -39,7 +39,7 @@ ctx = baygraph.run_flow_with_evidence(
 ) -> Context
 
 # Chain flows (pass context with graphs/metrics between flows)
-ctx = baygraph.run_flow_with_context(
+ctx = Grafial.run_flow_with_context(
     program: Program,
     flow_name: str,
     ctx: Context
@@ -49,7 +49,7 @@ ctx = baygraph.run_flow_with_context(
 ### Python Classes
 
 #### `Program`
-Represents a compiled Baygraph program (schema, belief model, evidence, rules, flows).
+Represents a compiled Grafial program (schema, belief model, evidence, rules, flows).
 
 **Methods:**
 - `get_flow_names() -> List[str]` - List all flow names in the program
@@ -57,11 +57,11 @@ Represents a compiled Baygraph program (schema, belief model, evidence, rules, f
 - `get_belief_model_names() -> List[str]` - List all belief model names
 
 #### `Evidence`
-Builder for runtime evidence (observations not in the `.bg` file).
+Builder for runtime evidence (observations not in the `.grafial` file).
 
 **Constructor:**
 ```python
-evidence = baygraph.Evidence(
+evidence = Grafial.Evidence(
     name: str,
     model: str  # Belief model name
 )
@@ -322,7 +322,7 @@ def to_networkx(self, threshold: float = 0.0) -> nx.Graph:
 **Cargo.toml additions:**
 ```toml
 [lib]
-name = "baygraph"
+name = "Grafial"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
@@ -339,7 +339,7 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "baygraph"
+name = "Grafial"
 requires-python = ">=3.8"
 classifiers = [
     "Programming Language :: Rust",
@@ -358,7 +358,7 @@ pip install maturin
 maturin develop --release
 
 # Or in nix-shell
-cd /path/to/baygraph
+cd /path/to/Grafial
 maturin develop --release
 ```
 
@@ -368,7 +368,7 @@ maturin develop --release
 Create `tests/python/` directory:
 ```python
 # tests/python/test_basic.py
-import baygraph
+import Grafial
 
 def test_compile():
     source = """
@@ -377,7 +377,7 @@ def test_compile():
         edge REL { exist ~ BernoulliPosterior() }
     }
     """
-    program = baygraph.compile(source)
+    program = Grafial.compile(source)
     assert program is not None
 
 def test_run_flow():
@@ -400,15 +400,15 @@ pytest tests/python/
 ### Basic Usage
 
 ```python
-import baygraph
+import Grafial
 
 # Compile program
-with open("model.bg", "r") as f:
+with open("model.grafial", "r") as f:
     source = f.read()
-program = baygraph.compile(source)
+program = Grafial.compile(source)
 
 # Run flow with static evidence
-ctx = baygraph.run_flow(program, "MyFlow")
+ctx = Grafial.run_flow(program, "MyFlow")
 print(f"Result metric: {ctx.metrics['my_metric']}")
 
 # Get exported graph
@@ -421,19 +421,19 @@ for node in graph.nodes():
 
 ```python
 # Build runtime evidence
-evidence = baygraph.Evidence("RuntimeEvidence", model="SocialBeliefs")
+evidence = Grafial.Evidence("RuntimeEvidence", model="SocialBeliefs")
 evidence.observe_edge("Person", "Alice", "KNOWS", "Person", "Bob", present=True)
 evidence.observe_numeric("Person", "Alice", "score", 10.0)
 
 # Run flow with evidence
-ctx = baygraph.run_flow_with_evidence(program, "ComputeBudget", evidence)
+ctx = Grafial.run_flow_with_evidence(program, "ComputeBudget", evidence)
 ```
 
 ### Competing Edges
 
 ```python
 # Observe competing edge choices
-evidence = baygraph.Evidence("RoutingEvidence", model="NetworkBeliefs")
+evidence = Grafial.Evidence("RoutingEvidence", model="NetworkBeliefs")
 evidence.observe_edge_chosen("Server", "S1", "ROUTES_TO", "Server", "S2")
 evidence.observe_edge_chosen("Server", "S1", "ROUTES_TO", "S2")  # Again
 evidence.observe_edge_chosen("Server", "S1", "ROUTES_TO", "S3")  # Different choice
@@ -512,7 +512,7 @@ nx.draw(G, with_labels=True)
 ✅ **Complete when:**
 
 1. **From Python, you can:**
-   - ✅ `compile()` a `.bg` file source string
+   - ✅ `compile()` a `.grafial` file source string
    - ✅ Build an `Evidence` object with runtime observations
    - ✅ `run_flow()` with static or dynamic evidence
    - ✅ `run_flow_with_context()` to chain flows
@@ -534,7 +534,7 @@ nx.draw(G, with_labels=True)
 
 4. **Testing:**
    - ✅ Python unit tests pass
-   - ✅ Integration tests with real `.bg` files
+   - ✅ Integration tests with real `.grafial` files
    - ✅ Edge cases handled (empty graphs, missing nodes, etc.)
 
 ---
@@ -557,4 +557,4 @@ nx.draw(G, with_labels=True)
 - **Type Hints:** Add Python type hints for better IDE support
 - **Docstrings:** All public methods should have Google-style docstrings
 - **Versioning:** Python package version should match Rust crate version
-- **Distribution:** Eventually publish to PyPI as `baygraph` (check availability)
+- **Distribution:** Eventually publish to PyPI as `Grafial` (check availability)

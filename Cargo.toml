@@ -1,9 +1,9 @@
 [package]
-name = "baygraph"
+name = "grafial"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Bayesian Belief Graph DSL and engine"
+description = "A language for reasoning when connections aren’t clear"
 repository = ""
 keywords = ["bayesian", "graph", "dsl"]
 categories = ["science", "parsing"]

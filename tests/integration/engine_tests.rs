@@ -1,24 +1,25 @@
 #[test]
 fn placeholder_engine_compiles() {
     // Placeholder: ensure engine types are visible and basic newtypes exist
-    let _nid = baygraph::engine::graph::NodeId(1);
-    let _eid = baygraph::engine::graph::EdgeId(1);
+    let _nid = grafial::engine::graph::NodeId(1);
+    let _eid = grafial::engine::graph::EdgeId(1);
     assert_eq!(_nid.0, 1);
     assert_eq!(_eid.0, 1);
 }
 
 #[test]
 fn actions_set_expectation_and_force_absent() {
-    use baygraph::engine::graph::*;
-    use baygraph::engine::rule_exec::*;
-    use baygraph::ast::{ActionStmt, ExprAst, BinaryOp, CallArg};
+    use grafial::engine::graph::*;
+    use grafial::engine::rule_exec::*;
+    use grafial::ast::{ActionStmt, ExprAst, BinaryOp, CallArg};
     use std::collections::HashMap;
 
     // Build a tiny graph with two nodes A, B and one edge bc.
+    use std::sync::Arc;
     let mut g = BeliefGraph::default();
     g.insert_node(NodeData {
         id: NodeId(1),
-        label: "Person".into(),
+        label: Arc::from("Person"),
         attrs: HashMap::from([
             (
                 "some_value".into(),
@@ -32,7 +33,7 @@ fn actions_set_expectation_and_force_absent() {
     });
     g.insert_node(NodeData {
         id: NodeId(2),
-        label: "Person".into(),
+        label: Arc::from("Person"),
         attrs: HashMap::from([
             (
                 "some_value".into(),
@@ -48,8 +49,8 @@ fn actions_set_expectation_and_force_absent() {
         id: EdgeId(42),
         src: NodeId(2),
         dst: NodeId(1),
-        ty: "REL".into(),
-        exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
+        ty: Arc::from("REL"),
+        exist: EdgePosterior::independent(BetaPosterior { alpha: 1.0, beta: 1.0 }),
     });
 
     // let v_ab = E[A.some_value] / 2
@@ -104,41 +105,45 @@ fn actions_set_expectation_and_force_absent() {
     bindings.node_vars.insert("B".into(), NodeId(2));
     bindings.edge_vars.insert("bc".into(), EdgeId(42));
 
-    execute_actions(&mut g, &actions, &bindings).expect("actions");
+    execute_actions(&mut g, &actions, &bindings, &HashMap::new()).expect("actions");
+    g.ensure_owned();
 
     // A.some_value: 10 -> 5, B.some_value: 0 -> 5
     assert!((g.expectation(NodeId(1), "some_value").unwrap() - 5.0).abs() < 1e-9);
     assert!((g.expectation(NodeId(2), "some_value").unwrap() - 5.0).abs() < 1e-9);
-    // Edge 42 forced absent
-    let e = g.edge(EdgeId(42)).unwrap();
-    assert_eq!(e.exist.alpha, 1.0);
-    assert!(e.exist.beta >= 1e6 - 1.0);
+    // Edge 42 forced absent - use prob_mean which is delta-aware
+    let prob = g.prob_mean(EdgeId(42)).unwrap();
+    assert!(prob < 1e-5, "edge should be forced absent");
 }
 
 #[test]
 fn run_rule_for_each_single_pattern() {
-    use baygraph::engine::graph::*;
-    use baygraph::engine::rule_exec::run_rule_for_each;
-    use baygraph::ast::{ActionStmt, ExprAst, BinaryOp, CallArg, RuleDef, PatternItem, NodePattern, EdgePattern};
+    use grafial::engine::graph::*;
+    use grafial::engine::rule_exec::run_rule_for_each;
+    use grafial::ast::{ActionStmt, ExprAst, BinaryOp, CallArg, RuleDef, PatternItem, NodePattern, EdgePattern};
     use std::collections::HashMap;
 
     // Graph: A(1) -> B(2) edge e with prob ~ 0.6
+    use std::sync::Arc;
     let mut g = BeliefGraph::default();
     g.insert_node(NodeData {
         id: NodeId(1),
-        label: "Person".into(),
+        label: Arc::from("Person"),
         attrs: HashMap::from([
             ("some_value".into(), GaussianPosterior { mean: 10.0, precision: 1.0 })
         ]),
     });
     g.insert_node(NodeData {
         id: NodeId(2),
-        label: "Person".into(),
+        label: Arc::from("Person"),
         attrs: HashMap::from([("some_value".into(), GaussianPosterior { mean: 0.0, precision: 1.0 })]),
     });
     g.insert_edge(EdgeData {
-        id: EdgeId(7), src: NodeId(1), dst: NodeId(2), ty: "REL".into(),
-        exist: BetaPosterior { alpha: 3.0, beta: 2.0 }, // mean 0.6
+        id: EdgeId(7),
+        src: NodeId(1),
+        dst: NodeId(2),
+        ty: Arc::from("REL"),
+        exist: EdgePosterior::independent(BetaPosterior { alpha: 3.0, beta: 2.0 }), // mean 0.6
     });
 
     // Rule: pattern (A:Person)-[e:REL]->(B:Person)
@@ -177,26 +182,29 @@ fn run_rule_for_each_single_pattern() {
     let out = run_rule_for_each(&g, &rule).expect("run rule");
     // Mean adjusted
     assert!((out.expectation(NodeId(1), "some_value").unwrap() - 9.0).abs() < 1e-9);
-    // Edge forced absent
-    let e = out.edge(EdgeId(7)).unwrap();
-    assert_eq!(e.exist.alpha, 1.0);
-    assert!(e.exist.beta >= 1e6 - 1.0);
+    // Edge forced absent - use prob_mean which is delta-aware
+    let prob = out.prob_mean(EdgeId(7)).unwrap();
+    assert!(prob < 1e-5, "edge should be forced absent");
 }
 
 #[test]
 fn evidence_application_updates_posteriors() {
-    use baygraph::engine::graph::*;
+    use grafial::engine::graph::*;
     use std::collections::HashMap;
 
+    use std::sync::Arc;
     let mut g = BeliefGraph::default();
     g.insert_node(NodeData {
         id: NodeId(1),
-        label: "Person".into(),
+        label: Arc::from("Person"),
         attrs: HashMap::from([("x".into(), GaussianPosterior { mean: 0.0, precision: 0.01 })]),
     });
     g.insert_edge(EdgeData {
-        id: EdgeId(10), src: NodeId(1), dst: NodeId(1), ty: "REL".into(),
-        exist: BetaPosterior { alpha: 1.0, beta: 1.0 },
+        id: EdgeId(10),
+        src: NodeId(1),
+        dst: NodeId(1),
+        ty: Arc::from("REL"),
+        exist: EdgePosterior::independent(BetaPosterior { alpha: 1.0, beta: 1.0 }),
     });
 
     // Observe attr value: prior mean 0, precision 0.01; observe x=10 with tau_obs=1 => mean > 0
@@ -214,6 +222,8 @@ fn evidence_application_updates_posteriors() {
 
     // Force absent
     g.force_absent(EdgeId(10)).expect("force absent");
+    // Ensure deltas are applied before checking
+    g.ensure_owned();
     let p = g.prob_mean(EdgeId(10)).unwrap();
-    assert!(p < 1e-5);
+    assert!(p < 1e-5, "probability after force_absent should be < 1e-5, got {}", p);
 }

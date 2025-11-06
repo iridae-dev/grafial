@@ -25,7 +25,7 @@
 //! ## Example
 //!
 //! ```rust,ignore
-//! use baygraph::engine::graph::*;
+//! use grafial::engine::graph::*;
 //! use std::collections::HashMap;
 //!
 //! let mut graph = BeliefGraph::default();
@@ -680,7 +680,7 @@ impl AdjacencyIndex {
 
 /// A belief graph with Bayesian inference over nodes and edges.
 ///
-/// This is the core data structure for Baygraph, maintaining:
+/// This is the core data structure for Grafial, maintaining:
 /// - Nodes with continuous-valued attributes (Gaussian posteriors)
 /// - Directed edges with existence probabilities (Beta or Dirichlet posteriors)
 /// - Competing edge groups for mutually exclusive choices
@@ -1119,8 +1119,8 @@ impl BeliefGraph {
                 if *id == edge_id {
                     // Edge is in delta, get its posterior
                     let mut result = edge.exist.clone();
-                    // Apply any fine-grained changes on top
-                    for change2 in &self.delta {
+                    // Apply any fine-grained changes on top (iterate in reverse to get most recent)
+                    for change2 in self.delta.iter().rev() {
                         if let GraphDelta::EdgeProbChange { edge: delta_edge, new_alpha, new_beta, .. } = change2 {
                             if *delta_edge == edge_id {
                                 if let EdgePosterior::Independent(_) = result {
@@ -1140,11 +1140,12 @@ impl BeliefGraph {
             .and_then(|&idx| self.inner.edges.get(idx))?;
         
         // Check if there are fine-grained changes
+        // Iterate in reverse to get the most recent change
         let mut has_prob_change = false;
         let mut new_alpha = 0.0;
         let mut new_beta = 0.0;
         
-        for change in &self.delta {
+        for change in self.delta.iter().rev() {
             if let GraphDelta::EdgeProbChange { edge, new_alpha: alpha, new_beta: beta, .. } = change {
                 if *edge == edge_id {
                     has_prob_change = true;

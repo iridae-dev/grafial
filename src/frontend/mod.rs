@@ -1,4 +1,4 @@
-//! The frontend module handles parsing and validation of Baygraph DSL source code.
+//! The frontend module handles parsing and validation of Grafial DSL source code.
 //!
 //! This module provides:
 //! - **parser**: Transforms source text into an Abstract Syntax Tree (AST)

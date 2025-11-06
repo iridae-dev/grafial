@@ -1,21 +1,22 @@
-use baygraph::engine::graph::*;
-use baygraph::engine::rule_exec::run_rule_for_each;
-use baygraph::ast::{ActionStmt, ExprAst, BinaryOp, CallArg, RuleDef, PatternItem, NodePattern, EdgePattern};
+use grafial::engine::graph::*;
+use grafial::engine::rule_exec::run_rule_for_each;
+use grafial::ast::{ActionStmt, ExprAst, BinaryOp, CallArg, RuleDef, PatternItem, NodePattern, EdgePattern};
 use std::collections::HashMap;
 
 fn mk_graph_for_degree() -> BeliefGraph {
     // Node B has two outgoing edges e1 (p~0.8) and e2 (p~0.4)
+    use std::sync::Arc;
     let mut g = BeliefGraph::default();
-    g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() }); // A
-    g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() }); // B
-    g.insert_node(NodeData { id: NodeId(3), label: "Person".into(), attrs: HashMap::new() }); // C
-    g.insert_node(NodeData { id: NodeId(4), label: "Person".into(), attrs: HashMap::new() }); // D
+    g.insert_node(NodeData { id: NodeId(1), label: Arc::from("Person"), attrs: HashMap::new() }); // A
+    g.insert_node(NodeData { id: NodeId(2), label: Arc::from("Person"), attrs: HashMap::new() }); // B
+    g.insert_node(NodeData { id: NodeId(3), label: Arc::from("Person"), attrs: HashMap::new() }); // C
+    g.insert_node(NodeData { id: NodeId(4), label: Arc::from("Person"), attrs: HashMap::new() }); // D
     // Pattern edge from A->B
-    g.insert_edge(EdgeData { id: EdgeId(10), src: NodeId(1), dst: NodeId(2), ty: "REL".into(), exist: BetaPosterior { alpha: 1.0, beta: 1.0 } });
+    g.insert_edge(EdgeData { id: EdgeId(10), src: NodeId(1), dst: NodeId(2), ty: Arc::from("REL"), exist: EdgePosterior::independent(BetaPosterior { alpha: 1.0, beta: 1.0 }) });
     // B -> C with high prob ~ 0.8
-    g.insert_edge(EdgeData { id: EdgeId(11), src: NodeId(2), dst: NodeId(3), ty: "REL".into(), exist: BetaPosterior { alpha: 8.0, beta: 2.0 } });
+    g.insert_edge(EdgeData { id: EdgeId(11), src: NodeId(2), dst: NodeId(3), ty: Arc::from("REL"), exist: EdgePosterior::independent(BetaPosterior { alpha: 8.0, beta: 2.0 }) });
     // B -> D with lower prob ~ 0.4
-    g.insert_edge(EdgeData { id: EdgeId(12), src: NodeId(2), dst: NodeId(4), ty: "REL".into(), exist: BetaPosterior { alpha: 2.0, beta: 3.0 } });
+    g.insert_edge(EdgeData { id: EdgeId(12), src: NodeId(2), dst: NodeId(4), ty: Arc::from("REL"), exist: EdgePosterior::independent(BetaPosterior { alpha: 2.0, beta: 3.0 }) });
     g
 }
 
@@ -44,17 +45,21 @@ fn where_degree_filters_matches() {
 
     let out = run_rule_for_each(&g, &rule).expect("run rule");
     // Only (A=1,B=2) pattern exists and B meets degree condition; edge 10 should be forced absent
-    let e = out.edge(EdgeId(10)).unwrap();
-    assert!(e.exist.beta >= 1e6 - 1.0);
+    let prob = out.prob_mean(EdgeId(10)).unwrap();
+    assert!(prob < 1e-5, "edge should be forced absent");
 }
 
 #[test]
 fn where_prob_blocks_action_when_below_threshold() {
     // Same graph, but require prob(e) >= 0.9; e has prob 0.5 initially, so no action
-    let mut g = mk_graph_for_degree();
+    let g = mk_graph_for_degree();
     // Ensure e has Beta(1,1) -> p=0.5
     let e0 = g.edge(EdgeId(10)).unwrap();
-    assert!(((e0.exist.alpha / (e0.exist.alpha + e0.exist.beta)) - 0.5).abs() < 1e-9);
+    if let EdgePosterior::Independent(beta) = &e0.exist {
+        assert!(((beta.alpha / (beta.alpha + beta.beta)) - 0.5).abs() < 1e-9);
+    } else {
+        panic!("Expected Independent edge");
+    }
 
     let rule = RuleDef {
         name: "Rprob".into(), on_model: "M".into(), mode: Some("for_each".into()),
@@ -74,6 +79,10 @@ fn where_prob_blocks_action_when_below_threshold() {
     let out = run_rule_for_each(&g, &rule).expect("run rule");
     // Edge should remain unchanged (not forced absent)
     let e = out.edge(EdgeId(10)).unwrap();
-    assert!(e.exist.beta < 1e6 - 1.0);
+    if let EdgePosterior::Independent(beta) = &e.exist {
+        assert!(beta.beta < 1e6 - 1.0);
+    } else {
+        panic!("Expected Independent edge");
+    }
 }
 

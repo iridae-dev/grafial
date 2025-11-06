@@ -1,8 +1,8 @@
 //! Tests for exists/not exists subquery functionality.
 
-use baygraph::engine::rule_exec::run_rule_for_each;
-use baygraph::engine::graph::*;
-use baygraph::frontend::ast::*;
+use grafial::engine::rule_exec::run_rule_for_each;
+use grafial::engine::graph::*;
+use grafial::frontend::ast::*;
 use std::collections::HashMap;
 
 #[test]

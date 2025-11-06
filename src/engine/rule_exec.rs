@@ -1,6 +1,6 @@
 //! # Rule Execution Engine
 //!
-//! This module implements the core rule execution logic for Baygraph, including:
+//! This module implements the core rule execution logic for Grafial, including:
 //!
 //! - **Pattern matching**: Finding subgraph matches in the belief graph
 //! - **Expression evaluation**: Computing values for where clauses and action expressions

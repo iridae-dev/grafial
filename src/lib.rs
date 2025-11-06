@@ -1,15 +1,15 @@
-//! # Baygraph - Bayesian Belief Graph Language
+//! # Grafial - Bayesian Belief Graph Language
 //!
 //! A language for reasoning when connections aren't clear.
 //!
-//! Baygraph is a domain-specific language for probabilistic reasoning over graphs,
+//! Grafial is a domain-specific language for probabilistic reasoning over graphs,
 //! combining graph pattern matching with Bayesian inference.
 //!
 //! ## Architecture
 //!
 //! The system is organized into several modules:
 //!
-//! - **frontend**: Parser and AST for the Baygraph DSL
+//! - **frontend**: Parser and AST for the Grafial DSL
 //! - **engine**: Core execution engine with Bayesian graph operations
 //! - **ir**: Intermediate representation (future use)
 //! - **metrics**: Graph metrics computation
@@ -19,7 +19,7 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! use baygraph::{parse_and_validate, ast::ProgramAst};
+//! use grafial::{parse_and_validate, ast::ProgramAst};
 //!
 //! let source = r#"
 //!     schema Social {
@@ -45,14 +45,14 @@ pub mod bindings;
 pub use frontend::ast;
 pub use frontend::validate;
 
-/// Parses Baygraph DSL source code into an unvalidated AST.
+/// Parses Grafial DSL source code into an unvalidated AST.
 ///
 /// This function performs syntactic parsing only. The resulting AST may contain
 /// semantic errors. Use [`parse_and_validate`] for full validation.
 ///
 /// # Arguments
 ///
-/// * `source` - The Baygraph DSL source code to parse
+/// * `source` - The Grafial DSL source code to parse
 ///
 /// # Returns
 ///
@@ -62,7 +62,7 @@ pub use frontend::validate;
 /// # Example
 ///
 /// ```rust,ignore
-/// use baygraph::parse_program;
+/// use grafial::parse_program;
 ///
 /// let source = "schema S { node N {} edge E {} }";
 /// let ast = parse_program(source)?;
@@ -71,7 +71,7 @@ pub fn parse_program(source: &str) -> Result<ast::ProgramAst, engine::errors::Ex
     frontend::parser::parse_program(source)
 }
 
-/// Parses and validates Baygraph DSL source code.
+/// Parses and validates Grafial DSL source code.
 ///
 /// This function performs both syntactic parsing and semantic validation,
 /// ensuring the program is well-formed and ready for execution.
@@ -86,7 +86,7 @@ pub fn parse_program(source: &str) -> Result<ast::ProgramAst, engine::errors::Ex
 ///
 /// # Arguments
 ///
-/// * `source` - The Baygraph DSL source code to parse and validate
+/// * `source` - The Grafial DSL source code to parse and validate
 ///
 /// # Returns
 ///
@@ -96,7 +96,7 @@ pub fn parse_program(source: &str) -> Result<ast::ProgramAst, engine::errors::Ex
 /// # Example
 ///
 /// ```rust,ignore
-/// use baygraph::parse_and_validate;
+/// use grafial::parse_and_validate;
 ///
 /// let source = r#"
 ///     schema S {

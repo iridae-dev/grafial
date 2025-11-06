@@ -1,4 +1,4 @@
-# Baygraph Development Roadmap
+# Grafial Development Roadmap
 
 **Last Updated:** 2025-01-XX  
 **Scope:** Performance optimizations, IR migration, and architectural improvements  
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-This roadmap outlines future development priorities for Baygraph, organized by:
+This roadmap outlines future development priorities for Grafial, organized by:
 1. **Performance Optimizations** - Remaining unimplemented optimizations
 2. **IR Migration** - Status and plans for migrating engine to use IR
 3. **Architectural Improvements** - Major refactors and structural changes
@@ -473,7 +473,7 @@ heaptrack_gui heaptrack.graph_benchmarks.*
 
 ## Related Documents
 
-- `baygraph_design.md` - Core design specifications
+- `Grafial_design.md` - Core design specifications
 - `LANGUAGE_GUIDE.md` - Language syntax and semantics
 - `Python_Plan.md` - Python bindings roadmap
 - `src/ir/` - IR implementation

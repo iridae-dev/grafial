@@ -1,10 +1,10 @@
 //! # Abstract Syntax Tree
 //!
-//! This module defines the Abstract Syntax Tree (AST) data structures for the Baygraph DSL.
+//! This module defines the Abstract Syntax Tree (AST) data structures for the Grafial DSL.
 //!
 //! ## Structure
 //!
-//! A Baygraph program consists of:
+//! A Grafial program consists of:
 //! - **Schemas**: Define node and edge types with attributes
 //! - **Belief models**: Associate inference models with schemas
 //! - **Evidence**: Specify observations and ground truth
@@ -22,7 +22,7 @@
 //!
 //! Numbers are stored as parsed `f64` values (not strings) for performance.
 
-/// The root of a parsed Baygraph program.
+/// The root of a parsed Grafial program.
 ///
 /// A complete program consists of schemas, belief models, evidence,
 /// rules for inference, and flows for graph transformations.
@@ -388,7 +388,7 @@ pub enum ActionStmt {
     },
 }
 
-/// An expression in the Baygraph expression language.
+/// An expression in the Grafial expression language.
 ///
 /// Supports arithmetic, comparisons, logical operations, and special
 /// functions for probabilistic reasoning (prob, degree, E).

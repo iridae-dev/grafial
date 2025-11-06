@@ -5,10 +5,10 @@
 
 use std::collections::HashMap;
 
-use baygraph::engine::errors::ExecError;
-use baygraph::engine::flow_exec::run_flow_with_builder;
-use baygraph::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, EdgePosterior, GaussianPosterior, NodeData, NodeId, EdgeId};
-use baygraph::frontend::ast::*;
+use grafial::engine::errors::ExecError;
+use grafial::engine::flow_exec::run_flow_with_builder;
+use grafial::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, EdgePosterior, GaussianPosterior, NodeData, NodeId, EdgeId};
+use grafial::frontend::ast::*;
 
 /// End-to-end test: Parse → Run Flow → Verify BeliefGraph structure and beliefs
 #[test]
@@ -53,7 +53,7 @@ fn phase4_exit_criteria_complete_flow_execution() {
     println!("  - Can verify beliefs (probabilities, expectations)");
 }
 
-/// Builds a complete Baygraph program demonstrating all Phase 4 features
+/// Builds a complete Grafial program demonstrating all Phase 4 features
 fn build_complete_program() -> ProgramAst {
     // Schema definition
     let schema = Schema {

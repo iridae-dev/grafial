@@ -1,4 +1,4 @@
-//! The execution engine for Baygraph belief graphs.
+//! The execution engine for Grafial belief graphs.
 //!
 //! This module provides:
 //! - **errors**: Error types for execution failures

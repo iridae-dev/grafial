@@ -1,6 +1,6 @@
-# Baygraph Language Guide
+# Grafial Language Guide
 
-**A practical guide to the Baygraph probabilistic graph language.**
+**A practical guide to the Grafial probabilistic graph language.**
 
 This guide documents the language as actually implemented. Every feature described here has been validated against the codebase.
 
@@ -23,7 +23,7 @@ This guide documents the language as actually implemented. Every feature describ
 
 ## Quick Start
 
-A minimal Baygraph program:
+A minimal Grafial program:
 
 ```bayscript
 schema Social {
@@ -837,5 +837,5 @@ All features described in this guide have been validated against the implementat
 - ✅ Expression functions (prob, degree, winner, entropy, E[])
 - ✅ Exists/not exists subqueries
 
-For implementation details, see `baygraph_design.md`. For performance considerations, see `performance_ideas.md`.
+For implementation details, see `Grafial_design.md`. For performance considerations, see `performance_ideas.md`.
 

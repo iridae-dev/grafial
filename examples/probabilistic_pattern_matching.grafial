@@ -72,7 +72,7 @@ rule IndirectInfluence on SocialBeliefs {
 
   where
     // A has high-probability influence on someone (one-hop check)
-    // For multi-hop inference, use fixpoint mode instead (see transitive_closure.bg)
+    // For multi-hop inference, use fixpoint mode instead (see transitive_closure.grafial)
     prob(ab) >= 0.8
     and exists (A:Person)-[ax:INFLUENCES]->(X:Person) where prob(ax) >= 0.7 and X != B
 

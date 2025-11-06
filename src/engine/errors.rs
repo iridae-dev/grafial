@@ -1,4 +1,4 @@
-//! Error types for Baygraph execution.
+//! Error types for Grafial execution.
 
 use thiserror::Error;
 

@@ -2,10 +2,10 @@
 //!
 //! Tests Dirichlet-Categorical posteriors, competing edge groups, and query functions.
 
-use baygraph::engine::errors::ExecError;
-use baygraph::engine::graph::*;
-use baygraph::engine::rule_exec::*;
-use baygraph::frontend::ast::*;
+use grafial::engine::errors::ExecError;
+use grafial::engine::graph::*;
+use grafial::engine::rule_exec::*;
+use grafial::frontend::ast::*;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
@@ -426,7 +426,7 @@ fn rule_context_winner_function() {
     };
     
     // Create a simple test context that mimics RuleExprContext
-    use baygraph::engine::expr_eval::{eval_expr_core, ExprContext};
+    use grafial::engine::expr_eval::{eval_expr_core, ExprContext};
     
     // Create a minimal context that implements ExprContext
     struct TestContext {
@@ -524,7 +524,7 @@ fn rule_context_entropy_function() {
         edge_vars: HashMap::new(),
     };
     
-    use baygraph::engine::expr_eval::{eval_expr_core, ExprContext};
+    use grafial::engine::expr_eval::{eval_expr_core, ExprContext};
     
     struct TestContext {
         bindings: MatchBindings,
@@ -643,8 +643,8 @@ fn edge_posterior_competing_mean_probability_errors_on_missing_group() {
 
 #[test]
 fn validation_rejects_chosen_evidence_for_independent_edge() {
-    use baygraph::frontend::validate::validate_program;
-    use baygraph::frontend::ast::*;
+    use grafial::frontend::validate::validate_program;
+    use grafial::frontend::ast::*;
     
     let program = ProgramAst {
         schemas: vec![Schema {
@@ -691,8 +691,8 @@ fn validation_rejects_chosen_evidence_for_independent_edge() {
 
 #[test]
 fn validation_rejects_present_evidence_for_competing_edge() {
-    use baygraph::frontend::validate::validate_program;
-    use baygraph::frontend::ast::*;
+    use grafial::frontend::validate::validate_program;
+    use grafial::frontend::ast::*;
     
     let program = ProgramAst {
         schemas: vec![Schema {
@@ -741,8 +741,8 @@ fn validation_rejects_present_evidence_for_competing_edge() {
 
 #[test]
 fn validation_accepts_chosen_evidence_for_competing_edge() {
-    use baygraph::frontend::validate::validate_program;
-    use baygraph::frontend::ast::*;
+    use grafial::frontend::validate::validate_program;
+    use grafial::frontend::ast::*;
     
     let program = ProgramAst {
         schemas: vec![Schema {
@@ -794,8 +794,8 @@ fn validation_accepts_chosen_evidence_for_competing_edge() {
 
 #[test]
 fn dynamic_category_discovery_adds_new_categories_to_existing_group() {
-    use baygraph::engine::evidence::build_graph_from_evidence;
-    use baygraph::frontend::ast::*;
+    use grafial::engine::evidence::build_graph_from_evidence;
+    use grafial::frontend::ast::*;
     
     // Create a program with competing edges using uniform prior
     let program = ProgramAst {
@@ -924,8 +924,8 @@ fn dynamic_category_discovery_adds_new_categories_to_existing_group() {
 
 #[test]
 fn dynamic_category_discovery_rejects_explicit_prior() {
-    use baygraph::engine::evidence::build_graph_from_evidence;
-    use baygraph::frontend::ast::*;
+    use grafial::engine::evidence::build_graph_from_evidence;
+    use grafial::frontend::ast::*;
     
     // Create a program with competing edges using explicit prior
     let program = ProgramAst {

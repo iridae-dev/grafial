@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use baygraph::engine::errors::ExecError;
-use baygraph::engine::flow_exec::{run_flow_with_builder, FlowResult};
-use baygraph::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, EdgePosterior, GaussianPosterior, NodeData, NodeId, EdgeId};
-use baygraph::frontend::ast::*;
+use grafial::engine::errors::ExecError;
+use grafial::engine::flow_exec::{run_flow_with_builder, FlowResult};
+use grafial::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, EdgePosterior, GaussianPosterior, NodeData, NodeId, EdgeId};
+use grafial::frontend::ast::*;
 
 fn build_test_program() -> ProgramAst {
     // schema + model names are carried only for clarity in this phase
@@ -51,6 +51,8 @@ fn build_test_program() -> ProgramAst {
         ],
         metrics: vec![],
         exports: vec![ExportDef { graph: "cleaned".into(), alias: "demo".into() }],
+        metric_exports: vec![],
+        metric_imports: vec![],
     }];
 
     ProgramAst {
@@ -63,15 +65,17 @@ fn build_test_program() -> ProgramAst {
 }
 
 fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+    use std::sync::Arc;
     // Build a tiny graph: Person(1) -[REL]-> Person(2) with p=0.8
     let mut g = BeliefGraph::default();
-    g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::from([
+    g.insert_node(NodeData { id: NodeId(1), label: Arc::from("Person"), attrs: HashMap::from([
         ("some_value".into(), GaussianPosterior { mean: 10.0, precision: 1.0 }),
     ]) });
-    g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::from([
+    g.insert_node(NodeData { id: NodeId(2), label: Arc::from("Person"), attrs: HashMap::from([
         ("some_value".into(), GaussianPosterior { mean: 0.0, precision: 1.0 }),
     ]) });
-    g.insert_edge(EdgeData { id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: "REL".into(), exist: EdgePosterior::independent(BetaPosterior { alpha: 8.0, beta: 2.0 }) });
+    g.insert_edge(EdgeData { id: EdgeId(1), src: NodeId(1), dst: NodeId(2), ty: Arc::from("REL"), exist: EdgePosterior::independent(BetaPosterior { alpha: 8.0, beta: 2.0 }) });
+    g.ensure_owned();
     Ok(g)
 }
 
@@ -82,11 +86,11 @@ fn run_flow_demo_applies_rule_and_prunes() {
 
     // base graph should have one edge
     let base = result.graphs.get("base").expect("base graph");
-    assert_eq!(base.edges.len(), 1);
+    assert_eq!(base.edges().len(), 1);
 
     // cleaned graph exported as "demo" should have zero edges after force_absent + prune
     let exported = result.exports.get("demo").expect("exported graph");
-    assert_eq!(exported.edges.len(), 0);
+    assert_eq!(exported.edges().len(), 0);
 }
 
 #[test]
@@ -102,13 +106,15 @@ fn run_flow_from_evidence_loads_graph() {
             graphs: vec![GraphDef { name: "g".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } }],
             metrics: vec![],
             exports: vec![],
+            metric_exports: vec![],
+            metric_imports: vec![],
         }],
     };
 
     let result = run_flow_with_builder(&prog, "Simple", &evidence_builder, None).expect("run flow");
     let g = result.graphs.get("g").expect("graph g");
-    assert_eq!(g.nodes.len(), 2);
-    assert_eq!(g.edges.len(), 1);
+    assert_eq!(g.nodes().len(), 2);
+    assert_eq!(g.edges().len(), 1);
 }
 
 #[test]
@@ -124,12 +130,14 @@ fn run_flow_exports_named_graph() {
             graphs: vec![GraphDef { name: "g".into(), expr: GraphExpr::FromEvidence { evidence: "Ev".into() } }],
             metrics: vec![],
             exports: vec![ExportDef { graph: "g".into(), alias: "exported".into() }],
+            metric_exports: vec![],
+            metric_imports: vec![],
         }],
     };
 
     let result = run_flow_with_builder(&prog, "ExportTest", &evidence_builder, None).expect("run flow");
     assert!(result.exports.contains_key("exported"));
-    assert_eq!(result.exports.get("exported").unwrap().edges.len(), 1);
+    assert_eq!(result.exports.get("exported").unwrap().edges().len(), 1);
 }
 
 #[test]
@@ -154,6 +162,8 @@ fn run_flow_errors_on_unknown_rule() {
             ],
             metrics: vec![],
             exports: vec![],
+            metric_exports: vec![],
+            metric_imports: vec![],
         }],
     };
 
@@ -165,20 +175,21 @@ fn run_flow_errors_on_unknown_rule() {
 fn run_flow_multiple_transforms_in_pipeline() {
     // Build a graph with 3 edges: high prob, medium prob, low prob
     fn multi_edge_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        use std::sync::Arc;
         let mut g = BeliefGraph::default();
         g.insert_node(NodeData {
             id: NodeId(1),
-            label: "Node".into(),
+            label: Arc::from("Node"),
             attrs: HashMap::new(),
         });
         g.insert_node(NodeData {
             id: NodeId(2),
-            label: "Node".into(),
+            label: Arc::from("Node"),
             attrs: HashMap::new(),
         });
         g.insert_node(NodeData {
             id: NodeId(3),
-            label: "Node".into(),
+            label: Arc::from("Node"),
             attrs: HashMap::new(),
         });
         // High probability edge
@@ -186,7 +197,7 @@ fn run_flow_multiple_transforms_in_pipeline() {
             id: EdgeId(1),
             src: NodeId(1),
             dst: NodeId(2),
-            ty: "LINK".into(),
+            ty: Arc::from("LINK"),
             exist: EdgePosterior::independent(BetaPosterior { alpha: 9.0, beta: 1.0 }),
         });
         // Medium probability edge
@@ -194,7 +205,7 @@ fn run_flow_multiple_transforms_in_pipeline() {
             id: EdgeId(2),
             src: NodeId(2),
             dst: NodeId(3),
-            ty: "LINK".into(),
+            ty: Arc::from("LINK"),
             exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }),
         });
         // Low probability edge
@@ -202,9 +213,10 @@ fn run_flow_multiple_transforms_in_pipeline() {
             id: EdgeId(3),
             src: NodeId(1),
             dst: NodeId(3),
-            ty: "LINK".into(),
+            ty: Arc::from("LINK"),
             exist: EdgePosterior::independent(BetaPosterior { alpha: 1.0, beta: 9.0 }),
         });
+        g.ensure_owned();
         Ok(g)
     }
 
@@ -253,6 +265,8 @@ fn run_flow_multiple_transforms_in_pipeline() {
             ],
             metrics: vec![],
             exports: vec![],
+            metric_exports: vec![],
+            metric_imports: vec![],
         }],
     };
 
@@ -260,12 +274,12 @@ fn run_flow_multiple_transforms_in_pipeline() {
 
     // Base should have all 3 edges
     let base = result.graphs.get("base").expect("base graph");
-    assert_eq!(base.edges.len(), 3);
+    assert_eq!(base.edges().len(), 3);
 
     // Filtered should only have the medium prob edge (0.5)
     let filtered = result.graphs.get("filtered").expect("filtered graph");
-    assert_eq!(filtered.edges.len(), 1);
-    assert_eq!(filtered.edges[0].id, EdgeId(2));
+    assert_eq!(filtered.edges().len(), 1);
+    assert_eq!(filtered.edges()[0].id, EdgeId(2));
 }
 
 #[test]
@@ -277,8 +291,8 @@ fn run_flow_pipeline_preserves_nodes() {
     let cleaned = result.graphs.get("cleaned").expect("cleaned graph");
 
     // Nodes should be preserved through pipeline
-    assert_eq!(base.nodes.len(), cleaned.nodes.len());
-    assert_eq!(cleaned.nodes.len(), 2);
+    assert_eq!(base.nodes().len(), cleaned.nodes().len());
+    assert_eq!(cleaned.nodes().len(), 2);
 }
 
 #[test]
@@ -303,6 +317,8 @@ fn run_flow_empty_pipeline_clones_graph() {
             ],
             metrics: vec![],
             exports: vec![],
+            metric_exports: vec![],
+            metric_imports: vec![],
         }],
     };
 
@@ -311,8 +327,8 @@ fn run_flow_empty_pipeline_clones_graph() {
     let base = result.graphs.get("base").expect("base graph");
     let copy = result.graphs.get("copy").expect("copy graph");
 
-    assert_eq!(base.nodes.len(), copy.nodes.len());
-    assert_eq!(base.edges.len(), copy.edges.len());
+    assert_eq!(base.nodes().len(), copy.nodes().len());
+    assert_eq!(base.edges().len(), copy.edges().len());
 }
 
 #[test]
@@ -328,6 +344,8 @@ fn run_flow_errors_on_bad_export() {
             graphs: vec![],
             metrics: vec![],
             exports: vec![ExportDef { graph: "missing".into(), alias: "output".into() }],
+            metric_exports: vec![],
+            metric_imports: vec![],
         }],
     };
 
@@ -376,30 +394,32 @@ fn apply_ruleset_applies_rules_sequentially() {
     fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
         let mut g = BeliefGraph::default();
         // Create 3 nodes with edges: 1->2, 1->3, 2->3
-        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
-        g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
-        g.insert_node(NodeData { id: NodeId(3), label: "Person".into(), attrs: HashMap::new() });
+        use std::sync::Arc;
+        g.insert_node(NodeData { id: NodeId(1), label: Arc::from("Person"), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(2), label: Arc::from("Person"), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(3), label: Arc::from("Person"), attrs: HashMap::new() });
         g.insert_edge(EdgeData { 
             id: EdgeId(1), 
             src: NodeId(1), 
             dst: NodeId(2), 
-            ty: "REL".into(), 
+            ty: Arc::from("REL"), 
             exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }) 
         });
         g.insert_edge(EdgeData { 
             id: EdgeId(2), 
             src: NodeId(1), 
             dst: NodeId(3), 
-            ty: "REL".into(), 
+            ty: Arc::from("REL"), 
             exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }) 
         });
         g.insert_edge(EdgeData { 
             id: EdgeId(3), 
             src: NodeId(2), 
             dst: NodeId(3), 
-            ty: "REL".into(), 
+            ty: Arc::from("REL"), 
             exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }) 
         });
+        g.ensure_owned();
         Ok(g)
     }
 
@@ -422,6 +442,8 @@ fn apply_ruleset_applies_rules_sequentially() {
         ],
         metrics: vec![],
         exports: vec![ExportDef { graph: "result".into(), alias: "out".into() }],
+        metric_exports: vec![],
+        metric_imports: vec![],
     }];
 
     let prog = ProgramAst {
@@ -436,13 +458,17 @@ fn apply_ruleset_applies_rules_sequentially() {
     let output = result.exports.get("out").expect("exported graph");
 
     // Both rules should have been applied:
-    // - ForceFirst removes edge 1->2 (src=1)
-    // - ForceSecond removes edge 2->3 (dst=3)
-    // So only edge 1->3 should remain
-    assert_eq!(output.edges.len(), 1);
-    let remaining_edge = output.edges.values().next().unwrap();
-    assert_eq!(remaining_edge.src, NodeId(1));
-    assert_eq!(remaining_edge.dst, NodeId(3));
+    // - ForceFirst forces absent edges where src=1: 1->2 (EdgeId(1)) and 1->3 (EdgeId(2))
+    // - ForceSecond forces absent edges where dst=3: 1->3 (EdgeId(2)) and 2->3 (EdgeId(3))
+    // So all three edges should have low probability
+    assert_eq!(output.edges().len(), 3); // All edges still exist
+    // Check that all edges have low probability
+    let prob_1_2 = output.prob_mean(EdgeId(1)).unwrap();
+    let prob_2_3 = output.prob_mean(EdgeId(3)).unwrap();
+    let prob_1_3 = output.prob_mean(EdgeId(2)).unwrap();
+    assert!(prob_1_2 < 1e-5, "edge 1->2 should be forced absent");
+    assert!(prob_2_3 < 1e-5, "edge 2->3 should be forced absent");
+    assert!(prob_1_3 < 1e-5, "edge 1->3 should be forced absent by both rules");
 }
 
 #[test]
@@ -457,20 +483,22 @@ fn apply_ruleset_with_single_rule_works() {
             dst: NodePattern { var: "B".into(), label: "Person".into() },
         }],
         where_expr: None,
-        actions: vec![ActionStmt::ForcePresent { edge_var: "e".into() }],
+        actions: vec![ActionStmt::ForceAbsent { edge_var: "e".into() }],
     }];
 
     fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        use std::sync::Arc;
         let mut g = BeliefGraph::default();
-        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
-        g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(1), label: Arc::from("Person"), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(2), label: Arc::from("Person"), attrs: HashMap::new() });
         g.insert_edge(EdgeData { 
             id: EdgeId(1), 
             src: NodeId(1), 
             dst: NodeId(2), 
-            ty: "REL".into(), 
+            ty: Arc::from("REL"), 
             exist: EdgePosterior::independent(BetaPosterior { alpha: 1.0, beta: 1.0 }) 
         });
+        g.ensure_owned();
         Ok(g)
     }
 
@@ -493,6 +521,8 @@ fn apply_ruleset_with_single_rule_works() {
         ],
         metrics: vec![],
         exports: vec![],
+        metric_exports: vec![],
+        metric_imports: vec![],
     }];
 
     let prog = ProgramAst {
@@ -506,15 +536,11 @@ fn apply_ruleset_with_single_rule_works() {
     let result = run_flow_with_builder(&prog, "TestSingle", &evidence_builder, None).expect("run flow");
     let output = result.graphs.get("result").expect("result graph");
     
-    // Rule should have been applied (force_present increases probability)
-    assert_eq!(output.edges.len(), 1);
-    let edge = output.edges.values().next().unwrap();
-    // After force_present, alpha should be increased
-    if let EdgePosterior::Independent(beta) = &edge.exist {
-        assert!(beta.alpha > 1.0);
-    } else {
-        panic!("Expected Independent edge");
-    }
+    // Rule should have been applied (force_absent sets probability near 0)
+    assert_eq!(output.edges().len(), 1);
+    // After force_absent, probability should be near zero
+    let prob = output.prob_mean(EdgeId(1)).unwrap();
+    assert!(prob < 1e-5, "edge should be forced absent");
 }
 
 #[test]
@@ -523,7 +549,11 @@ fn apply_ruleset_errors_on_unknown_rule() {
         name: "KnownRule".into(),
         on_model: "M".into(),
         mode: Some("for_each".into()),
-        patterns: vec![],
+        patterns: vec![PatternItem {
+            src: NodePattern { var: "A".into(), label: "Person".into() },
+            edge: EdgePattern { var: "e".into(), ty: "REL".into() },
+            dst: NodePattern { var: "B".into(), label: "Person".into() },
+        }],
         where_expr: None,
         actions: vec![],
     }];
@@ -551,6 +581,8 @@ fn apply_ruleset_errors_on_unknown_rule() {
         ],
         metrics: vec![],
         exports: vec![],
+        metric_exports: vec![],
+        metric_imports: vec![],
     }];
 
     let prog = ProgramAst {
@@ -588,16 +620,18 @@ fn snapshot_transform_saves_graph_state() {
     }];
 
     fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        use std::sync::Arc;
         let mut g = BeliefGraph::default();
-        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
-        g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(1), label: Arc::from("Person"), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(2), label: Arc::from("Person"), attrs: HashMap::new() });
         g.insert_edge(EdgeData { 
             id: EdgeId(1), 
             src: NodeId(1), 
             dst: NodeId(2), 
-            ty: "REL".into(), 
+            ty: Arc::from("REL"), 
             exist: EdgePosterior::independent(BetaPosterior { alpha: 8.0, beta: 2.0 }) 
         });
+        g.ensure_owned();
         Ok(g)
     }
 
@@ -620,6 +654,8 @@ fn snapshot_transform_saves_graph_state() {
         ],
         metrics: vec![],
         exports: vec![],
+        metric_exports: vec![],
+        metric_imports: vec![],
     }];
 
     let prog = ProgramAst {
@@ -641,31 +677,32 @@ fn snapshot_transform_saves_graph_state() {
     let after = result.snapshots.get("after_cleanup").unwrap();
     
     // Before snapshot should have the edge with high probability
-    assert_eq!(before.edges.len(), 1);
+    assert_eq!(before.edges().len(), 1);
     // After snapshot should have the edge with low probability (force_absent was applied)
-    assert_eq!(after.edges.len(), 1);
+    assert_eq!(after.edges().len(), 1);
     
     // The edge probability should be lower after force_absent
-    let before_edge = before.edges.values().next().unwrap();
-    let after_edge = after.edges.values().next().unwrap();
-    let before_prob = before_edge.exist.mean_probability(&before.competing_groups).unwrap_or(0.0);
-    let after_prob = after_edge.exist.mean_probability(&after.competing_groups).unwrap_or(0.0);
+    // Use prob_mean which is delta-aware
+    let before_prob = before.prob_mean(EdgeId(1)).unwrap();
+    let after_prob = after.prob_mean(EdgeId(1)).unwrap();
     assert!(after_prob < before_prob, "after_prob ({}) should be less than before_prob ({})", after_prob, before_prob);
 }
 
 #[test]
 fn snapshot_multiple_snapshots_in_pipeline() {
     fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        use std::sync::Arc;
         let mut g = BeliefGraph::default();
-        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
-        g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(1), label: Arc::from("Person"), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(2), label: Arc::from("Person"), attrs: HashMap::new() });
         g.insert_edge(EdgeData { 
             id: EdgeId(1), 
             src: NodeId(1), 
             dst: NodeId(2), 
-            ty: "REL".into(), 
+            ty: Arc::from("REL"), 
             exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }) 
         });
+        g.ensure_owned();
         Ok(g)
     }
 
@@ -688,6 +725,8 @@ fn snapshot_multiple_snapshots_in_pipeline() {
         ],
         metrics: vec![],
         exports: vec![],
+        metric_exports: vec![],
+        metric_imports: vec![],
     }];
 
     let prog = ProgramAst {
@@ -710,8 +749,8 @@ fn snapshot_multiple_snapshots_in_pipeline() {
     let step2 = result.snapshots.get("step2").unwrap();
     let step3 = result.snapshots.get("step3").unwrap();
     
-    assert_eq!(step1.edges.len(), step2.edges.len());
-    assert_eq!(step2.edges.len(), step3.edges.len());
+    assert_eq!(step1.edges().len(), step2.edges().len());
+    assert_eq!(step2.edges().len(), step3.edges().len());
 }
 
 #[test]
@@ -719,6 +758,7 @@ fn snapshot_overwrites_previous_snapshot_with_same_name() {
     fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
         let mut g = BeliefGraph::default();
         g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
+        g.ensure_owned();
         Ok(g)
     }
 
@@ -740,6 +780,8 @@ fn snapshot_overwrites_previous_snapshot_with_same_name() {
         ],
         metrics: vec![],
         exports: vec![],
+        metric_exports: vec![],
+        metric_imports: vec![],
     }];
 
     let prog = ProgramAst {
@@ -760,16 +802,18 @@ fn snapshot_overwrites_previous_snapshot_with_same_name() {
 #[test]
 fn from_graph_imports_from_prior_flow_exports() {
     fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        use std::sync::Arc;
         let mut g = BeliefGraph::default();
-        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
-        g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(1), label: Arc::from("Person"), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(2), label: Arc::from("Person"), attrs: HashMap::new() });
         g.insert_edge(EdgeData { 
             id: EdgeId(1), 
             src: NodeId(1), 
             dst: NodeId(2), 
-            ty: "REL".into(), 
+            ty: Arc::from("REL"), 
             exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }) 
         });
+        g.ensure_owned();
         Ok(g)
     }
 
@@ -783,6 +827,8 @@ fn from_graph_imports_from_prior_flow_exports() {
             ],
             metrics: vec![],
             exports: vec![ExportDef { graph: "base".into(), alias: "exported_graph".into() }],
+            metric_exports: vec![],
+            metric_imports: vec![],
         },
         FlowDef {
             name: "Consumer".into(),
@@ -792,6 +838,8 @@ fn from_graph_imports_from_prior_flow_exports() {
             ],
             metrics: vec![],
             exports: vec![],
+            metric_exports: vec![],
+            metric_imports: vec![],
         },
     ];
 
@@ -813,23 +861,25 @@ fn from_graph_imports_from_prior_flow_exports() {
     let imported = result.graphs.get("imported").expect("imported graph");
     let exported = prior.exports.get("exported_graph").expect("exported graph");
     
-    assert_eq!(imported.nodes.len(), exported.nodes.len());
-    assert_eq!(imported.edges.len(), exported.edges.len());
+    assert_eq!(imported.nodes().len(), exported.nodes().len());
+    assert_eq!(imported.edges().len(), exported.edges().len());
 }
 
 #[test]
 fn from_graph_imports_from_prior_flow_snapshots() {
     fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        use std::sync::Arc;
         let mut g = BeliefGraph::default();
-        g.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
-        g.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(1), label: Arc::from("Person"), attrs: HashMap::new() });
+        g.insert_node(NodeData { id: NodeId(2), label: Arc::from("Person"), attrs: HashMap::new() });
         g.insert_edge(EdgeData { 
             id: EdgeId(1), 
             src: NodeId(1), 
             dst: NodeId(2), 
-            ty: "REL".into(), 
+            ty: Arc::from("REL"), 
             exist: EdgePosterior::independent(BetaPosterior { alpha: 5.0, beta: 5.0 }) 
         });
+        g.ensure_owned();
         Ok(g)
     }
 
@@ -855,6 +905,8 @@ fn from_graph_imports_from_prior_flow_snapshots() {
             ],
             metrics: vec![],
             exports: vec![],
+            metric_exports: vec![],
+            metric_imports: vec![],
         },
         FlowDef {
             name: "Consumer".into(),
@@ -864,6 +916,8 @@ fn from_graph_imports_from_prior_flow_snapshots() {
             ],
             metrics: vec![],
             exports: vec![],
+            metric_exports: vec![],
+            metric_imports: vec![],
         },
     ];
 
@@ -885,8 +939,8 @@ fn from_graph_imports_from_prior_flow_snapshots() {
     let imported = result.graphs.get("imported").expect("imported graph");
     let snapshot = prior.snapshots.get("checkpoint").expect("snapshot");
     
-    assert_eq!(imported.nodes.len(), snapshot.nodes.len());
-    assert_eq!(imported.edges.len(), snapshot.edges.len());
+    assert_eq!(imported.nodes().len(), snapshot.nodes().len());
+    assert_eq!(imported.edges().len(), snapshot.edges().len());
 }
 
 #[test]
@@ -904,6 +958,8 @@ fn from_graph_errors_on_missing_graph() {
         ],
         metrics: vec![],
         exports: vec![],
+        metric_exports: vec![],
+        metric_imports: vec![],
     }];
 
     let prog = ProgramAst {
@@ -929,11 +985,10 @@ fn from_graph_errors_on_missing_graph() {
 fn from_graph_prefers_exports_over_snapshots() {
     // If both exports and snapshots have the same name, exports should take precedence
     fn evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        use std::sync::Arc;
         let mut g1 = BeliefGraph::default();
-        g1.insert_node(NodeData { id: NodeId(1), label: "Person".into(), attrs: HashMap::new() });
-        
-        let mut g2 = BeliefGraph::default();
-        g2.insert_node(NodeData { id: NodeId(2), label: "Person".into(), attrs: HashMap::new() });
+        g1.insert_node(NodeData { id: NodeId(1), label: Arc::from("Person"), attrs: HashMap::new() });
+        g1.ensure_owned();
         
         // Return different graphs so we can tell which one was used
         Ok(g1)
@@ -957,6 +1012,8 @@ fn from_graph_prefers_exports_over_snapshots() {
             ],
             metrics: vec![],
             exports: vec![ExportDef { graph: "export_graph".into(), alias: "shared_name".into() }],
+            metric_exports: vec![],
+            metric_imports: vec![],
         },
         FlowDef {
             name: "Consumer".into(),
@@ -966,6 +1023,8 @@ fn from_graph_prefers_exports_over_snapshots() {
             ],
             metrics: vec![],
             exports: vec![],
+            metric_exports: vec![],
+            metric_imports: vec![],
         },
     ];
 
@@ -991,5 +1050,5 @@ fn from_graph_prefers_exports_over_snapshots() {
     let imported = result.graphs.get("imported").expect("imported graph");
     let exported = prior.exports.get("shared_name").expect("exported graph");
     
-    assert_eq!(imported.nodes.len(), exported.nodes.len());
+    assert_eq!(imported.nodes().len(), exported.nodes().len());
 }

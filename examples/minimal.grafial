@@ -1,5 +1,5 @@
-// Minimal Example: Core Baygraph Workflow
-// This demonstrates the basic structure of a Baygraph program.
+// Minimal Example: Core Grafial Workflow
+// This demonstrates the basic structure of a Grafial program.
 // Start here to understand schemas, beliefs, evidence, and flows.
 
 schema Minimal {

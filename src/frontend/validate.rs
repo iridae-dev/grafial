@@ -44,7 +44,7 @@ use crate::frontend::ast::*;
 /// # Example
 ///
 /// ```rust,ignore
-/// use baygraph::frontend::{parser, validate};
+/// use grafial::frontend::{parser, validate};
 ///
 /// let ast = parser::parse_program(source)?;
 /// validate::validate_program(&ast)?; // Ensure semantic correctness

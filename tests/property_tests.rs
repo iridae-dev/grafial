@@ -1,6 +1,6 @@
 //! Property tests for posterior invariants and metric determinism (Phase 5)
 
-use baygraph::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, EdgePosterior, GaussianPosterior, NodeData, NodeId, EdgeId};
+use grafial::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, EdgePosterior, GaussianPosterior, NodeData, NodeId, EdgeId};
 use proptest::prelude::*;
 use std::collections::HashMap;
 

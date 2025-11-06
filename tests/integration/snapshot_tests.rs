@@ -2,9 +2,9 @@
 
 #[cfg(feature = "serde")]
 mod serde_tests {
-    use baygraph::engine::errors::ExecError;
-    use baygraph::engine::graph::{BeliefGraph, NodeId, EdgeId};
-    use baygraph::engine::snapshot::{Snapshot, save_snapshot_json, load_snapshot_json, save_snapshot_binary, load_snapshot_binary};
+    use grafial::engine::errors::ExecError;
+    use grafial::engine::graph::{BeliefGraph, NodeId, EdgeId};
+    use grafial::engine::snapshot::{Snapshot, save_snapshot_json, load_snapshot_json, save_snapshot_binary, load_snapshot_binary};
 
     fn create_test_graph() -> BeliefGraph {
         let mut g = BeliefGraph::default();

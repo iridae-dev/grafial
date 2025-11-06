@@ -44,7 +44,9 @@ prior_array = { "[" ~ number ~ ("," ~ number)* ~ "]" }
 
 evidence_decl = { KW_evidence ~ ident ~ KW_on ~ ident ~ evidence_body }
 evidence_body = { "{" ~ (COMMENT | observe_stmt)* ~ "}" }
-observe_stmt = { KW_observe ~ observe_target ~ evidence_mode ~ ";"? }
+observe_stmt = { observe_edge_stmt | observe_attr_stmt }
+observe_edge_stmt = { KW_observe ~ edge_observe ~ evidence_mode ~ ";"? }
+observe_attr_stmt = { KW_observe ~ attr_observe ~ ";"? }
 observe_target = { edge_observe | attr_observe }
 edge_observe = { KW_edge ~ ident ~ "(" ~ node_ref ~ "," ~ node_ref ~ ")" }
 attr_observe = { node_ref ~ "." ~ ident ~ "=" ~ number }

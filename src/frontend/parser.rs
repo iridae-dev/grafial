@@ -1,6 +1,6 @@
-//! # Baygraph Parser
+//! # Grafial Parser
 //!
-//! This module implements the parser for the Baygraph DSL using the Pest parser generator.
+//! This module implements the parser for the Grafial DSL using the Pest parser generator.
 //!
 //! ## Overview
 //!
@@ -21,7 +21,7 @@
 //!
 //! ## Grammar
 //!
-//! The grammar is defined in `grammar/baygraph.pest` using Pest's PEG syntax.
+//! The grammar is defined in `grammar/grafial.pest` using Pest's PEG syntax.
 
 use crate::engine::errors::ExecError;
 use crate::frontend::ast::*;
@@ -29,17 +29,17 @@ use pest::Parser;
 use pest_derive::Parser;
 
 #[derive(Parser)]
-#[grammar = "grammar/baygraph.pest"]
+#[grammar = "grammar/grafial.pest"]
 pub struct BayGraphParser;
 
-/// Parses Baygraph DSL source into an Abstract Syntax Tree.
+/// Parses Grafial DSL source into an Abstract Syntax Tree.
 ///
 /// This is a pure syntactic parser that does not perform semantic validation.
 /// Use [`crate::frontend::validate::validate_program`] to validate the resulting AST.
 ///
 /// # Arguments
 ///
-/// * `source` - The complete Baygraph DSL source code
+/// * `source` - The complete Grafial DSL source code
 ///
 /// # Returns
 ///
@@ -49,7 +49,7 @@ pub struct BayGraphParser;
 /// # Example
 ///
 /// ```rust,ignore
-/// use baygraph::frontend::parser::parse_program;
+/// use grafial::frontend::parser::parse_program;
 ///
 /// let source = "schema S { node N {} edge E {} }";
 /// let ast = parse_program(source)?;
@@ -194,12 +194,25 @@ fn build_node_belief(pair: pest::iterators::Pair<Rule>) -> Result<NodeBeliefDecl
         match p.as_rule() {
             Rule::ident if node_type.is_empty() => node_type = p.as_str().to_string(),
             Rule::attr_belief_decl => {
-                let mut ai = p.into_inner();
-                let attr_name = ai.next()
+                // Collect all pairs to inspect them
+                let pairs: Vec<_> = p.into_inner().collect();
+                // First ident is attribute name
+                let attr_name = pairs.iter()
+                    .find(|p| p.as_rule() == Rule::ident)
                     .ok_or_else(|| ExecError::ParseError("Missing attribute name".to_string()))?
                     .as_str().to_string();
-                let posterior = build_posterior_type(ai.next()
-                    .ok_or_else(|| ExecError::ParseError("Missing posterior type".to_string()))?)?;
+                // Find posterior_type (Pest wraps it)
+                let posterior_pair = pairs.iter()
+                    .find(|e| {
+                        let rule = e.as_rule();
+                        rule == Rule::posterior_type || 
+                        rule == Rule::gaussian_posterior || 
+                        rule == Rule::bernoulli_posterior || 
+                        rule == Rule::categorical_posterior
+                    })
+                    .ok_or_else(|| ExecError::ParseError(format!("Missing posterior type. Found rules: {:?}", 
+                        pairs.iter().map(|p| p.as_rule()).collect::<Vec<_>>())))?;
+                let posterior = build_posterior_type(posterior_pair.clone())?;
                 attrs.push((attr_name, posterior));
             }
             _ => {}
@@ -217,8 +230,11 @@ fn build_edge_belief(pair: pest::iterators::Pair<Rule>) -> Result<EdgeBeliefDecl
             Rule::ident if edge_type.is_empty() => edge_type = p.as_str().to_string(),
             Rule::exist_belief_decl => {
                 let mut ei = p.into_inner();
-                // Skip "exist" ~ "~", get posterior_type
-                let posterior_pair = ei.find(|e| matches!(e.as_rule(), Rule::posterior_type));
+                // Skip "exist" ~ "~", find the posterior type (may be posterior_type wrapper or specific rule)
+                let posterior_pair = ei.find(|e| matches!(
+                    e.as_rule(),
+                    Rule::posterior_type | Rule::gaussian_posterior | Rule::bernoulli_posterior | Rule::categorical_posterior
+                ));
                 if let Some(pp) = posterior_pair {
                     exist = Some(build_posterior_type(pp)?);
                 }
@@ -232,10 +248,17 @@ fn build_edge_belief(pair: pest::iterators::Pair<Rule>) -> Result<EdgeBeliefDecl
 }
 
 fn build_posterior_type(pair: pest::iterators::Pair<Rule>) -> Result<PosteriorType, ExecError> {
-    match pair.as_rule() {
+    let rule = pair.as_rule();
+    // Handle case where pair is posterior_type wrapper (get inner rule)
+    let actual_pair = if rule == Rule::posterior_type {
+        pair.into_inner().next().ok_or_else(|| ExecError::ParseError("Empty posterior_type".to_string()))?
+    } else {
+        pair
+    };
+    match actual_pair.as_rule() {
         Rule::gaussian_posterior => {
             let mut params = Vec::new();
-            for p in pair.into_inner() {
+            for p in actual_pair.into_inner() {
                 if let Rule::gaussian_param = p.as_rule() {
                     let mut gp = p.into_inner();
                     let name = gp.next().unwrap().as_str().to_string();
@@ -248,7 +271,7 @@ fn build_posterior_type(pair: pest::iterators::Pair<Rule>) -> Result<PosteriorTy
         }
         Rule::bernoulli_posterior => {
             let mut params = Vec::new();
-            for p in pair.into_inner() {
+            for p in actual_pair.into_inner() {
                 if let Rule::bernoulli_param = p.as_rule() {
                     let mut bp = p.into_inner();
                     let name = bp.next().unwrap().as_str().to_string();
@@ -264,7 +287,7 @@ fn build_posterior_type(pair: pest::iterators::Pair<Rule>) -> Result<PosteriorTy
             let mut prior: Option<CategoricalPrior> = None;
             let mut categories: Option<Vec<String>> = None;
             
-            for p in pair.into_inner() {
+            for p in actual_pair.into_inner() {
                 match p.as_rule() {
                     Rule::categorical_param => {
                         let mut cp = p.into_inner();
@@ -361,21 +384,30 @@ fn build_evidence(pair: pest::iterators::Pair<Rule>, source: &str) -> Result<Evi
 }
 
 fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, ExecError> {
-    let mut target_pair = None;
-    let mut mode_pair = None;
+    // Handle observe_stmt parent rule - get the inner rule
+    let actual_pair = match pair.as_rule() {
+        Rule::observe_stmt => {
+            // Get the inner rule (observe_edge_stmt or observe_attr_stmt)
+            pair.into_inner().next().ok_or_else(|| ExecError::ParseError("Empty observe_stmt".to_string()))?
+        },
+        Rule::observe_edge_stmt | Rule::observe_attr_stmt => pair,
+        _ => return Err(ExecError::ParseError(format!("Invalid observe statement rule: {:?}", pair.as_rule())))
+    };
     
-    for p in pair.into_inner() {
-        match p.as_rule() {
-            Rule::observe_target => target_pair = Some(p),
-            Rule::evidence_mode => mode_pair = Some(p),
-            _ => {}
-        }
-    }
-    
-    let target = target_pair.ok_or_else(|| ExecError::ParseError("Missing observe target".to_string()))?;
-    
-    match target.as_rule() {
-        Rule::edge_observe => {
+    match actual_pair.as_rule() {
+        Rule::observe_edge_stmt => {
+            let mut target_pair = None;
+            let mut mode_pair = None;
+            
+            for p in actual_pair.into_inner() {
+                match p.as_rule() {
+                    Rule::edge_observe => target_pair = Some(p),
+                    Rule::evidence_mode => mode_pair = Some(p),
+                    _ => {}
+                }
+            }
+            
+            let target = target_pair.ok_or_else(|| ExecError::ParseError("Missing edge observe target".to_string()))?;
             let mut edge_type = String::new();
             let mut src: Option<(String, String)> = None;
             let mut dst: Option<(String, String)> = None;
@@ -405,7 +437,17 @@ fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, 
                 mode,
             })
         }
-        Rule::attr_observe => {
+        Rule::observe_attr_stmt => {
+            let mut target_pair = None;
+            
+            for p in actual_pair.into_inner() {
+                match p.as_rule() {
+                    Rule::attr_observe => target_pair = Some(p),
+                    _ => {}
+                }
+            }
+            
+            let target = target_pair.ok_or_else(|| ExecError::ParseError("Missing attribute observe target".to_string()))?;
             let mut node: Option<(String, String)> = None;
             let mut attr = String::new();
             let mut value: Option<f64> = None;
@@ -431,7 +473,7 @@ fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, 
                 value: value_val,
             })
         }
-        _ => Err(ExecError::ParseError("Invalid observe target".to_string()))
+        _ => Err(ExecError::ParseError(format!("Invalid observe statement rule: {:?}", actual_pair.as_rule())))
     }
 }
 
@@ -481,13 +523,19 @@ fn build_rule(pair: pest::iterators::Pair<Rule>, _source: &str) -> Result<RuleDe
                 for b in p.into_inner() {
                     match b.as_rule() {
                         Rule::pattern_clause => {
+                            // pattern_clause = KW_pattern ~ pattern_list
+                            // Iterate through inner to find pattern_list (skip KW_pattern token)
                             for pl in b.into_inner() {
                                 if pl.as_rule() == Rule::pattern_list {
-                                    for item in pl.into_inner() {
-                                        if item.as_rule() == Rule::pattern_item {
-                                            patterns.push(build_pattern_item(item)?);
-                                        }
+                                    // pattern_list = pattern_item ~ ("," ~ pattern_item)*
+                                    // Collect all pattern_items from the pattern_list
+                                    let pattern_items: Vec<_> = pl.into_inner()
+                                        .filter(|item| item.as_rule() == Rule::pattern_item)
+                                        .collect();
+                                    for item in pattern_items {
+                                        patterns.push(build_pattern_item(item)?);
                                     }
+                                    break; // Only one pattern_list per pattern_clause
                                 }
                             }
                         }

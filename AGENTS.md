@@ -2,8 +2,8 @@
 
 ## Project Structure & Module Organization
 - Core (planned): `src/frontend/` (parser + AST), `src/ir/`, `src/engine/` (graph, rules, flows), `src/metrics/`, `src/storage/`, `src/bindings/` (PyO3).  
-- DSL grammar: `grammar/baygraph.pest`.  
-- Examples: `examples/*.bg`.  
+- DSL grammar: `grammar/grafial.pest`.  
+- Examples: `examples/*.grafial`.  
 - Tests: unit tests alongside modules; integration tests in `tests/`.  
 - Dev shell: `shell.nix` provides Rust + Python toolchains.
 
@@ -31,7 +31,7 @@
 ## Commit & Pull Request Guidelines
 - Commits: imperative mood, concise scope (e.g., `feat(engine): add metric registry`, `fix(frontend): reject invalid prob() targets`).  
 - PRs: include description, rationale, linked issues, and tests; note performance impact and add benches if relevant.  
-- Pre-merge checklist: build, tests, `clippy`, `fmt`, docs updated (`baygraph_design.md`, `baygraph_roadmap.md`).
+- Pre-merge checklist: build, tests, `clippy`, `fmt`, docs updated (`grafial_design.md`, `grafial_roadmap.md`).
 
 ## Security & Configuration Tips
 - Use the Nix shell to pin toolchains; `PYO3_PYTHON` is set for PyO3.  

@@ -1,7 +1,7 @@
 //! Tests for evidence building functionality.
 
-use baygraph::engine::evidence::build_graph_from_evidence;
-use baygraph::frontend::ast::*;
+use grafial::engine::evidence::build_graph_from_evidence;
+use grafial::frontend::ast::*;
 
 fn create_test_program() -> ProgramAst {
     ProgramAst {

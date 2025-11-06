@@ -1,4 +1,4 @@
-//! Program IR for Baygraph
+//! Program IR for Grafial
 //!
 //! Aggregates all IR types into a complete program representation.
 
