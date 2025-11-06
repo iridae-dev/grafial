@@ -582,6 +582,35 @@ impl<'a> ExprContext for MetricExprContext<'a> {
                     )),
                 }
             }
+            "entropy" => {
+                // entropy(node, edge_type)
+                if pos_args.len() < 2 {
+                    return Err(ExecError::ValidationError(
+                        "entropy(): requires node and edge_type arguments".into(),
+                    ));
+                }
+                match &pos_args[0] {
+                    ExprAst::Var(v) if v == "node" => {}
+                    _ => {
+                        return Err(ExecError::ValidationError(
+                            "entropy(): first argument must be 'node' in metric expressions".into(),
+                        ))
+                    }
+                }
+                let edge_type = match &pos_args[1] {
+                    ExprAst::Var(v) => v.clone(),
+                    _ => {
+                        return Err(ExecError::ValidationError(
+                            "entropy(): edge_type must be an identifier".into(),
+                        ))
+                    }
+                };
+                if let Some(group) = graph.get_competing_group(self.node, &edge_type) {
+                    Ok(group.posterior.entropy())
+                } else {
+                    Ok(0.0)
+                }
+            }
             "degree" => {
                 if pos_args.is_empty() {
                     return Err(ExecError::ValidationError(

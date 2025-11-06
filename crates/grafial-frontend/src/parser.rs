@@ -368,62 +368,112 @@ fn build_posterior_type(pair: pest::iterators::Pair<Rule>) -> Result<PosteriorTy
                             FrontendError::ParseError("Missing parameter name in categorical_param".to_string())
                         })?;
                         let param_name = param_name_pair.as_str();
-                        
-                        // Skip "="
-                        cp.next();
-                        
-                        // Get the value - it should be categorical_param_value
-                        let value_wrapper = cp.next().ok_or_else(|| {
-                            FrontendError::ParseError("Missing parameter value in categorical_param".to_string())
+                        // Next item is the value (may be wrapped in categorical_param_value)
+                        let raw_value = cp.next().ok_or_else(|| {
+                            FrontendError::ParseError(
+                                "Missing parameter value in categorical_param".to_string(),
+                            )
                         })?;
-                        
-                        // Extract the actual value from categorical_param_value
-                        let value_pair = value_wrapper.into_inner().next().ok_or_else(|| {
-                            FrontendError::ParseError("Empty categorical_param_value".to_string())
-                        })?;
+                        // Unwrap possible wrapper; some alternatives like the literal "uniform"
+                        // may result in an empty inner, in which case use the raw text.
+                        let value_inner_iter = if raw_value.as_rule() == Rule::categorical_param_value {
+                            Some(raw_value.clone().into_inner())
+                        } else {
+                            None
+                        };
+                        let value_pair_opt = value_inner_iter.and_then(|mut it| it.next());
+                        let value_raw_str = if value_pair_opt.is_none() {
+                            Some(raw_value.as_str())
+                        } else {
+                            None
+                        };
                         
                         match param_name {
                             "group_by" => {
-                                if let Rule::string = value_pair.as_rule() {
-                                    let value_str = value_pair.as_str().trim_matches('"');
-                                    group_by = Some(value_str.to_string());
+                                if let Some(vp) = value_pair_opt.clone() {
+                                    if let Rule::string = vp.as_rule() {
+                                        let value_str = vp.as_str().trim_matches('"');
+                                        group_by = Some(value_str.to_string());
+                                    } else {
+                                        return Err(FrontendError::ParseError(
+                                            "group_by parameter must be a string".to_string(),
+                                        ));
+                                    }
                                 } else {
                                     return Err(FrontendError::ParseError(
                                         "group_by parameter must be a string".to_string(),
                                     ));
                                 }
                             }
-                            "prior" => {
-                                match value_pair.as_rule() {
-                                    Rule::prior_array => {
-                                        let mut concentrations = Vec::new();
-                                        for n in value_pair.clone().into_inner() {
-                                            if let Rule::number = n.as_rule() {
-                                                let val = n.as_str().parse::<f64>().map_err(|e| {
-                                                    FrontendError::ParseError(format!(
-                                                        "Invalid number: {}",
-                                                        e
-                                                    ))
-                                                })?;
-                                                concentrations.push(val);
-                                            }
+                            "prior" => match value_pair_opt.clone().map(|p| p.as_rule()) {
+                                Some(Rule::prior_array) => {
+                                    let mut concentrations = Vec::new();
+                                    for n in value_pair_opt.unwrap().into_inner() {
+                                        if let Rule::number = n.as_rule() {
+                                            let val = n.as_str().parse::<f64>().map_err(|e| {
+                                                FrontendError::ParseError(format!(
+                                                    "Invalid number: {}",
+                                                    e
+                                                ))
+                                            })?;
+                                            concentrations.push(val);
                                         }
-                                        prior = Some(CategoricalPrior::Explicit { concentrations });
                                     }
-                                    _ => {
-                                        // Must be "uniform" - pseudo_count will be parsed separately
-                                        // Don't set prior here, it will be set when we parse pseudo_count
+                                    prior = Some(CategoricalPrior::Explicit { concentrations });
+                                }
+                                // Allow unquoted uniform token; actual pseudo_count comes separately
+                                Some(Rule::ident) => {
+                                    if value_pair_opt.as_ref().unwrap().as_str() != "uniform" {
+                                        return Err(FrontendError::ParseError(
+                                            format!(
+                                                "Unknown prior identifier: {} (expected 'uniform' or array)",
+                                                value_pair_opt.as_ref().unwrap().as_str()
+                                            ),
+                                        ));
+                                    }
+                                    // Defer setting prior until pseudo_count
+                                }
+                                // If grammar wraps uniform differently, accept string too
+                                Some(Rule::string) => {
+                                    let s = value_pair_opt.unwrap().as_str().trim_matches('"');
+                                    if s != "uniform" {
+                                        return Err(FrontendError::ParseError(
+                                            format!(
+                                                "Unknown prior string: {} (expected 'uniform')",
+                                                s
+                                            ),
+                                        ));
                                     }
                                 }
-                            }
+                                _ => {
+                                    // Don't set prior here; pseudo_count will determine uniform
+                                    // Handle the case where the wrapper had empty inner but raw text is present
+                                    if let Some(s) = value_raw_str {
+                                        if s == "uniform" {
+                                            // ok, defer
+                                        } else {
+                                            return Err(FrontendError::ParseError(format!(
+                                                "Unknown prior: {}",
+                                                s
+                                            )));
+                                        }
+                                    }
+                                }
+                            },
                             "pseudo_count" => {
-                                if let Rule::number = value_pair.as_rule() {
-                                    let value = value_pair.as_str().parse::<f64>().map_err(|e| {
-                                        FrontendError::ParseError(format!("Invalid number: {}", e))
-                                    })?;
-                                    prior = Some(CategoricalPrior::Uniform {
-                                        pseudo_count: value,
-                                    });
+                                if let Some(vp) = value_pair_opt.clone() {
+                                    if let Rule::number = vp.as_rule() {
+                                        let value = vp.as_str().parse::<f64>().map_err(|e| {
+                                            FrontendError::ParseError(format!("Invalid number: {}", e))
+                                        })?;
+                                        prior = Some(CategoricalPrior::Uniform {
+                                            pseudo_count: value,
+                                        });
+                                    } else {
+                                        return Err(FrontendError::ParseError(
+                                            "pseudo_count parameter must be a number".to_string(),
+                                        ));
+                                    }
                                 } else {
                                     return Err(FrontendError::ParseError(
                                         "pseudo_count parameter must be a number".to_string(),
@@ -431,15 +481,21 @@ fn build_posterior_type(pair: pest::iterators::Pair<Rule>) -> Result<PosteriorTy
                                 }
                             }
                             "categories" => {
-                                if let Rule::categorical_categories_array = value_pair.as_rule() {
-                                    let mut cats = Vec::new();
-                                    for s in value_pair.clone().into_inner() {
-                                        if let Rule::string = s.as_rule() {
-                                            let val = s.as_str().trim_matches('"').to_string();
-                                            cats.push(val);
+                                if let Some(vp) = value_pair_opt.clone() {
+                                    if let Rule::categorical_categories_array = vp.as_rule() {
+                                        let mut cats = Vec::new();
+                                        for s in vp.into_inner() {
+                                            if let Rule::string = s.as_rule() {
+                                                let val = s.as_str().trim_matches('"').to_string();
+                                                cats.push(val);
+                                            }
                                         }
+                                        categories = Some(cats);
+                                    } else {
+                                        return Err(FrontendError::ParseError(
+                                            "categories parameter must be an array of strings".to_string(),
+                                        ));
                                     }
-                                    categories = Some(cats);
                                 } else {
                                     return Err(FrontendError::ParseError(
                                         "categories parameter must be an array of strings".to_string(),
@@ -1722,5 +1778,65 @@ mod tests {
         let rule = &result.rules[0];
 
         assert_eq!(rule.mode, Some("for_each".to_string()));
+    }
+
+    #[test]
+    fn parse_categorical_posterior_with_uniform_prior_and_pseudo_count() {
+        let src = r#"
+            schema PacketRouting { node Router { latency: Real } edge ROUTES_TO {} }
+            belief_model RoutingBeliefs on PacketRouting {
+              node Router { latency ~ GaussianPosterior(prior_mean=50.0, prior_precision=0.1) }
+              edge ROUTES_TO {
+                exist ~ CategoricalPosterior(group_by="source", prior=uniform, pseudo_count=1.0)
+              }
+            }
+        "#;
+
+        let ast = parse_program(src).unwrap();
+        assert_eq!(ast.belief_models.len(), 1);
+        let bm = &ast.belief_models[0];
+        assert_eq!(bm.edges.len(), 1);
+        let exist = &bm.edges[0].exist;
+        match exist {
+            PosteriorType::Categorical { group_by, prior, categories } => {
+                assert_eq!(group_by, "source");
+                match prior {
+                    CategoricalPrior::Uniform { pseudo_count } => assert!((*pseudo_count - 1.0).abs() < 1e-9),
+                    _ => panic!("expected Uniform prior"),
+                }
+                assert!(categories.is_none());
+            }
+            _ => panic!("expected Categorical posterior"),
+        }
+    }
+
+    #[test]
+    fn parse_categorical_posterior_with_explicit_prior_and_categories() {
+        let src = r#"
+            schema PacketRouting { node Router { latency: Real } edge ROUTES_TO {} }
+            belief_model RoutingBeliefs on PacketRouting {
+              node Router { latency ~ GaussianPosterior(prior_mean=50.0, prior_precision=0.1) }
+              edge ROUTES_TO {
+                exist ~ CategoricalPosterior(group_by="source", prior=[1.0, 2.0, 3.0], categories=["R2","R3","R6"])
+              }
+            }
+        "#;
+
+        let ast = parse_program(src).unwrap();
+        let bm = &ast.belief_models[0];
+        let exist = &bm.edges[0].exist;
+        match exist {
+            PosteriorType::Categorical { group_by, prior, categories } => {
+                assert_eq!(group_by, "source");
+                match prior {
+                    CategoricalPrior::Explicit { concentrations } => {
+                        assert_eq!(concentrations, &vec![1.0, 2.0, 3.0]);
+                    }
+                    _ => panic!("expected Explicit prior"),
+                }
+                assert_eq!(categories.as_ref().unwrap(), &vec!["R2".to_string(), "R3".to_string(), "R6".to_string()]);
+            }
+            _ => panic!("expected Categorical posterior"),
+        }
     }
 }

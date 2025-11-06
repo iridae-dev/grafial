@@ -378,7 +378,12 @@ impl<'a> RuleExprContext<'a> {
         };
 
         let nid = self.resolve_node_var(node_var)?;
-        graph.entropy(nid, &edge_type)
+        // Gracefully handle nodes without competing groups: treat entropy as 0.0
+        if let Some(group) = graph.get_competing_group(nid, &edge_type) {
+            Ok(group.posterior.entropy())
+        } else {
+            Ok(0.0)
+        }
     }
 
     /// Evaluates an exists subquery expression.
