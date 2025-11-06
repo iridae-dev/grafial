@@ -145,130 +145,11 @@ impl<'a> ExprContext for RuleExprContext<'a> {
         graph: &BeliefGraph,
     ) -> Result<f64, ExecError> {
         match name {
-            // E[Var.attr] is represented as Call("E", [Field(Var(..), attr)]) by the parser
-            "E" => {
-                if !all_args.is_empty() && matches!(all_args[0], CallArg::Named { .. }) {
-                    return Err(ExecError::Internal("E[] does not accept named arguments".into()));
-                }
-                if pos_args.len() != 1 {
-                    return Err(ExecError::Internal("E[] expects one positional argument".into()));
-                }
-                match &pos_args[0] {
-                    ExprAst::Field { target, field } => match &**target {
-                        ExprAst::Var(vn) => {
-                            let nid = *self
-                                .bindings
-                                .node_vars
-                                .get(vn)
-                                .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", vn)))?;
-                            graph.expectation(nid, field)
-                        }
-                        _ => Err(ExecError::Internal("E[] requires NodeVar.attr".into())),
-                    },
-                    _ => Err(ExecError::Internal("E[] requires a field expression".into())),
-                }
-            }
-            "prob" => {
-                if !all_args.is_empty() && matches!(all_args[0], CallArg::Named { .. }) {
-                    return Err(ExecError::Internal("prob() does not accept named arguments".into()));
-                }
-                if pos_args.len() != 1 {
-                    return Err(ExecError::Internal("prob() expects one positional argument".into()));
-                }
-                match &pos_args[0] {
-                    ExprAst::Var(v) => {
-                        let eid = *self
-                            .bindings
-                            .edge_vars
-                            .get(v)
-                            .ok_or_else(|| ExecError::Internal(format!("unknown edge var '{}'", v)))?;
-                        let result = graph.prob_mean(eid)?;
-                        eprintln!("  >> prob({}) = {:.6} (EdgeId {:?})", v, result, eid);
-                        Ok(result)
-                    }
-                    _ => Err(ExecError::Internal("prob(): argument must be an edge variable".into())),
-                }
-            }
-            "degree" => {
-                if pos_args.len() < 1 {
-                    return Err(ExecError::Internal("degree(): missing node argument".into()));
-                }
-                let mut min_prob = 0.0;
-                for a in all_args {
-                    if let CallArg::Named { name, value } = a {
-                        if name == "min_prob" {
-                            min_prob = eval_expr_core(value, graph, self)?;
-                        }
-                    }
-                }
-                match &pos_args[0] {
-                    ExprAst::Var(v) => {
-                        let nid = *self
-                            .bindings
-                            .node_vars
-                            .get(v)
-                            .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", v)))?;
-                        Ok(graph.degree_outgoing(nid, min_prob) as f64)
-                    }
-                    _ => Err(ExecError::Internal("degree(): first argument must be a node variable".into())),
-                }
-            }
-            "winner" => {
-                if pos_args.len() < 2 {
-                    return Err(ExecError::Internal("winner(): requires node and edge_type arguments".into()));
-                }
-                let mut epsilon = 0.01;
-                for a in all_args {
-                    if let CallArg::Named { name, value } = a {
-                        if name == "epsilon" {
-                            epsilon = eval_expr_core(value, graph, self)?;
-                        }
-                    }
-                }
-                let node_var = match &pos_args[0] {
-                    ExprAst::Var(v) => v,
-                    _ => return Err(ExecError::Internal("winner(): first argument must be a node variable".into())),
-                };
-                let edge_type = match &pos_args[1] {
-                    ExprAst::Var(v) => v.clone(),
-                    ExprAst::Number(_) => return Err(ExecError::Internal("winner(): edge_type must be a string identifier".into())),
-                    _ => return Err(ExecError::Internal("winner(): edge_type must be an identifier".into())),
-                };
-                
-                let nid = *self
-                    .bindings
-                    .node_vars
-                    .get(node_var)
-                    .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", node_var)))?;
-                
-                // Return winner destination node ID as f64, or -1.0 if None (to represent null)
-                // This allows expressions like winner(A, ROUTES_TO) == B where B is a node variable
-                match graph.winner(nid, &edge_type, epsilon) {
-                    Some(winner_node_id) => Ok(winner_node_id.0 as f64),
-                    None => Ok(-1.0), // Represent None as -1.0
-                }
-            }
-            "entropy" => {
-                if pos_args.len() < 2 {
-                    return Err(ExecError::Internal("entropy(): requires node and edge_type arguments".into()));
-                }
-                let node_var = match &pos_args[0] {
-                    ExprAst::Var(v) => v,
-                    _ => return Err(ExecError::Internal("entropy(): first argument must be a node variable".into())),
-                };
-                let edge_type = match &pos_args[1] {
-                    ExprAst::Var(v) => v.clone(),
-                    _ => return Err(ExecError::Internal("entropy(): edge_type must be an identifier".into())),
-                };
-                
-                let nid = *self
-                    .bindings
-                    .node_vars
-                    .get(node_var)
-                    .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", node_var)))?;
-                
-                graph.entropy(nid, &edge_type)
-            }
+            "E" => self.eval_expectation_function(pos_args, all_args, graph),
+            "prob" => self.eval_prob_function(pos_args, all_args, graph),
+            "degree" => self.eval_degree_function(pos_args, all_args, graph),
+            "winner" => self.eval_winner_function(pos_args, all_args, graph),
+            "entropy" => self.eval_entropy_function(pos_args, all_args, graph),
             other => Err(ExecError::Internal(format!("unknown function '{}'", other))),
         }
     }
@@ -282,6 +163,146 @@ impl<'a> ExprContext for RuleExprContext<'a> {
 }
 
 impl<'a> RuleExprContext<'a> {
+    /// Helper: Extract node ID from node variable name
+    fn resolve_node_var(&self, var_name: &str) -> Result<NodeId, ExecError> {
+        self.bindings
+            .node_vars
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", var_name)))
+    }
+
+    /// Helper: Extract edge ID from edge variable name
+    fn resolve_edge_var(&self, var_name: &str) -> Result<EdgeId, ExecError> {
+        self.bindings
+            .edge_vars
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| ExecError::Internal(format!("unknown edge var '{}'", var_name)))
+    }
+
+    /// Helper: Extract named argument value by name
+    fn extract_named_arg(&self, all_args: &[CallArg], name: &str, graph: &BeliefGraph) -> Result<Option<f64>, ExecError> {
+        for arg in all_args {
+            if let CallArg::Named { name: arg_name, value } = arg {
+                if arg_name == name {
+                    return eval_expr_core(value, graph, self).map(Some);
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Helper: Validate positional-only arguments
+    fn ensure_positional_only(&self, all_args: &[CallArg], fn_name: &str) -> Result<(), ExecError> {
+        if !all_args.is_empty() && matches!(all_args[0], CallArg::Named { .. }) {
+            return Err(ExecError::Internal(format!("{}() does not accept named arguments", fn_name)));
+        }
+        Ok(())
+    }
+
+    /// Evaluates E[node.attr] - returns posterior mean for a node attribute
+    fn eval_expectation_function(&self, pos_args: &[ExprAst], all_args: &[CallArg], graph: &BeliefGraph) -> Result<f64, ExecError> {
+        self.ensure_positional_only(all_args, "E")?;
+
+        if pos_args.len() != 1 {
+            return Err(ExecError::Internal("E[] expects one positional argument".into()));
+        }
+
+        match &pos_args[0] {
+            ExprAst::Field { target, field } => match &**target {
+                ExprAst::Var(var_name) => {
+                    let nid = self.resolve_node_var(var_name)?;
+                    graph.expectation(nid, field)
+                }
+                _ => Err(ExecError::Internal("E[] requires NodeVar.attr".into())),
+            },
+            _ => Err(ExecError::Internal("E[] requires a field expression".into())),
+        }
+    }
+
+    /// Evaluates prob(edge) - returns posterior mean probability for an edge
+    fn eval_prob_function(&self, pos_args: &[ExprAst], all_args: &[CallArg], graph: &BeliefGraph) -> Result<f64, ExecError> {
+        self.ensure_positional_only(all_args, "prob")?;
+
+        if pos_args.len() != 1 {
+            return Err(ExecError::Internal("prob() expects one positional argument".into()));
+        }
+
+        match &pos_args[0] {
+            ExprAst::Var(var_name) => {
+                let eid = self.resolve_edge_var(var_name)?;
+                let result = graph.prob_mean(eid)?;
+                eprintln!("  >> prob({}) = {:.6} (EdgeId {:?})", var_name, result, eid);
+                Ok(result)
+            }
+            _ => Err(ExecError::Internal("prob(): argument must be an edge variable".into())),
+        }
+    }
+
+    /// Evaluates degree(node, min_prob=0.0) - counts outgoing edges above threshold
+    fn eval_degree_function(&self, pos_args: &[ExprAst], all_args: &[CallArg], graph: &BeliefGraph) -> Result<f64, ExecError> {
+        if pos_args.is_empty() {
+            return Err(ExecError::Internal("degree(): missing node argument".into()));
+        }
+
+        let min_prob = self.extract_named_arg(all_args, "min_prob", graph)?.unwrap_or(0.0);
+
+        match &pos_args[0] {
+            ExprAst::Var(var_name) => {
+                let nid = self.resolve_node_var(var_name)?;
+                Ok(graph.degree_outgoing(nid, min_prob) as f64)
+            }
+            _ => Err(ExecError::Internal("degree(): first argument must be a node variable".into())),
+        }
+    }
+
+    /// Evaluates winner(node, edge_type, epsilon=0.01) - finds winning edge in competitive group
+    fn eval_winner_function(&self, pos_args: &[ExprAst], all_args: &[CallArg], graph: &BeliefGraph) -> Result<f64, ExecError> {
+        if pos_args.len() < 2 {
+            return Err(ExecError::Internal("winner(): requires node and edge_type arguments".into()));
+        }
+
+        let epsilon = self.extract_named_arg(all_args, "epsilon", graph)?.unwrap_or(0.01);
+
+        let node_var = match &pos_args[0] {
+            ExprAst::Var(v) => v,
+            _ => return Err(ExecError::Internal("winner(): first argument must be a node variable".into())),
+        };
+
+        let edge_type = match &pos_args[1] {
+            ExprAst::Var(v) => v.clone(),
+            _ => return Err(ExecError::Internal("winner(): edge_type must be an identifier".into())),
+        };
+
+        let nid = self.resolve_node_var(node_var)?;
+
+        match graph.winner(nid, &edge_type, epsilon) {
+            Some(winner_node_id) => Ok(winner_node_id.0 as f64),
+            None => Ok(-1.0),
+        }
+    }
+
+    /// Evaluates entropy(node, edge_type) - computes entropy of competing edge distribution
+    fn eval_entropy_function(&self, pos_args: &[ExprAst], all_args: &[CallArg], graph: &BeliefGraph) -> Result<f64, ExecError> {
+        if pos_args.len() < 2 {
+            return Err(ExecError::Internal("entropy(): requires node and edge_type arguments".into()));
+        }
+
+        let node_var = match &pos_args[0] {
+            ExprAst::Var(v) => v,
+            _ => return Err(ExecError::Internal("entropy(): first argument must be a node variable".into())),
+        };
+
+        let edge_type = match &pos_args[1] {
+            ExprAst::Var(v) => v.clone(),
+            _ => return Err(ExecError::Internal("entropy(): edge_type must be an identifier".into())),
+        };
+
+        let nid = self.resolve_node_var(node_var)?;
+        graph.entropy(nid, &edge_type)
+    }
+
     /// Evaluates an exists subquery expression.
     ///
     /// Searches for a single edge matching the pattern with compatible variable bindings.
@@ -456,32 +477,25 @@ pub fn execute_actions(
 ) -> Result<(), ExecError> {
     let mut locals = Locals::new();
 
-    for a in actions {
-        // Create context for this action (reborrow locals)
+    for action in actions {
         let ctx = RuleExprContext {
             bindings,
             locals: &locals,
             globals,
         };
 
-        match a {
+        match action {
             ActionStmt::Let { name, expr } => {
-                let v = eval_expr_core(expr, graph, &ctx)?;
-                locals.set(name.clone(), v);
+                let value = eval_expr_core(expr, graph, &ctx)?;
+                locals.set(name.clone(), value);
             }
             ActionStmt::SetExpectation { node_var, attr, expr } => {
-                let nid = *bindings
-                    .node_vars
-                    .get(node_var)
-                    .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", node_var)))?;
-                let v = eval_expr_core(expr, graph, &ctx)?;
-                graph.set_expectation(nid, attr, v)?;
+                let nid = ctx.resolve_node_var(node_var)?;
+                let value = eval_expr_core(expr, graph, &ctx)?;
+                graph.set_expectation(nid, attr, value)?;
             }
             ActionStmt::ForceAbsent { edge_var } => {
-                let eid = *bindings
-                    .edge_vars
-                    .get(edge_var)
-                    .ok_or_else(|| ExecError::Internal(format!("unknown edge var '{}'", edge_var)))?;
+                let eid = ctx.resolve_edge_var(edge_var)?;
                 graph.force_absent(eid)?;
             }
         }

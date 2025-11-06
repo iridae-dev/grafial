@@ -97,23 +97,12 @@ fn run_flow_internal<B: GraphBuilder>(
     prior: Option<&FlowResult>,
     graph_builder: &B,
 ) -> Result<FlowResult, ExecError> {
-    let flow = program
-        .flows
-        .iter()
-        .find(|f| f.name == flow_name)
-        .ok_or_else(|| ExecError::Internal(format!("unknown flow '{}'", flow_name)))?;
+    let flow = find_flow(program, flow_name)?;
 
-    // Index helpers for resolution by name
-    let evidence_by_name: HashMap<&str, &crate::frontend::ast::EvidenceDef> =
-        program.evidences.iter().map(|e| (e.name.as_str(), e)).collect();
-    let rules_by_name: HashMap<&str, &crate::frontend::ast::RuleDef> =
-        program.rules.iter().map(|r| (r.name.as_str(), r)).collect();
+    let evidence_by_name = build_evidence_index(&program.evidences);
+    let rules_by_name = build_rules_index(&program.rules);
 
-    let mut result = FlowResult::default();
-    if let Some(p) = prior {
-        result.metric_exports.extend(p.metric_exports.clone());
-    }
-
+    let mut result = initialize_flow_result(prior);
     let rule_globals = build_rule_globals(flow, prior)?;
 
     // Evaluate graph definitions in order
@@ -151,6 +140,34 @@ fn run_flow_internal<B: GraphBuilder>(
     handle_exports(flow, &mut result)?;
 
     Ok(result)
+}
+
+/// Find a flow by name in the program
+fn find_flow<'a>(program: &'a ProgramAst, flow_name: &str) -> Result<&'a crate::frontend::ast::FlowDef, ExecError> {
+    program
+        .flows
+        .iter()
+        .find(|f| f.name == flow_name)
+        .ok_or_else(|| ExecError::Internal(format!("unknown flow '{}'", flow_name)))
+}
+
+/// Build an index of evidences by name for O(1) lookup
+fn build_evidence_index(evidences: &[crate::frontend::ast::EvidenceDef]) -> HashMap<&str, &crate::frontend::ast::EvidenceDef> {
+    evidences.iter().map(|e| (e.name.as_str(), e)).collect()
+}
+
+/// Build an index of rules by name for O(1) lookup
+fn build_rules_index(rules: &[crate::frontend::ast::RuleDef]) -> HashMap<&str, &crate::frontend::ast::RuleDef> {
+    rules.iter().map(|r| (r.name.as_str(), r)).collect()
+}
+
+/// Initialize flow result with prior metrics if available
+fn initialize_flow_result(prior: Option<&FlowResult>) -> FlowResult {
+    let mut result = FlowResult::default();
+    if let Some(p) = prior {
+        result.metric_exports.extend(p.metric_exports.clone());
+    }
+    result
 }
 
 /// Build rule globals from imported metrics.
@@ -326,70 +343,85 @@ fn handle_exports(
 }
 
 fn prune_edges(input: &BeliefGraph, edge_type: &str, predicate: &ExprAst) -> Result<BeliefGraph, ExecError> {
-    // Evaluate predicate per edge, removing edges where predicate evaluates to true
-    // Build list of edges to keep deterministically by EdgeId
-    // Need to handle both base edges and delta changes
-    
-    let mut keep: Vec<EdgeId> = Vec::new();
-    let mut candidates: Vec<EdgeId> = Vec::new();
-    
-    // Collect all edges (base + delta)
-    // First, collect from base
-    let mut seen_edge_ids: std::collections::HashSet<EdgeId> = std::collections::HashSet::new();
-    for e in input.edges() {
-        seen_edge_ids.insert(e.id);
-        if e.ty.as_ref() != edge_type {
-            keep.push(e.id);
-        } else {
-            candidates.push(e.id);
-        }
-    }
-    
-    // Then collect from delta (new edges or modified edges)
-    for change in input.delta() {
-        if let crate::engine::graph::GraphDelta::EdgeChange { id, edge } = change {
-            if !seen_edge_ids.contains(id) {
-                // New edge from delta (not in base)
-                seen_edge_ids.insert(*id);
-                if edge.ty.as_ref() != edge_type {
-                    keep.push(*id);
-                } else {
-                    candidates.push(*id);
-                }
-            } else {
-                // Modified edge - update our lists based on new type
-                // Remove from whichever list it was in
-                keep.retain(|&eid| eid != *id);
-                candidates.retain(|&eid| eid != *id);
-                // Add to appropriate list based on new type
-                if edge.ty.as_ref() != edge_type {
-                    keep.push(*id);
-                } else {
-                    candidates.push(*id);
-                }
-            }
-        } else if let crate::engine::graph::GraphDelta::EdgeRemoved { id } = change {
-            // Remove from both lists
-            keep.retain(|&eid| eid != *id);
-            candidates.retain(|&eid| eid != *id);
-        }
-    }
-    
+    let (mut keep, mut candidates) = classify_edges(input, edge_type);
     candidates.sort();
 
     for eid in candidates {
-        let should_drop = eval_prune_predicate(predicate, input, eid)? != 0.0;
-        if !should_drop {
+        let should_keep = eval_prune_predicate(predicate, input, eid)? == 0.0;
+        if should_keep {
             keep.push(eid);
         }
     }
     keep.sort();
 
-    // Rebuild graph with kept edges only
-    // Need to apply delta first to get accurate node list
+    rebuild_pruned_graph(input, &keep)
+}
+
+/// Classify edges into those to keep (wrong type) and candidates for pruning (matching type)
+fn classify_edges(input: &BeliefGraph, edge_type: &str) -> (Vec<EdgeId>, Vec<EdgeId>) {
+    let mut keep = Vec::new();
+    let mut candidates = Vec::new();
+    let mut seen_edge_ids = std::collections::HashSet::new();
+
+    for edge in input.edges() {
+        seen_edge_ids.insert(edge.id);
+        if edge.ty.as_ref() == edge_type {
+            candidates.push(edge.id);
+        } else {
+            keep.push(edge.id);
+        }
+    }
+
+    process_delta_changes(input.delta(), edge_type, &mut seen_edge_ids, &mut keep, &mut candidates);
+
+    (keep, candidates)
+}
+
+/// Process delta changes to update edge classifications
+fn process_delta_changes(
+    delta: &[crate::engine::graph::GraphDelta],
+    edge_type: &str,
+    seen_edge_ids: &mut std::collections::HashSet<EdgeId>,
+    keep: &mut Vec<EdgeId>,
+    candidates: &mut Vec<EdgeId>,
+) {
+    use crate::engine::graph::GraphDelta;
+
+    for change in delta {
+        match change {
+            GraphDelta::EdgeChange { id, edge } => {
+                if seen_edge_ids.insert(*id) {
+                    // New edge from delta
+                    if edge.ty.as_ref() == edge_type {
+                        candidates.push(*id);
+                    } else {
+                        keep.push(*id);
+                    }
+                } else {
+                    // Modified edge - reclassify
+                    keep.retain(|&eid| eid != *id);
+                    candidates.retain(|&eid| eid != *id);
+                    if edge.ty.as_ref() == edge_type {
+                        candidates.push(*id);
+                    } else {
+                        keep.push(*id);
+                    }
+                }
+            }
+            GraphDelta::EdgeRemoved { id } => {
+                keep.retain(|&eid| eid != *id);
+                candidates.retain(|&eid| eid != *id);
+            }
+            _ => {} // Node changes don't affect edge classification
+        }
+    }
+}
+
+/// Rebuild graph with only the specified edges
+fn rebuild_pruned_graph(input: &BeliefGraph, keep_edges: &[EdgeId]) -> Result<BeliefGraph, ExecError> {
     let mut input_mut = input.clone();
-    input_mut.ensure_owned(); // Apply delta
-    input_mut.rebuild_with_edges(input_mut.nodes(), &keep)
+    input_mut.ensure_owned();
+    input_mut.rebuild_with_edges(input_mut.nodes(), keep_edges)
 }
 
 /// Expression evaluation context for prune predicates.

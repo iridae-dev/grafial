@@ -157,6 +157,25 @@ fn block_src(pair: &pest::iterators::Pair<Rule>, source: &str) -> String {
     source[span.start()..span.end()].to_string()
 }
 
+/// Helper to extract a string literal without quotes
+fn unquote_string(s: &str) -> String {
+    s.trim_matches('"').to_string()
+}
+
+/// Helper to extract the first ident from an iterator
+fn extract_ident(iter: &mut pest::iterators::Pairs<Rule>, error_msg: &str) -> Result<String, ExecError> {
+    iter.find(|p| p.as_rule() == Rule::ident)
+        .map(|p| p.as_str().to_string())
+        .ok_or_else(|| ExecError::ParseError(error_msg.to_string()))
+}
+
+/// Helper to extract a string from an iterator
+fn extract_string(iter: &mut pest::iterators::Pairs<Rule>, error_msg: &str) -> Result<String, ExecError> {
+    iter.find(|p| p.as_rule() == Rule::string)
+        .map(|p| unquote_string(p.as_str()))
+        .ok_or_else(|| ExecError::ParseError(error_msg.to_string()))
+}
+
 fn build_belief_model(pair: pest::iterators::Pair<Rule>, source: &str) -> Result<BeliefModel, ExecError> {
     let mut name = String::new();
     let mut on_schema = String::new();
@@ -478,19 +497,9 @@ fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, 
 }
 
 fn build_node_ref(pair: pest::iterators::Pair<Rule>) -> Result<(String, String), ExecError> {
-    let mut node_type = String::new();
-    let mut label = String::new();
-    
-    for p in pair.into_inner() {
-        match p.as_rule() {
-            Rule::ident if node_type.is_empty() => node_type = p.as_str().to_string(),
-            Rule::string => {
-                label = p.as_str().trim_matches('"').to_string();
-            }
-            _ => {}
-        }
-    }
-    
+    let mut it = pair.into_inner();
+    let node_type = extract_ident(&mut it, "Missing node type in node reference")?;
+    let label = extract_string(&mut it, "Missing label in node reference")?;
     Ok((node_type, label))
 }
 
@@ -680,55 +689,36 @@ fn build_action_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ActionStmt, Ex
 fn build_graph_stmt(pair: pest::iterators::Pair<Rule>) -> Result<GraphDef, ExecError> {
     let mut name = String::new();
     let mut expr_opt: Option<GraphExpr> = None;
+
     for p in pair.into_inner() {
         match p.as_rule() {
-            Rule::ident => {
-                if name.is_empty() { name = p.as_str().to_string(); }
+            Rule::ident if name.is_empty() => {
+                name = p.as_str().to_string();
             }
             Rule::from_evidence_expr => {
-                let ev = p
-                    .into_inner()
-                    .find(|x| x.as_rule() == Rule::ident)
-                    .ok_or_else(|| ExecError::ParseError("Missing evidence name in from_evidence".to_string()))?
-                    .as_str()
-                    .to_string();
+                let mut inner = p.into_inner();
+                let ev = extract_ident(&mut inner, "Missing evidence name in from_evidence")?;
                 expr_opt = Some(GraphExpr::FromEvidence { evidence: ev });
             }
             Rule::from_graph_expr => {
-                let alias = p
-                    .into_inner()
-                    .find(|x| x.as_rule() == Rule::string)
-                    .ok_or_else(|| ExecError::ParseError("Missing graph alias in from_graph".to_string()))?
-                    .as_str();
-                // Remove quotes from string
-                let alias = alias.trim_matches('"').to_string();
+                let mut inner = p.into_inner();
+                let alias = extract_string(&mut inner, "Missing graph alias in from_graph")?;
                 expr_opt = Some(GraphExpr::FromGraph { alias });
             }
             Rule::pipeline_expr => {
                 expr_opt = Some(build_pipeline_expr(p)?);
             }
             Rule::graph_expr => {
-                // Unwrap one level and handle inner expr
-                let mut ii = p.into_inner();
-                if let Some(inner) = ii.next() {
+                if let Some(inner) = p.into_inner().next() {
                     match inner.as_rule() {
                         Rule::from_evidence_expr => {
-                            let ev = inner
-                                .into_inner()
-                                .find(|x| x.as_rule() == Rule::ident)
-                                .ok_or_else(|| ExecError::ParseError("Missing evidence name in from_evidence".to_string()))?
-                                .as_str()
-                                .to_string();
+                            let mut ii = inner.into_inner();
+                            let ev = extract_ident(&mut ii, "Missing evidence name in from_evidence")?;
                             expr_opt = Some(GraphExpr::FromEvidence { evidence: ev });
                         }
                         Rule::from_graph_expr => {
-                            let alias = inner
-                                .into_inner()
-                                .find(|x| x.as_rule() == Rule::string)
-                                .ok_or_else(|| ExecError::ParseError("Missing graph alias in from_graph".to_string()))?
-                                .as_str();
-                            // Remove quotes from string
-                            let alias = alias.trim_matches('"').to_string();
+                            let mut ii = inner.into_inner();
+                            let alias = extract_string(&mut ii, "Missing graph alias in from_graph")?;
                             expr_opt = Some(GraphExpr::FromGraph { alias });
                         }
                         Rule::pipeline_expr => {
@@ -741,8 +731,9 @@ fn build_graph_stmt(pair: pest::iterators::Pair<Rule>) -> Result<GraphDef, ExecE
             _ => {}
         }
     }
-    let expr = expr_opt.ok_or_else(|| ExecError::ParseError("Missing graph expression".to_string()))?;
-    Ok(GraphDef { name, expr })
+
+    expr_opt.ok_or_else(|| ExecError::ParseError("Missing graph expression".to_string()))
+        .map(|expr| GraphDef { name, expr })
 }
 
 /// Build a pipeline expression from a Pest pair.
@@ -828,33 +819,15 @@ fn build_metric_stmt(pair: pest::iterators::Pair<Rule>) -> Result<MetricDef, Exe
 
 fn build_export_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ExportDef, ExecError> {
     let mut it = pair.into_inner();
-    let graph = it
-        .find(|p| p.as_rule() == Rule::ident)
-        .ok_or_else(|| ExecError::ParseError("Missing graph name in export".to_string()))?
-        .as_str()
-        .to_string();
-    let alias = it
-        .find(|p| p.as_rule() == Rule::string)
-        .ok_or_else(|| ExecError::ParseError("Missing alias string in export".to_string()))?
-        .as_str()
-        .trim_matches('"')
-        .to_string();
+    let graph = extract_ident(&mut it, "Missing graph name in export")?;
+    let alias = extract_string(&mut it, "Missing alias string in export")?;
     Ok(ExportDef { graph, alias })
 }
 
 fn build_metric_export_stmt(pair: pest::iterators::Pair<Rule>) -> Result<MetricExportDef, ExecError> {
     let mut it = pair.into_inner();
-    let metric = it
-        .find(|p| p.as_rule() == Rule::ident)
-        .ok_or_else(|| ExecError::ParseError("Missing metric name in export_metric".to_string()))?
-        .as_str()
-        .to_string();
-    let alias = it
-        .find(|p| p.as_rule() == Rule::string)
-        .ok_or_else(|| ExecError::ParseError("Missing alias string in export_metric".to_string()))?
-        .as_str()
-        .trim_matches('"')
-        .to_string();
+    let metric = extract_ident(&mut it, "Missing metric name in export_metric")?;
+    let alias = extract_string(&mut it, "Missing alias string in export_metric")?;
     Ok(MetricExportDef { metric, alias })
 }
 
