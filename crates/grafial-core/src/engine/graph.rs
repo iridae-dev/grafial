@@ -108,13 +108,58 @@ pub struct GaussianPosterior {
 }
 
 impl GaussianPosterior {
-    /// Updates the expected value without changing precision.
+    /// Updates the posterior mean without changing precision (certainty).
     ///
-    /// Soft update that adjusts the mean without increasing certainty.
-    /// This is used by the `set_expectation` rule action to update attribute
-    /// expectations without modifying the precision (variance) of the posterior.
+    /// # WARNING: This is NOT a Bayesian update from an observation!
+    ///
+    /// This method adjusts the mean while keeping precision unchanged, which
+    /// does not correspond to a standard Bayesian update. Use this for:
+    ///
+    /// - **Soft constraints**: Nudging beliefs without adding evidence
+    /// - **Expert elicitation**: "I think this should be around X" (without increased confidence)
+    /// - **Mean revision**: Adjusting beliefs based on non-evidential reasoning
+    ///
+    /// For a proper Bayesian update from an observation, use [`update()`](Self::update)
+    /// or [`observe_soft()`](Self::observe_soft) instead.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut posterior = GaussianPosterior { mean: 10.0, precision: 2.0 };
+    /// posterior.set_expectation(15.0);
+    /// // Mean changed to 15.0, but precision still 2.0 (no new evidence)
+    /// ```
     pub fn set_expectation(&mut self, v: f64) {
         self.mean = v;
+    }
+
+    /// Performs a Bayesian update with low confidence (soft observation).
+    ///
+    /// This is a Bayesian alternative to [`set_expectation()`](Self::set_expectation)
+    /// that models a "weak observation" or "soft suggestion" of a value.
+    ///
+    /// Unlike `set_expectation()`, this:
+    /// - Increases precision (adds evidence)
+    /// - Uses proper Bayesian conjugate update
+    /// - Moves the mean toward the observed value (doesn't set it directly)
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The observed or suggested value
+    /// * `confidence` - Observation precision (higher = more confident)
+    ///   - Use ~0.01 for very weak suggestions
+    ///   - Use ~1.0 for normal observations
+    ///   - Use ~100.0 for strong observations
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut posterior = GaussianPosterior { mean: 10.0, precision: 2.0 };
+    /// posterior.observe_soft(15.0, 0.1);  // Weak suggestion toward 15.0
+    /// // Mean moves slightly toward 15.0, precision increases slightly
+    /// ```
+    pub fn observe_soft(&mut self, value: f64, confidence: f64) {
+        self.update(value, confidence);
     }
 
     /// Performs a Bayesian update with a new observation.
@@ -216,6 +261,34 @@ impl BetaPosterior {
         let a = self.alpha.max(MIN_BETA_PARAM);
         let b = self.beta.max(MIN_BETA_PARAM);
         a / (a + b)
+    }
+
+    /// Computes the posterior variance of the probability.
+    ///
+    /// For Beta(α, β), the variance is:
+    /// ```text
+    /// Var[p] = αβ / [(α+β)²(α+β+1)]
+    /// ```
+    ///
+    /// Applies MIN_BETA_PARAM floor to both parameters for numerical stability.
+    ///
+    /// # Returns
+    ///
+    /// The variance of the posterior probability distribution.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let posterior = BetaPosterior { alpha: 2.0, beta: 3.0 };
+    /// let mean = posterior.mean_probability();  // 0.4
+    /// let var = posterior.variance();           // 0.04
+    /// let std_dev = var.sqrt();                 // 0.2
+    /// ```
+    pub fn variance(&self) -> f64 {
+        let a = self.alpha.max(MIN_BETA_PARAM);
+        let b = self.beta.max(MIN_BETA_PARAM);
+        let sum = a + b;
+        (a * b) / (sum * sum * (sum + 1.0))
     }
 }
 
