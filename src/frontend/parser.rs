@@ -545,6 +545,7 @@ fn build_rule(pair: pest::iterators::Pair<Rule>, _source: &str) -> Result<RuleDe
                                 .find(|x| x.as_rule() == Rule::expr)
                                 .ok_or_else(|| ExecError::ParseError("Missing where expression".to_string()))?;
                             let expr = build_expr(expr_pair);
+                            eprintln!("[PARSER] Where clause parsed as: {:?}", expr);
                             where_expr = Some(expr);
                         }
                         Rule::action_clause => {
@@ -876,10 +877,13 @@ fn build_metric_import_stmt(pair: pest::iterators::Pair<Rule>) -> Result<MetricI
 }
 
 fn build_expr(pair: pest::iterators::Pair<Rule>) -> ExprAst {
-    build_expr_result(pair).unwrap_or_else(|e| {
+    eprintln!("[build_expr] Input rule: {:?}, text: {:?}", pair.as_rule(), pair.as_str());
+    let result = build_expr_result(pair).unwrap_or_else(|e| {
         eprintln!("Warning: Failed to build expression: {:?}, using Number(0)", e);
         ExprAst::Number(0.0)
-    })
+    });
+    eprintln!("[build_expr] Result: {:?}", result);
+    result
 }
 
 fn build_expr_result(pair: pest::iterators::Pair<Rule>) -> Result<ExprAst, ExecError> {

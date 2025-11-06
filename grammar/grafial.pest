@@ -107,8 +107,8 @@ metric_import_stmt = { KW_import_metric ~ ident ~ KW_as ~ ident }
 expr = { or_expr }
 or_expr = { and_expr ~ (KW_or ~ and_expr)* }
 and_expr = { cmp_expr ~ (KW_and ~ cmp_expr)* }
-cmp_expr = { add_expr ~ ((op_cmp) ~ add_expr)? }
-op_cmp = _{ "==" | "!=" | "<=" | ">=" | "<" | ">" }
+cmp_expr = { add_expr ~ (op_cmp ~ add_expr)? }
+op_cmp = { "==" | "!=" | "<=" | ">=" | "<" | ">" }
 add_expr = { mul_expr ~ ((op_add) ~ mul_expr)* }
 op_add = _{ "+" | "-" }
 mul_expr = { unary_expr ~ ((op_mul) ~ unary_expr)* }
