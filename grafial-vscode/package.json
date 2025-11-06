@@ -1,0 +1,47 @@
+{
+  "name": "grafial",
+  "displayName": "Grafial Language Support",
+  "description": "Syntax highlighting for Grafial Bayesian Belief Graph Language",
+  "version": "0.1.0",
+  "publisher": "grafial",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "grafial",
+    "bayesian",
+    "graph",
+    "probabilistic",
+    "dsl"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/grafial"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "grafial",
+        "aliases": [
+          "Grafial",
+          "grafial"
+        ],
+        "extensions": [
+          ".grafial"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "grafial",
+        "scopeName": "source.grafial",
+        "path": "./syntaxes/grafial.tmLanguage.json"
+      }
+    ]
+  }
+}
+

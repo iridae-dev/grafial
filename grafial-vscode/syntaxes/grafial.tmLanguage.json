@@ -1,0 +1,399 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Grafial",
+  "scopeName": "source.grafial",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#posterior-types"
+    },
+    {
+      "include": "#evidence-modes"
+    },
+    {
+      "include": "#builtin-functions"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#patterns"
+    },
+    {
+      "include": "#expressions"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.grafial",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.grafial",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.declaration.grafial",
+          "match": "\\b(schema|belief_model|evidence|rule|flow)\\b"
+        },
+        {
+          "name": "keyword.other.grafial",
+          "match": "\\b(node|edge|on|pattern|where|action|observe|graph|metric|export|import_metric|export_metric|as|let|set_expectation|force_absent|mode|from_evidence|from_graph|apply_rule|apply_ruleset|snapshot|prune_edges|exists|exist)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.grafial",
+          "match": "\\b(and|or|not)\\b"
+        },
+        {
+          "name": "constant.language.boolean.grafial",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "meta.declaration.schema.grafial",
+          "begin": "\\bschema\\s+",
+          "end": "\\{",
+          "beginCaptures": {
+            "0": { "name": "keyword.control.declaration.grafial" }
+          },
+          "patterns": [
+            {
+              "name": "entity.name.type.schema.grafial",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+            }
+          ]
+        },
+        {
+          "name": "meta.declaration.belief-model.grafial",
+          "begin": "\\bbelief_model\\s+",
+          "end": "\\bon\\b",
+          "beginCaptures": {
+            "0": { "name": "keyword.control.declaration.grafial" }
+          },
+          "patterns": [
+            {
+              "name": "entity.name.type.belief-model.grafial",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+            }
+          ]
+        },
+        {
+          "name": "meta.declaration.rule.grafial",
+          "begin": "\\brule\\s+",
+          "end": "\\bon\\b",
+          "beginCaptures": {
+            "0": { "name": "keyword.control.declaration.grafial" }
+          },
+          "patterns": [
+            {
+              "name": "entity.name.function.rule.grafial",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+            }
+          ]
+        },
+        {
+          "name": "meta.declaration.flow.grafial",
+          "begin": "\\bflow\\s+",
+          "end": "\\bon\\b",
+          "beginCaptures": {
+            "0": { "name": "keyword.control.declaration.grafial" }
+          },
+          "patterns": [
+            {
+              "name": "entity.name.function.flow.grafial",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+            }
+          ]
+        },
+        {
+          "name": "meta.declaration.evidence.grafial",
+          "begin": "\\bevidence\\s+",
+          "end": "\\bon\\b",
+          "beginCaptures": {
+            "0": { "name": "keyword.control.declaration.grafial" }
+          },
+          "patterns": [
+            {
+              "name": "entity.name.type.evidence.grafial",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+            }
+          ]
+        }
+      ]
+    },
+    "posterior-types": {
+      "patterns": [
+        {
+          "name": "meta.posterior-call.grafial",
+          "begin": "\\b(GaussianPosterior|BernoulliPosterior|CategoricalPosterior)\\s*\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "1": { "name": "support.type.posterior.grafial" },
+            "2": { "name": "punctuation.definition.parameters.begin.grafial" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.parameters.end.grafial" }
+          },
+          "patterns": [
+            {
+              "name": "variable.parameter.named.grafial",
+              "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*=",
+              "captures": {
+                "1": { "name": "variable.parameter.named.grafial" }
+              }
+            },
+            {
+              "include": "#numbers"
+            },
+            {
+              "include": "#strings"
+            },
+            {
+              "name": "constant.language.uniform.grafial",
+              "match": "\\buniform\\b"
+            },
+            {
+              "name": "meta.array.grafial",
+              "begin": "\\[",
+              "end": "\\]",
+              "patterns": [
+                { "include": "#numbers" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "evidence-modes": {
+      "patterns": [
+        {
+          "name": "constant.language.evidence-mode.grafial",
+          "match": "\\b(present|absent|chosen|unchosen|forced_choice)\\b"
+        }
+      ]
+    },
+    "builtin-functions": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.grafial",
+          "match": "\\b(prob|degree|winner|entropy|prob_vector|count_nodes|sum_nodes|fold_nodes|avg_degree)\\b"
+        },
+        {
+          "name": "support.function.builtin.grafial",
+          "match": "\\bE\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.pipe.grafial",
+          "match": "\\|>"
+        },
+        {
+          "name": "keyword.operator.distribution.grafial",
+          "match": "~"
+        },
+        {
+          "name": "keyword.operator.comparison.grafial",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.grafial",
+          "match": "(\\+|\\-|\\*|/)"
+        },
+        {
+          "name": "keyword.operator.assignment.grafial",
+          "match": "="
+        },
+        {
+          "name": "punctuation.separator.grafial",
+          "match": "(,|;|:)"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.grafial",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.grafial",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.grafial",
+          "match": "\\b\\d+(\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "patterns": {
+      "patterns": [
+        {
+          "name": "meta.pattern.node.grafial",
+          "begin": "\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.pattern.grafial" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.pattern.grafial" }
+          },
+          "patterns": [
+            {
+              "name": "variable.parameter.pattern.grafial",
+              "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*:",
+              "captures": {
+                "1": { "name": "variable.parameter.pattern.grafial" }
+              }
+            },
+            {
+              "name": "entity.name.type.label.grafial",
+              "match": ":([a-zA-Z_][a-zA-Z0-9_]*)",
+              "captures": {
+                "0": { "name": "punctuation.separator.type.grafial" },
+                "1": { "name": "entity.name.type.label.grafial" }
+              }
+            },
+            {
+              "include": "#patterns"
+            }
+          ]
+        },
+        {
+          "name": "meta.pattern.edge.grafial",
+          "begin": "\\[",
+          "end": "\\]",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.edge-pattern.grafial" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.edge-pattern.grafial" }
+          },
+          "patterns": [
+            {
+              "name": "variable.parameter.pattern.grafial",
+              "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*:",
+              "captures": {
+                "1": { "name": "variable.parameter.pattern.grafial" }
+              }
+            },
+            {
+              "name": "entity.name.type.edge-type.grafial",
+              "match": ":([a-zA-Z_][a-zA-Z0-9_]*)",
+              "captures": {
+                "0": { "name": "punctuation.separator.type.grafial" },
+                "1": { "name": "entity.name.type.edge-type.grafial" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "keyword.operator.pattern-arrow.grafial",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.pattern-dash.grafial",
+          "match": "-"
+        }
+      ]
+    },
+    "expressions": {
+      "patterns": [
+        {
+          "name": "meta.expression.bracket.grafial",
+          "begin": "E\\[",
+          "end": "\\]",
+          "beginCaptures": {
+            "0": {
+              "name": "support.function.builtin.grafial"
+            },
+            "1": {
+              "name": "punctuation.square.bracket.begin.grafial"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.square.bracket.end.grafial"
+            }
+          },
+          "patterns": [
+            {
+              "name": "variable.other.node.grafial",
+              "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\.",
+              "captures": {
+                "1": { "name": "variable.other.node.grafial" }
+              }
+            },
+            {
+              "name": "punctuation.accessor.grafial",
+              "match": "\\."
+            },
+            {
+              "name": "variable.other.attribute.grafial",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+            }
+          ]
+        },
+        {
+          "name": "meta.function-call.grafial",
+          "begin": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+          "end": "\\)",
+          "beginCaptures": {
+            "1": {
+              "name": "entity.name.function.grafial"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#expressions"
+            },
+            {
+              "include": "#numbers"
+            },
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#keywords"
+            },
+            {
+              "name": "variable.parameter.named.grafial",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\s*="
+            }
+          ]
+        },
+        {
+          "name": "variable.other.grafial",
+          "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}
+
