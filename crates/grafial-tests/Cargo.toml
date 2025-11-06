@@ -1,0 +1,37 @@
+[package]
+name = "grafial-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Integration and unit tests for Grafial"
+
+[[test]]
+name = "integration_tests"
+path = "tests/integration_tests.rs"
+
+[[test]]
+name = "competing_edges_tests"
+path = "tests/competing_edges_tests.rs"
+
+[[test]]
+name = "evidence_building_tests"
+path = "tests/evidence_building_tests.rs"
+
+[[test]]
+name = "exists_subquery_tests"
+path = "tests/exists_subquery_tests.rs"
+
+[[test]]
+name = "phase4_exit_criteria"
+path = "tests/phase4_exit_criteria.rs"
+
+[[test]]
+name = "property_tests"
+path = "tests/property_tests.rs"
+
+[dependencies]
+grafial-core = { path = "../grafial-core", features = ["serde"] }
+grafial-frontend = { path = "../grafial-frontend" }
+rustc-hash.workspace = true
+pretty_assertions.workspace = true
+proptest.workspace = true

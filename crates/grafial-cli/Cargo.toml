@@ -1,0 +1,17 @@
+[package]
+name = "grafial-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI tool for Grafial"
+
+[[bin]]
+name = "grafial"
+path = "src/bin/grafial.rs"
+
+[dependencies]
+grafial-core = { path = "../grafial-core", features = ["serde"] }
+grafial-frontend = { path = "../grafial-frontend" }
+clap.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
