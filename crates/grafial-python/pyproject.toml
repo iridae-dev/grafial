@@ -4,11 +4,23 @@ build-backend = "maturin"
 
 [project]
 name = "grafial"
+version = "0.1.0"
+description = "Python bindings for Grafial - Bayesian belief graph inference DSL"
 requires-python = ">=3.8"
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
+    "Development Status :: 3 - Alpha",
+]
+keywords = ["bayesian", "graph", "inference", "dsl"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
 ]
 
 [tool.maturin]

@@ -196,7 +196,7 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv pip install -e .
 ```
 
-See `PYTHON_PLAN.md` for detailed Python integration instructions.
+See `crates/grafial-python/README.md` for detailed Python bindings documentation.
 
 ## Troubleshooting
 
@@ -240,10 +240,70 @@ cargo update
 cargo build --workspace --release
 ```
 
+## Python Bindings
+
+### Prerequisites
+
+- Python 3.8 or later
+- [maturin](https://github.com/PyO3/maturin) (install via `pip install maturin` or `cargo install maturin`)
+- Or use [uv](https://github.com/astral-sh/uv) for Python environment management
+
+### Development Installation
+
+**Using uv (recommended):**
+
+```bash
+cd crates/grafial-python
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+uv pip install -e .
+```
+
+**Using maturin:**
+
+```bash
+cd crates/grafial-python
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install maturin
+maturin develop --release
+```
+
+### Running Python Tests
+
+```bash
+cd crates/grafial-python
+pytest tests/
+```
+
+### Building for Distribution
+
+Build wheels for distribution:
+
+```bash
+cd crates/grafial-python
+maturin build --release
+```
+
+This creates `.whl` files in `dist/` that can be installed with `pip install dist/grafial-*.whl`.
+
+### Using in Python Projects
+
+Once installed, import and use:
+
+```python
+import grafial
+
+program = grafial.compile("...")
+ctx = grafial.run_flow(program, "MyFlow")
+```
+
+See `crates/grafial-python/README.md` for detailed documentation.
+
 ## Next Steps
 
 - See `LANGUAGE_GUIDE.md` for Grafial syntax and semantics
 - See `ENGINE_ARCHITECTURE.md` for engine internals
 - See `ROADMAP.md` for future development plans
-- See `PYTHON_PLAN.md` for Python bindings roadmap
+- See `crates/grafial-python/README.md` for Python bindings documentation
 - Check `crates/grafial-examples/` for sample Grafial programs

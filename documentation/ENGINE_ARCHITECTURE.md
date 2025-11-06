@@ -371,7 +371,7 @@ pub trait MetricFn: Send + Sync + 'static {
 - Release GIL for long-running operations
 - Convert `ExecError` to Python exceptions
 
-**Status:** Placeholder implementation exists. See `PYTHON_PLAN.md` for detailed implementation plan.
+**Status:** Implemented. See `crates/grafial-python/README.md` for documentation.
 
 ---
 
@@ -389,5 +389,5 @@ pub trait MetricFn: Send + Sync + 'static {
 
 - **Language Guide**: `LANGUAGE_GUIDE.md` - User-facing language documentation
 - **Roadmap**: `ROADMAP.md` - Future work and performance improvements
-- **Python Plan**: `PYTHON_PLAN.md` - Python bindings implementation plan
+- **Python Bindings**: `crates/grafial-python/README.md` - Python bindings documentation
 - **Building**: `BUILDING.md` - Build and development setup

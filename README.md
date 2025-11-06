@@ -218,14 +218,17 @@ uv pip install -e .
 ### Example
 
 ```python
-from grafial import GraphRuntime
+import grafial
 
-runtime = GraphRuntime()
-runtime.load("crates/grafial-examples/ab_testing.grafial")
-runtime.run()
+# Compile and run a Grafial program
+with open("crates/grafial-examples/ab_testing.grafial", "r") as f:
+    source = f.read()
+program = grafial.compile(source)
+ctx = grafial.run_flow(program, "ABTest")
+print(f"Results: {ctx.metrics}")
 ```
 
-See **`documentation/PYTHON_PLAN.md`** for integration details and usage examples.
+See **`crates/grafial-python/README.md`** for detailed usage and installation instructions.
 
 ---
 
@@ -251,7 +254,7 @@ See **`crates/grafial-vscode/README.md`** for details.
 - **`documentation/LANGUAGE_GUIDE.md`** - Complete language reference
 - **`documentation/ENGINE_ARCHITECTURE.md`** - Runtime architecture and API
 - **`documentation/BUILDING.md`** - Build and development setup
-- **`documentation/PYTHON_PLAN.md`** - Python integration guide
+- **`crates/grafial-python/README.md`** - Python bindings documentation
 - **`documentation/ROADMAP.md`** - Project roadmap
 
 ---
