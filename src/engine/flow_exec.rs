@@ -473,7 +473,7 @@ fn eval_prune_predicate(expr: &ExprAst, graph: &BeliefGraph, edge: EdgeId) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::graph::{BetaPosterior, EdgeData, EdgePosterior, GaussianPosterior, NodeData, NodeId, EdgeId};
+    use crate::engine::graph::{BetaPosterior, GaussianPosterior, NodeData, NodeId, EdgeId};
     use crate::frontend::ast::*;
 
     fn build_simple_graph() -> BeliefGraph {
@@ -623,7 +623,6 @@ mod tests {
         let result = prune_edges(&g, "REL", &predicate).unwrap();
         // Should keep OTHER edge
         assert_eq!(result.edges().len(), 1);
-        use std::sync::Arc;
         assert_eq!(result.edges()[0].ty.as_ref(), "OTHER");
     }
 

@@ -3,8 +3,6 @@
 //! Provides checkpoint/save functionality for BeliefGraph instances with
 //! version metadata and compatibility validation.
 
-use std::collections::HashMap;
-
 use crate::engine::errors::ExecError;
 use crate::engine::graph::BeliefGraph;
 
@@ -91,16 +89,23 @@ impl Snapshot {
 
 /// Returns a list of enabled feature flags.
 fn get_enabled_features() -> Vec<String> {
+    #[allow(unused_mut)]  // mut is needed when features are enabled
     let mut features = Vec::new();
     
     #[cfg(feature = "rayon")]
-    features.push("rayon".to_string());
+    {
+        features.push("rayon".to_string());
+    }
     
     #[cfg(feature = "serde")]
-    features.push("serde".to_string());
+    {
+        features.push("serde".to_string());
+    }
     
     #[cfg(feature = "tracing")]
-    features.push("tracing".to_string());
+    {
+        features.push("tracing".to_string());
+    }
     
     features
 }
@@ -179,11 +184,10 @@ pub fn load_snapshot_binary(data: &[u8]) -> Result<Snapshot, ExecError> {
 mod tests {
     use super::*;
     use crate::engine::graph::BeliefGraph;
-    use std::sync::Arc;
 
     fn create_test_graph() -> BeliefGraph {
         use std::collections::HashMap;
-        use crate::engine::graph::{GaussianPosterior, BetaPosterior};
+        use crate::engine::graph::BetaPosterior;
         let mut g = BeliefGraph::default();
         let n1 = g.add_node("Person".to_string(), HashMap::new());
         let n2 = g.add_node("Person".to_string(), HashMap::new());

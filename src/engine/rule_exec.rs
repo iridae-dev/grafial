@@ -42,7 +42,7 @@ use std::sync::Arc;
 use crate::engine::errors::ExecError;
 use crate::engine::expr_eval::{eval_binary_op, eval_expr_core, eval_unary_op, ExprContext};
 use crate::engine::graph::{BeliefGraph, EdgeId, NodeId};
-use crate::engine::query_plan::{QueryPlan, QueryPlanCache};
+use crate::engine::query_plan::QueryPlanCache;
 use crate::frontend::ast::{ActionStmt, CallArg, ExprAst, PatternItem, RuleDef};
 
 // Phase 7: Fixpoint iteration configuration
@@ -284,7 +284,7 @@ impl<'a> RuleExprContext<'a> {
     }
 
     /// Evaluates entropy(node, edge_type) - computes entropy of competing edge distribution
-    fn eval_entropy_function(&self, pos_args: &[ExprAst], all_args: &[CallArg], graph: &BeliefGraph) -> Result<f64, ExecError> {
+    fn eval_entropy_function(&self, pos_args: &[ExprAst], _all_args: &[CallArg], graph: &BeliefGraph) -> Result<f64, ExecError> {
         if pos_args.len() < 2 {
             return Err(ExecError::Internal("entropy(): requires node and edge_type arguments".into()));
         }
@@ -892,7 +892,7 @@ pub fn run_rule(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::graph::{BeliefGraph, BetaPosterior, EdgeData, GaussianPosterior, NodeData};
+    use crate::engine::graph::{BeliefGraph, BetaPosterior, GaussianPosterior, NodeData};
     use crate::frontend::ast::{BinaryOp, CallArg, EdgePattern, NodePattern};
 
     // Helper to create a simple test graph

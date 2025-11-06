@@ -728,7 +728,9 @@ pub(crate) enum GraphDelta {
     NodeAttributeChange {
         node: NodeId,
         attr: Arc<str>,  // Use Arc<str> to avoid String allocation
+        #[allow(dead_code)]  // Reserved for future undo/rollback functionality
         old_mean: f64,
+        #[allow(dead_code)]  // Reserved for future undo/rollback functionality
         old_precision: f64,
         new_mean: f64,
         new_precision: f64,
@@ -736,7 +738,9 @@ pub(crate) enum GraphDelta {
     /// An independent edge's probability was modified (Beta posterior)
     EdgeProbChange {
         edge: EdgeId,
+        #[allow(dead_code)]  // Reserved for future undo/rollback functionality
         old_alpha: f64,
+        #[allow(dead_code)]  // Reserved for future undo/rollback functionality
         old_beta: f64,
         new_alpha: f64,
         new_beta: f64,
@@ -748,10 +752,13 @@ pub(crate) enum GraphDelta {
     /// An edge was added or fully replaced
     EdgeChange { id: EdgeId, edge: EdgeData },
     /// A competing group was added or modified
+    #[allow(dead_code)]  // Reserved for future structural change tracking
     CompetingGroupChange { id: CompetingGroupId, group: CompetingEdgeGroup },
     /// A node was removed
+    #[allow(dead_code)]  // Reserved for future structural change tracking
     NodeRemoved { id: NodeId },
     /// An edge was removed
+    #[allow(dead_code)]  // Reserved for future structural change tracking
     EdgeRemoved { id: EdgeId },
 }
 
@@ -889,6 +896,7 @@ impl BeliefGraph {
     }
 
     /// Gets a reference to the inner graph data.
+    #[allow(dead_code)]  // Reserved for future internal access needs
     fn inner(&self) -> &BeliefGraphInner {
         &self.inner
     }
@@ -1005,7 +1013,7 @@ impl BeliefGraph {
         
         // Check if there are any fine-grained attribute changes for this node
         // Collect all attribute changes for this node (in order, most recent last)
-        let mut attr_changes: Vec<&GraphDelta> = self.delta.iter()
+        let attr_changes: Vec<&GraphDelta> = self.delta.iter()
             .filter_map(|change| {
                 if let GraphDelta::NodeAttributeChange { node: delta_id, .. } = change {
                     if *delta_id == id {
@@ -1200,6 +1208,7 @@ impl BeliefGraph {
     }
 
     /// Returns a reference to the inner for checking edge_index.
+    #[allow(dead_code)]  // Reserved for future internal access needs
     pub(crate) fn inner_ref(&self) -> &BeliefGraphInner {
         &self.inner
     }
@@ -1559,7 +1568,7 @@ impl BeliefGraph {
     pub fn get_competing_group(&self, node: NodeId, edge_type: &str) -> Option<&CompetingEdgeGroup> {
         // Check delta first for recent changes
         for change in &self.delta {
-            if let GraphDelta::EdgeChange { id, edge } = change {
+            if let GraphDelta::EdgeChange { id: _id, edge } = change {
                 if edge.src == node && edge.ty.as_ref() == edge_type {
                     if let EdgePosterior::Competing { group_id, .. } = &edge.exist {
                         return self.inner.competing_groups.get(group_id);

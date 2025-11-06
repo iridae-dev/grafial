@@ -245,6 +245,7 @@ impl MetricFn for SumNodes {
 /// Uses a divide-and-conquer approach: recursively sum left and right halves,
 /// then combine. This improves numerical stability for large arrays by reducing
 /// the number of additions that accumulate rounding error.
+#[allow(dead_code)]  // Reserved for future parallel implementation
 fn pairwise_sum(values: &[f64]) -> f64 {
     match values.len() {
         0 => 0.0,
@@ -515,7 +516,7 @@ fn nodes_sorted_by_id(nodes: &[crate::engine::graph::NodeData]) -> Vec<&crate::e
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::graph::{BeliefGraph, EdgeData, EdgeId, GaussianPosterior, NodeData, BetaPosterior};
+    use crate::engine::graph::{BeliefGraph, EdgeId, GaussianPosterior, NodeData, BetaPosterior};
 
     fn demo_graph() -> BeliefGraph {
         let mut g = demo_graph_impl();

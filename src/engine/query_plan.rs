@@ -197,7 +197,7 @@ impl Default for QueryPlanCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::graph::{BeliefGraph, NodeId};
+    use crate::engine::graph::BeliefGraph;
     use crate::frontend::ast::{EdgePattern, NodePattern};
 
     fn create_test_graph() -> BeliefGraph {
