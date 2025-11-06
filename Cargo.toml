@@ -20,6 +20,7 @@ pest = "2"
 pest_derive = "2"
 smallvec = "1.13"
 rustc-hash = "1"
+clap = { version = "4", features = ["derive"] }
 tracing = { version = "0.1", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
@@ -34,3 +35,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "graph_benchmarks"
 harness = false
+
+[[bin]]
+name = "grafial"
+path = "src/bin/grafial.rs"

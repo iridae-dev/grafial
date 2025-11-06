@@ -64,20 +64,37 @@ See **`documentation/LANGUAGE_GUIDE.md`** or `examples` for the full grammar and
 
 The **engine** is implemented in Rust and provides the runtime for inference, belief updates, and rule execution. It handles probabilistic pattern matching, posterior updates, and metric computation efficiently, with full type and memory safety.
 
+### CLI Tool
+
+The Grafial CLI allows you to validate and execute Grafial programs from the command line:
+
+```bash
+# Validate a program
+grafial program.grafial
+
+# List available flows
+grafial program.grafial --list-flows
+
+# Execute a flow
+grafial program.grafial --flow MyFlow
+
+# Get JSON output
+grafial program.grafial --flow MyFlow -o json
+
+# Get debug output
+grafial program.grafial --flow MyFlow -o debug
+```
+
+See **`documentation/BUILDING.md`** for installation and build instructions.
+
 ### Build
 ```bash
-cd engine
 cargo build --release
 ```
 
 ### Test
 ```bash
 cargo test
-```
-
-### Run
-```bash
-cargo run -- path/to/program.grafial
 ```
 
 See **`documentation/ENGINE_ARCHITECTURE.md`** for details on the runtime, evaluation model, and API layout.
