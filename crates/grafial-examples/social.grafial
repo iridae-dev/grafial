@@ -9,21 +9,22 @@ schema Social {
 
 belief_model SocialBeliefs on Social {
   node Person {
-    some_value ~ GaussianPosterior(prior_mean=0.0, prior_precision=0.1)
-    other_value ~ GaussianPosterior(prior_mean=0.0, prior_precision=0.1)
+    some_value ~ Gaussian(mean=0.0, precision=0.1)
+    other_value ~ Gaussian(mean=0.0, precision=0.1)
   }
   edge REL {
-    exist ~ BernoulliPosterior(prior=0.5, pseudo_count=2.0)
+    exist ~ Bernoulli(prior=0.5, weight=2.0)
   }
 }
 
 evidence SocialEvidence on SocialBeliefs {
-  observe Person["Alice"].some_value = 10.0
-  observe Person["Bob"].some_value = 5.0
-  observe Person["Carol"].some_value = 2.0
+  Person {
+    "Alice" { some_value: 10.0 },
+    "Bob"   { some_value: 5.0 },
+    "Carol" { some_value: 2.0 }
+  }
 
-  observe edge REL(Person["Alice"], Person["Bob"]) present
-  observe edge REL(Person["Bob"], Person["Carol"]) present
+  REL(Person -> Person) { "Alice" -> "Bob"; "Bob" -> "Carol" }
 }
 
 // Rule: Transfer value from A to B through intermediate node B,
@@ -66,4 +67,20 @@ flow Demo on SocialBeliefs {
   metric avg_degree = avg_degree(Person, REL, min_prob=0.8)
 
   export cleaned as "demo"
+}
+
+// Additional examples (not used in Demo flow):
+// Node-only iteration sugar with a soft Bayesian update
+rule BoostLowScores on SocialBeliefs {
+  for (P:Person) where E[P.other_value] < 1.0 => {
+    P.other_value ~= 1.0 precision=0.2
+  }
+}
+
+// Edge cleanup based on probability
+rule CleanupEdges on SocialBeliefs {
+  pattern (A:Person)-[ab:REL]->(B:Person)
+  where prob(ab) < 0.05 => {
+    delete ab confidence=high
+  }
 }

@@ -625,6 +625,7 @@ impl PyEvidence {
                 node: (node_type.to_string(), node_id.to_string()),
                 attr: attr.to_string(),
                 value,
+                precision: None,
             });
     }
 

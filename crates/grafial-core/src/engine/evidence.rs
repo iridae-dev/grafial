@@ -160,7 +160,7 @@ pub fn build_graph_from_evidence(
                 // Collect observation for parallel processing
                 edge_observations.push((edge_id, mode.clone()));
             }
-            ObserveStmt::Attribute { node, attr, value } => {
+            ObserveStmt::Attribute { node, attr, value, precision } => {
                 let node_id = node_map
                     .get(&(node.0.clone(), node.1.clone()))
                     .ok_or_else(|| {
@@ -191,7 +191,10 @@ pub fn build_graph_from_evidence(
                     })?;
 
                 // Get observation precision from posterior type
-                let tau_obs = match posterior_type {
+                let tau_obs = if let Some(p) = precision {
+                    *p
+                } else {
+                    match posterior_type {
                     PosteriorType::Gaussian { params } => {
                         params
                             .iter()
@@ -200,7 +203,7 @@ pub fn build_graph_from_evidence(
                             .unwrap_or(1.0) // Default observation precision
                     }
                     _ => 1.0,
-                };
+                }};
 
                 // Collect observation for parallel processing
                 attr_observations.push((*node_id, attr.clone(), *value, tau_obs));

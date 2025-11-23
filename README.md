@@ -67,15 +67,30 @@ schema ABTest {
 
 belief_model TestBeliefs on ABTest {
   node Variant {
-    conversion_rate ~ GaussianPosterior(prior_mean=0.1, prior_precision=10.0)
+    conversion_rate ~ Gaussian(mean=0.1, precision=10.0)
   }
   edge OUTPERFORMS {
-    exist ~ BernoulliPosterior(prior=0.5, pseudo_count=2.0)
+    exist ~ Bernoulli(prior=0.5, weight=2.0)
   }
 }
 
 evidence VariantBData on TestBeliefs {
-  observe Variant["B"].conversion_rate = 0.15
+  Variant { "B" { conversion_rate: 0.15 } }
+}
+
+// Node-only iteration sugar and soft updates
+rule Calibrate on TestBeliefs {
+  for (V:Variant) where E[V.conversion_rate] < 0.12 => {
+    V.conversion_rate ~= 0.12 precision=0.5
+  }
+}
+
+// Edge operations based on probability
+rule Cleanup on TestBeliefs {
+  pattern (X:Variant)-[xy:OUTPERFORMS]->(Y:Variant)
+  where prob(xy) < 0.05 => {
+    delete xy confidence=high
+  }
 }
 ```
 

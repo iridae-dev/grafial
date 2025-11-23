@@ -328,11 +328,17 @@ fn build_posterior_type(pair: pest::iterators::Pair<Rule>) -> Result<PosteriorTy
             for p in actual_pair.into_inner() {
                 if let Rule::gaussian_param = p.as_rule() {
                     let mut gp = p.into_inner();
-                    let name = gp.next().unwrap().as_str().to_string();
+                    let raw_name = gp.next().unwrap().as_str().to_string();
                     let value =
                         gp.next().unwrap().as_str().parse::<f64>().map_err(|e| {
                             FrontendError::ParseError(format!("Invalid number: {}", e))
                         })?;
+                    // Normalize parameter names: accept short forms
+                    let name = match raw_name.as_str() {
+                        "mean" => "prior_mean".to_string(),
+                        "precision" => "prior_precision".to_string(),
+                        other => other.to_string(),
+                    };
                     params.push((name, value));
                 }
             }
@@ -343,11 +349,15 @@ fn build_posterior_type(pair: pest::iterators::Pair<Rule>) -> Result<PosteriorTy
             for p in actual_pair.into_inner() {
                 if let Rule::bernoulli_param = p.as_rule() {
                     let mut bp = p.into_inner();
-                    let name = bp.next().unwrap().as_str().to_string();
+                    let raw_name = bp.next().unwrap().as_str().to_string();
                     let value =
                         bp.next().unwrap().as_str().parse::<f64>().map_err(|e| {
                             FrontendError::ParseError(format!("Invalid number: {}", e))
                         })?;
+                    let name = match raw_name.as_str() {
+                        "weight" => "pseudo_count".to_string(),
+                        other => other.to_string(),
+                    };
                     params.push((name, value));
                 }
             }
@@ -390,18 +400,31 @@ fn build_posterior_type(pair: pest::iterators::Pair<Rule>) -> Result<PosteriorTy
                         
                         match param_name {
                             "group_by" => {
+                                // Accept string or bare identifier for group_by
                                 if let Some(vp) = value_pair_opt.clone() {
-                                    if let Rule::string = vp.as_rule() {
-                                        let value_str = vp.as_str().trim_matches('"');
-                                        group_by = Some(value_str.to_string());
-                                    } else {
-                                        return Err(FrontendError::ParseError(
-                                            "group_by parameter must be a string".to_string(),
-                                        ));
+                                    match vp.as_rule() {
+                                        Rule::string => {
+                                            let value_str = vp.as_str().trim_matches('"');
+                                            group_by = Some(value_str.to_string());
+                                        }
+                                        Rule::ident => {
+                                            group_by = Some(vp.as_str().to_string());
+                                        }
+                                        _ => {
+                                            return Err(FrontendError::ParseError(
+                                                "group_by parameter must be a string or identifier".to_string(),
+                                            ));
+                                        }
                                     }
+                                } else if let Some(raw) = value_raw_str {
+                                    // Literal form (e.g., uniform) is invalid for group_by
+                                    return Err(FrontendError::ParseError(format!(
+                                        "Invalid group_by value: {}",
+                                        raw
+                                    )));
                                 } else {
                                     return Err(FrontendError::ParseError(
-                                        "group_by parameter must be a string".to_string(),
+                                        "group_by parameter requires a value".to_string(),
                                     ));
                                 }
                             }
@@ -554,6 +577,63 @@ fn build_evidence(
                 for b in p.into_inner() {
                     match b.as_rule() {
                         Rule::observe_stmt => observations.push(build_observe_stmt(b)?),
+                        Rule::node_group => build_node_group_into(b, &mut observations)?,
+                        Rule::edge_group => build_edge_group_into(b, &mut observations)?,
+                        Rule::choose_stmt | Rule::unchoose_stmt => {
+                            let is_choose = b.as_rule() == Rule::choose_stmt;
+                            // Extract edge_observe inside and map to chosen/unchosen
+                            let mut edge_pair_opt = None;
+                            for inner in b.clone().into_inner() {
+                                if inner.as_rule() == Rule::edge_observe {
+                                    edge_pair_opt = Some(inner);
+                                    break;
+                                }
+                            }
+                            let edge_pair = edge_pair_opt.ok_or_else(|| {
+                                FrontendError::ParseError(
+                                    "Missing edge target in choose/unchoose".to_string(),
+                                )
+                            })?;
+                            let mut edge_type = String::new();
+                            let mut src: Option<(String, String)> = None;
+                            let mut dst: Option<(String, String)> = None;
+                            for e in edge_pair.into_inner() {
+                                match e.as_rule() {
+                                    Rule::ident if edge_type.is_empty() => {
+                                        edge_type = e.as_str().to_string()
+                                    }
+                                    Rule::node_ref => {
+                                        if src.is_none() {
+                                            src = Some(build_node_ref(e)?);
+                                        } else if dst.is_none() {
+                                            dst = Some(build_node_ref(e)?);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            let src_val = src.ok_or_else(|| {
+                                FrontendError::ParseError(
+                                    "Missing source node in choose/unchoose".to_string(),
+                                )
+                            })?;
+                            let dst_val = dst.ok_or_else(|| {
+                                FrontendError::ParseError(
+                                    "Missing destination node in choose/unchoose".to_string(),
+                                )
+                            })?;
+                            let mode = if is_choose {
+                                EvidenceMode::Chosen
+                            } else {
+                                EvidenceMode::Unchosen
+                            };
+                            observations.push(ObserveStmt::Edge {
+                                edge_type,
+                                src: src_val,
+                                dst: dst_val,
+                                mode,
+                            });
+                        }
                         _ => {}
                     }
                 }
@@ -567,6 +647,128 @@ fn build_evidence(
         observations,
         body_src,
     })
+}
+
+/// Expands a node_group into attribute observation statements
+fn build_node_group_into(
+    pair: pest::iterators::Pair<Rule>,
+    out: &mut Vec<ObserveStmt>,
+) -> Result<(), FrontendError> {
+    let mut it = pair.into_inner();
+    let node_type = extract_ident(&mut it, "Missing node type in node group")?;
+    for entry in it {
+        if entry.as_rule() != Rule::node_entry { continue; }
+        let mut ent_it = entry.into_inner();
+        let label_tok = ent_it
+            .next()
+            .ok_or_else(|| FrontendError::ParseError("Missing node label in node entry".to_string()))?;
+        let label = match label_tok.as_rule() {
+            Rule::node_label => {
+                let mut li = label_tok.into_inner();
+                let t = li.next().ok_or_else(|| FrontendError::ParseError("Empty node_label".to_string()))?;
+                match t.as_rule() {
+                    Rule::string => unquote_string(t.as_str()),
+                    Rule::ident | Rule::number => t.as_str().to_string(),
+                    r => return Err(FrontendError::ParseError(format!("Invalid node label token: {:?}", r))),
+                }
+            }
+            Rule::string => unquote_string(label_tok.as_str()),
+            Rule::ident | Rule::number => label_tok.as_str().to_string(),
+            r => return Err(FrontendError::ParseError(format!("Invalid node label token: {:?}", r))),
+        };
+        // Remaining are node_attr_kv items
+        for kv in ent_it {
+            if kv.as_rule() != Rule::node_attr_kv { continue; }
+            let mut kvit = kv.into_inner();
+            let attr = kvit
+                .next()
+                .ok_or_else(|| FrontendError::ParseError("Missing attr name in node entry".to_string()))?
+                .as_str()
+                .to_string();
+            let val = kvit
+                .next()
+                .ok_or_else(|| FrontendError::ParseError("Missing attr value in node entry".to_string()))?
+                .as_str()
+                .parse::<f64>()
+                .map_err(|e| FrontendError::ParseError(format!("Invalid number: {}", e)))?;
+            // Optional precision_annot
+            let mut precision: Option<f64> = None;
+            if let Some(rem) = kvit.next() {
+                if rem.as_rule() == Rule::precision_annot {
+                    let mut pit = rem.into_inner();
+                    let pname = pit
+                        .next()
+                        .ok_or_else(|| FrontendError::ParseError("Missing precision name".to_string()))?
+                        .as_str();
+                    let pval = pit
+                        .next()
+                        .ok_or_else(|| FrontendError::ParseError("Missing precision value".to_string()))?
+                        .as_str()
+                        .parse::<f64>()
+                        .map_err(|e| FrontendError::ParseError(format!("Invalid number: {}", e)))?;
+                    if pname != "precision" {
+                        return Err(FrontendError::ParseError("Only precision=... supported in node entry".to_string()));
+                    }
+                    precision = Some(pval);
+                }
+            }
+            out.push(ObserveStmt::Attribute { node: (node_type.clone(), label.clone()), attr, value: val, precision });
+        }
+    }
+    Ok(())
+}
+
+/// Expands an edge_group into edge observation statements
+fn build_edge_group_into(
+    pair: pest::iterators::Pair<Rule>,
+    out: &mut Vec<ObserveStmt>,
+) -> Result<(), FrontendError> {
+    let mut it = pair.into_inner();
+    let edge_type = extract_ident(&mut it, "Missing edge type in edge group")?;
+    // Expect src type "->" dst type
+    let src_type = extract_ident(&mut it, "Missing source node type in edge group")?;
+    let dst_type = extract_ident(&mut it, "Missing destination node type in edge group")?;
+    // The remaining is a block: iterate entries
+    for entry in it {
+        if entry.as_rule() != Rule::edge_entry { continue; }
+        let mut ent = entry.into_inner();
+        // node_label ~ ("->" | "-/>") ~ node_label
+        let left = ent.next().ok_or_else(|| FrontendError::ParseError("Missing left label".to_string()))?;
+        let arrow = ent.next().ok_or_else(|| FrontendError::ParseError("Missing arrow".to_string()))?;
+        let right = ent.next().ok_or_else(|| FrontendError::ParseError("Missing right label".to_string()))?;
+        let src_label = match left.as_rule() {
+            Rule::node_label => {
+                let mut li = left.into_inner();
+                let t = li.next().ok_or_else(|| FrontendError::ParseError("Empty node_label".to_string()))?;
+                match t.as_rule() {
+                    Rule::string => unquote_string(t.as_str()),
+                    Rule::ident | Rule::number => t.as_str().to_string(),
+                    r => return Err(FrontendError::ParseError(format!("Invalid label token: {:?}", r))),
+                }
+            }
+            Rule::string => unquote_string(left.as_str()),
+            Rule::ident | Rule::number => left.as_str().to_string(),
+            r => return Err(FrontendError::ParseError(format!("Invalid label token: {:?}", r))),
+        };
+        let dst_label = match right.as_rule() {
+            Rule::node_label => {
+                let mut li = right.into_inner();
+                let t = li.next().ok_or_else(|| FrontendError::ParseError("Empty node_label".to_string()))?;
+                match t.as_rule() {
+                    Rule::string => unquote_string(t.as_str()),
+                    Rule::ident | Rule::number => t.as_str().to_string(),
+                    r => return Err(FrontendError::ParseError(format!("Invalid label token: {:?}", r))),
+                }
+            }
+            Rule::string => unquote_string(right.as_str()),
+            Rule::ident | Rule::number => right.as_str().to_string(),
+            r => return Err(FrontendError::ParseError(format!("Invalid label token: {:?}", r))),
+        };
+        let arrow_text = arrow.as_str();
+        let mode = if arrow_text == "->" { EvidenceMode::Present } else { EvidenceMode::Absent };
+        out.push(ObserveStmt::Edge { edge_type: edge_type.clone(), src: (src_type.clone(), src_label), dst: (dst_type.clone(), dst_label), mode });
+    }
+    Ok(())
 }
 
 fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, FrontendError> {
@@ -653,6 +855,7 @@ fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, 
             let mut node: Option<(String, String)> = None;
             let mut attr = String::new();
             let mut value: Option<f64> = None;
+            let mut precision: Option<f64> = None;
 
             for a in target.into_inner() {
                 match a.as_rule() {
@@ -662,6 +865,27 @@ fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, 
                         value = Some(a.as_str().parse::<f64>().map_err(|e| {
                             FrontendError::ParseError(format!("Invalid number: {}", e))
                         })?);
+                    }
+                    Rule::precision_annot => {
+                        // Only accept precision=number
+                        let mut pit = a.into_inner();
+                        let pname = pit
+                            .next()
+                            .ok_or_else(|| FrontendError::ParseError("Missing precision name".to_string()))?
+                            .as_str()
+                            .to_string();
+                        let pval = pit
+                            .next()
+                            .ok_or_else(|| FrontendError::ParseError("Missing precision value".to_string()))?
+                            .as_str()
+                            .parse::<f64>()
+                            .map_err(|e| FrontendError::ParseError(format!("Invalid number: {}", e)))?;
+                        if pname != "precision" {
+                            return Err(FrontendError::ParseError(
+                                "Only precision=... is supported in attribute observation".to_string(),
+                            ));
+                        }
+                        precision = Some(pval);
                     }
                     _ => {}
                 }
@@ -676,6 +900,7 @@ fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, 
                 node: node_val,
                 attr,
                 value: value_val,
+                precision,
             })
         }
         _ => Err(FrontendError::ParseError(format!(
@@ -688,8 +913,38 @@ fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, 
 fn build_node_ref(pair: pest::iterators::Pair<Rule>) -> Result<(String, String), FrontendError> {
     let mut it = pair.into_inner();
     let node_type = extract_ident(&mut it, "Missing node type in node reference")?;
-    let label = extract_string(&mut it, "Missing label in node reference")?;
-    Ok((node_type, label))
+    let rest = it
+        .next()
+        .ok_or_else(|| FrontendError::ParseError("Missing node label".to_string()))?;
+    match rest.as_rule() {
+        Rule::node_ref_bracket => {
+            // ["label"]
+            let mut inner = rest.into_inner();
+            let label = extract_string(&mut inner, "Missing label in node reference")?;
+            Ok((node_type, label))
+        }
+        Rule::node_ref_call => {
+            // (string | ident | number)
+            let mut inner = rest.into_inner();
+            let tok = inner
+                .next()
+                .ok_or_else(|| FrontendError::ParseError("Missing label in node()".to_string()))?;
+            let label = match tok.as_rule() {
+                Rule::string => unquote_string(tok.as_str()),
+                Rule::ident | Rule::number => tok.as_str().to_string(),
+                r => {
+                    return Err(FrontendError::ParseError(format!(
+                        "Invalid node label token: {:?}",
+                        r
+                    )))
+                }
+            };
+            Ok((node_type, label))
+        }
+        _ => Err(FrontendError::ParseError(
+            "Invalid node reference syntax".to_string(),
+        )),
+    }
 }
 
 fn build_evidence_mode(pair: pest::iterators::Pair<Rule>) -> Result<EvidenceMode, FrontendError> {
@@ -726,6 +981,85 @@ fn build_rule(pair: pest::iterators::Pair<Rule>, _source: &str) -> Result<RuleDe
             Rule::rule_body => {
                 for b in p.into_inner() {
                     match b.as_rule() {
+                        Rule::sugar_rule => {
+                            // sugar_rule = pattern_item (KW_where expr)? => action_block
+                            let mut it = b.into_inner();
+                            // First inner is pattern_item
+                            let pat_pair = it
+                                .next()
+                                .ok_or_else(|| FrontendError::ParseError("Missing pattern in sugar rule".to_string()))?;
+                            patterns.push(build_pattern_item(pat_pair)?);
+                            // Next may be KW_where expr, then action_block
+                            let mut pending_expr: Option<ExprAst> = None;
+                            let mut actions_block: Option<pest::iterators::Pair<Rule>> = None;
+                            while let Some(nxt) = it.next() {
+                                match nxt.as_rule() {
+                                    Rule::expr => pending_expr = Some(build_expr(nxt)),
+                                    Rule::action_block => actions_block = Some(nxt),
+                                    _ => {}
+                                }
+                            }
+                            if where_expr.is_some() && pending_expr.is_some() {
+                                return Err(FrontendError::ParseError("Multiple where clauses not allowed in sugar rule".to_string()));
+                            }
+                            if pending_expr.is_some() {
+                                where_expr = pending_expr;
+                            }
+                            if let Some(ab) = actions_block {
+                                for a in ab.into_inner() {
+                                    if a.as_rule() == Rule::action_stmt {
+                                        actions.push(build_action_stmt(a)?);
+                                    }
+                                }
+                            } else {
+                                return Err(FrontendError::ParseError("Missing action block in sugar rule".to_string()));
+                            }
+                        }
+                        Rule::for_sugar => {
+                            // for (Var:Label) [where expr]? => { actions }
+                            let mut it2 = b.into_inner();
+                            let var = it2
+                                .next()
+                                .ok_or_else(|| FrontendError::ParseError("Missing var in for()".to_string()))?
+                                .as_str()
+                                .to_string();
+                            let label = it2
+                                .next()
+                                .ok_or_else(|| FrontendError::ParseError("Missing label in for()".to_string()))?
+                                .as_str()
+                                .to_string();
+                            // Optional where expr and action block
+                            let mut pending_expr: Option<ExprAst> = None;
+                            let mut actions_block: Option<pest::iterators::Pair<Rule>> = None;
+                            while let Some(nxt) = it2.next() {
+                                match nxt.as_rule() {
+                                    Rule::expr => pending_expr = Some(build_expr(nxt)),
+                                    Rule::action_block => actions_block = Some(nxt),
+                                    _ => {}
+                                }
+                            }
+                            if where_expr.is_some() && pending_expr.is_some() {
+                                return Err(FrontendError::ParseError("Multiple where clauses not allowed in rule".to_string()));
+                            }
+                            if pending_expr.is_some() {
+                                where_expr = pending_expr;
+                            }
+                            if let Some(ab) = actions_block {
+                                for a in ab.into_inner() {
+                                    if a.as_rule() == Rule::action_stmt {
+                                        actions.push(build_action_stmt(a)?);
+                                    }
+                                }
+                            } else {
+                                return Err(FrontendError::ParseError("Missing action block in for()".to_string()));
+                            }
+                            // Insert a placeholder self-loop pattern that engine can special-case later
+                            patterns.push(PatternItem {
+                                src: NodePattern { var: var.clone(), label: label.clone() },
+                                edge: EdgePattern { var: "__for_dummy".into(), ty: "__FOR_NODE__".into() },
+                                dst: NodePattern { var, label },
+                            });
+                        }
                         Rule::pattern_clause => {
                             // pattern_clause = KW_pattern ~ pattern_list
                             // Iterate through inner to find pattern_list (skip KW_pattern token)
@@ -962,6 +1296,117 @@ fn build_action_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ActionStmt, Fr
                 .to_string();
             Ok(ActionStmt::ForceAbsent { edge_var })
         }
+        Rule::nbnudge_stmt => {
+            // non_bayesian_nudge node.attr to expr [variance=...]
+            let mut it = inner.into_inner();
+            // node_attr
+            let na = it.next().ok_or_else(|| {
+                FrontendError::ParseError("Missing node attribute in non_bayesian_nudge".to_string())
+            })?;
+            let mut na_it = na.into_inner();
+            let node_var = na_it
+                .next()
+                .ok_or_else(|| FrontendError::ParseError("Missing node variable in non_bayesian_nudge".to_string()))?
+                .as_str()
+                .to_string();
+            let attr = na_it
+                .next()
+                .ok_or_else(|| FrontendError::ParseError("Missing attribute in non_bayesian_nudge".to_string()))?
+                .as_str()
+                .to_string();
+            // skip KW_to, then expr
+            let expr_pair = it
+                .find(|p| p.as_rule() == Rule::expr)
+                .ok_or_else(|| FrontendError::ParseError("Missing expression in non_bayesian_nudge".to_string()))?;
+            let expr = build_expr(expr_pair);
+            // Optional variance_clause
+            let mut variance: Option<VarianceSpec> = None;
+            for p in it {
+                match p.as_rule() {
+                    Rule::variance_clause => {
+                        let mut vc = p.into_inner();
+                        let kind = vc.next().ok_or_else(|| FrontendError::ParseError("Missing variance kind".to_string()))?;
+                        match kind.as_rule() {
+                            Rule::KW_preserve => variance = Some(VarianceSpec::Preserve),
+                            Rule::increase_clause => {
+                                let mut factor: Option<f64> = None;
+                                for ip in kind.into_inner() {
+                                    if ip.as_str() == "factor" {
+                                        // next should be '=' then number in grammar, but inner gives only number
+                                    } else if ip.as_rule() == Rule::number {
+                                        factor = Some(ip.as_str().parse::<f64>().map_err(|e| FrontendError::ParseError(e.to_string()))?);
+                                    }
+                                }
+                                variance = Some(VarianceSpec::Increase { factor });
+                            }
+                            Rule::decrease_clause => {
+                                let mut factor: Option<f64> = None;
+                                for ip in kind.into_inner() {
+                                    if ip.as_rule() == Rule::number {
+                                        factor = Some(ip.as_str().parse::<f64>().map_err(|e| FrontendError::ParseError(e.to_string()))?);
+                                    }
+                                }
+                                variance = Some(VarianceSpec::Decrease { factor });
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(ActionStmt::NonBayesianNudge { node_var, attr, expr, variance })
+        }
+        Rule::soft_update_stmt => {
+            // node.attr ~= expr (precision=..., count=...)?
+            let mut it = inner.into_inner();
+            let na = it.next().ok_or_else(|| FrontendError::ParseError("Missing node attr in soft update".to_string()))?;
+            let mut na_it = na.into_inner();
+            let node_var = na_it.next().ok_or_else(|| FrontendError::ParseError("Missing node var in soft update".to_string()))?.as_str().to_string();
+            let attr = na_it.next().ok_or_else(|| FrontendError::ParseError("Missing attr in soft update".to_string()))?.as_str().to_string();
+            let expr_pair = it.find(|p| p.as_rule() == Rule::expr).ok_or_else(|| FrontendError::ParseError("Missing expression in soft update".to_string()))?;
+            let expr = build_expr(expr_pair);
+            let mut precision: Option<f64> = None;
+            let mut count: Option<f64> = None;
+            for p in it {
+                if p.as_rule() == Rule::soft_args {
+                    for a in p.into_inner() {
+                        let mut ai = a.into_inner();
+                        let name = ai.next().unwrap().as_str();
+                        let val = ai.next().unwrap().as_str().parse::<f64>().map_err(|e| FrontendError::ParseError(e.to_string()))?;
+                        if name == "precision" {
+                            precision = Some(val);
+                        } else if name == "count" {
+                            count = Some(val);
+                        }
+                    }
+                }
+            }
+            Ok(ActionStmt::SoftUpdate { node_var, attr, expr, precision, count })
+        }
+        Rule::delete_stmt => {
+            let mut it = inner.into_inner();
+            let edge_var = extract_ident(&mut it, "Missing edge var in delete")?;
+            let mut confidence: Option<String> = None;
+            if let Some(next) = it.next() {
+                if next.as_str() == "confidence" {
+                    if let Some(v) = it.next() {
+                        confidence = Some(v.as_str().to_string());
+                    }
+                }
+            }
+            Ok(ActionStmt::DeleteEdge { edge_var, confidence })
+        }
+        Rule::suppress_stmt => {
+            let mut it = inner.into_inner();
+            let edge_var = extract_ident(&mut it, "Missing edge var in suppress")?;
+            let mut weight: Option<f64> = None;
+            if let Some(_) = it.next() {
+                if let Some(v) = it.next() {
+                    weight = Some(v.as_str().parse::<f64>().map_err(|e| FrontendError::ParseError(e.to_string()))?);
+                }
+            }
+            Ok(ActionStmt::SuppressEdge { edge_var, weight })
+        }
         _ => Err(FrontendError::ParseError(format!(
             "Unknown action statement: {:?}",
             inner.as_rule()
@@ -1117,11 +1562,136 @@ fn build_metric_stmt(pair: pest::iterators::Pair<Rule>) -> Result<MetricDef, Fro
         .ok_or_else(|| FrontendError::ParseError("Missing metric name".to_string()))?
         .as_str()
         .to_string();
-    let expr_pair = it
-        .find(|p| p.as_rule() == Rule::expr)
-        .ok_or_else(|| FrontendError::ParseError("Missing metric expression".to_string()))?;
-    let expr = build_expr(expr_pair);
+    // Accept either expr or metric_builder_expr
+    let mut expr_opt: Option<ExprAst> = None;
+    for p in it {
+        match p.as_rule() {
+            Rule::expr => expr_opt = Some(build_expr(p)),
+            Rule::metric_builder_expr => expr_opt = Some(build_metric_builder_expr(p)?),
+            _ => {}
+        }
+    }
+    let expr = expr_opt.ok_or_else(|| FrontendError::ParseError("Missing metric expression".to_string()))?;
     Ok(MetricDef { name, expr })
+}
+
+/// Desugars a metric builder pipeline into existing metric calls.
+/// nodes(Label) |> where(expr)? |> sum(by=expr) | count() | avg(by=expr)
+fn build_metric_builder_expr(pair: pest::iterators::Pair<Rule>) -> Result<ExprAst, FrontendError> {
+    let mut label: Option<String> = None;
+    let mut where_expr: Option<ExprAst> = None;
+    let mut order_by: Option<ExprAst> = None;
+    enum Agg { Sum(ExprAst), Count, Avg(ExprAst), Fold{init: ExprAst, step: ExprAst, order_by: Option<ExprAst>} }
+    let mut agg: Option<Agg> = None;
+
+    // Traverse builder_start and steps
+    let mut it = pair.into_inner();
+    // First should be builder_start
+    if let Some(start) = it.next() {
+        if start.as_rule() != Rule::builder_start {
+            return Err(FrontendError::ParseError("Invalid metric builder start".to_string()));
+        }
+        let mut si = start.into_inner();
+        // KW_nodes '(' label ')'
+        // extract label
+        label = Some(
+            si.find(|p| p.as_rule() == Rule::label)
+                .ok_or_else(|| FrontendError::ParseError("Missing label in nodes()".to_string()))?
+                .as_str()
+                .to_string(),
+        );
+    }
+    // Remaining: pipe_op ~ builder_step ...
+    for step in it {
+        if step.as_rule() == Rule::pipe_op { continue; }
+        // Unwrap builder_step alternation if needed
+        let real = if step.as_rule() == Rule::builder_step {
+            step.into_inner().next().ok_or_else(|| FrontendError::ParseError("Empty builder_step".to_string()))?
+        } else { step };
+        match real.as_rule() {
+            Rule::builder_where => {
+                let expr_pair = real.into_inner().find(|p| p.as_rule() == Rule::expr).ok_or_else(|| FrontendError::ParseError("Missing expr in where()".to_string()))?;
+                where_expr = Some(build_expr(expr_pair));
+            }
+            Rule::builder_order => {
+                let expr_pair = real.into_inner().find(|p| p.as_rule() == Rule::expr).ok_or_else(|| FrontendError::ParseError("Missing expr in order_by()".to_string()))?;
+                order_by = Some(build_expr(expr_pair));
+            }
+            Rule::builder_sum => {
+                let expr_pair = real.into_inner().find(|p| p.as_rule() == Rule::expr).ok_or_else(|| FrontendError::ParseError("Missing by=expr in sum()".to_string()))?;
+                agg = Some(Agg::Sum(build_expr(expr_pair)));
+            }
+            Rule::builder_count => {
+                agg = Some(Agg::Count);
+            }
+            Rule::builder_avg => {
+                let expr_pair = real.into_inner().find(|p| p.as_rule() == Rule::expr).ok_or_else(|| FrontendError::ParseError("Missing by=expr in avg()".to_string()))?;
+                agg = Some(Agg::Avg(build_expr(expr_pair)));
+            }
+            Rule::builder_fold => {
+                // fold(init=expr, step=expr, order_by=expr)
+                let mut init_opt: Option<ExprAst> = None;
+                let mut step_opt: Option<ExprAst> = None;
+                let mut ord_opt: Option<ExprAst> = None;
+                for a in real.into_inner() { // fold_args
+                    if a.as_rule() != Rule::fold_arg { continue; }
+                    let mut ai = a.into_inner();
+                    let name = ai.next().ok_or_else(|| FrontendError::ParseError("Missing fold arg name".to_string()))?.as_str().to_string();
+                    let _eq_or = ai.next(); // skip '=' token or proceed
+                    // find expr
+                    let exprp = ai.find(|p| p.as_rule() == Rule::expr).ok_or_else(|| FrontendError::ParseError("Missing fold arg expr".to_string()))?;
+                    let e = build_expr(exprp);
+                    match name.as_str() {
+                        "init" => init_opt = Some(e),
+                        "step" => step_opt = Some(e),
+                        "order_by" => ord_opt = Some(e),
+                        _ => {}
+                    }
+                }
+                let init = init_opt.ok_or_else(|| FrontendError::ParseError("Missing init in fold()".to_string()))?;
+                let step_e = step_opt.ok_or_else(|| FrontendError::ParseError("Missing step in fold()".to_string()))?;
+                agg = Some(Agg::Fold{init, step: step_e, order_by: ord_opt});
+            }
+            _ => {}
+        }
+    }
+
+    let label = label.ok_or_else(|| FrontendError::ParseError("Missing nodes() label".to_string()))?;
+    // Build underlying calls
+    let label_arg = CallArg::Named { name: "label".into(), value: ExprAst::Var(label) };
+    let where_arg = where_expr.as_ref().map(|w| CallArg::Named { name: "where".into(), value: w.clone() });
+    match agg.ok_or_else(|| FrontendError::ParseError("Missing terminal aggregate in metric builder".to_string()))? {
+        Agg::Sum(by) => {
+            let mut args = vec![label_arg];
+            if let Some(w) = where_arg { args.push(w); }
+            args.push(CallArg::Named { name: "contrib".into(), value: by });
+            Ok(ExprAst::Call { name: "sum_nodes".into(), args })
+        }
+        Agg::Count => {
+            let mut args = vec![label_arg];
+            if let Some(w) = where_arg { args.push(w); }
+            Ok(ExprAst::Call { name: "count_nodes".into(), args })
+        }
+        Agg::Avg(by) => {
+            // avg = sum_nodes(... by)/count_nodes(...)
+            let mut sum_args = vec![label_arg.clone()];
+            if let Some(w) = where_arg.clone() { sum_args.push(w); }
+            sum_args.push(CallArg::Named { name: "contrib".into(), value: by });
+            let sum_call = ExprAst::Call { name: "sum_nodes".into(), args: sum_args };
+            let mut cnt_args = vec![label_arg];
+            if let Some(w) = where_arg { cnt_args.push(w); }
+            let cnt_call = ExprAst::Call { name: "count_nodes".into(), args: cnt_args };
+            Ok(ExprAst::Binary { op: BinaryOp::Div, left: Box::new(sum_call), right: Box::new(cnt_call) })
+        }
+        Agg::Fold{init, step, order_by: ord} => {
+            let mut args = vec![label_arg];
+            if let Some(w) = where_arg { args.push(w); }
+            if let Some(ob) = ord { args.push(CallArg::Named { name: "order_by".into(), value: ob }); }
+            args.push(CallArg::Named { name: "init".into(), value: init });
+            args.push(CallArg::Named { name: "step".into(), value: step });
+            Ok(ExprAst::Call { name: "fold_nodes".into(), args })
+        }
+    }
 }
 
 fn build_export_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ExportDef, FrontendError> {
@@ -1734,6 +2304,83 @@ mod tests {
             }
             _ => panic!("Expected pipeline"),
         }
+    }
+
+    #[test]
+    fn parse_metric_builder_sum_and_count() {
+        let src = r#"
+            schema S { node Person { value: Real } edge E {} }
+            belief_model M on S {}
+            flow F on M {
+                metric total = nodes(Person) |> where(E[node.value] > 1.0) |> sum(by=E[node.value])
+                metric cnt = nodes(Person) |> count()
+            }
+        "#;
+        let ast = parse_program(src).unwrap();
+        let flow = &ast.flows[0];
+        assert_eq!(flow.metrics.len(), 2);
+        // Sum should desugar to sum_nodes(label=Person, where=..., contrib=...)
+        if let ExprAst::Call { name, args } = &flow.metrics[0].expr {
+            assert_eq!(name, "sum_nodes");
+            // Expect named label and contrib
+            let mut has_label = false;
+            let mut has_contrib = false;
+            for a in args {
+                match a {
+                    CallArg::Named { name, .. } if name == "label" => has_label = true,
+                    CallArg::Named { name, .. } if name == "contrib" => has_contrib = true,
+                    _ => {}
+                }
+            }
+            assert!(has_label && has_contrib);
+        } else {
+            panic!("expected sum_nodes call");
+        }
+        // Count should desugar to count_nodes(label=Person)
+        if let ExprAst::Call { name, .. } = &flow.metrics[1].expr {
+            assert_eq!(name, "count_nodes");
+        } else {
+            panic!("expected count_nodes call");
+        }
+    }
+
+    #[test]
+    fn parse_rule_sugar_and_for_sugar() {
+        let src = r#"
+            schema S { node Person { x: Real } edge REL {} }
+            belief_model M on S {}
+            rule R1 on M {
+                (A:Person)-[e:REL]->(B:Person) => { let v = 1 }
+            }
+            rule R2 on M {
+                for (A:Person) => { let z = 0 }
+            }
+        "#;
+        let ast = parse_program(src).unwrap();
+        assert_eq!(ast.rules.len(), 2);
+        let r1 = &ast.rules[0];
+        assert_eq!(r1.patterns.len(), 1);
+        let r2 = &ast.rules[1];
+        assert_eq!(r2.patterns.len(), 1);
+        // Placeholder edge type for for() sugar
+        assert_eq!(r2.patterns[0].edge.ty, "__FOR_NODE__");
+    }
+
+    #[test]
+    fn parse_grouped_evidence_and_choose() {
+        let src = r#"
+            schema S { node N { a: Real } edge E {} }
+            belief_model M on S {}
+            evidence Ev on M {
+                N { "A" { a: 1.0 (precision=10.0) }, "B" { a: 2.0 } }
+                E(N -> N) { "A" -> "B"; "B" -/> "A" }
+                choose edge E(N["A"], N["B"]) ; unchoose edge E(N["B"], N["A"]) ;
+            }
+        "#;
+        let ast = parse_program(src).unwrap();
+        assert_eq!(ast.evidences.len(), 1);
+        let obs = &ast.evidences[0].observations;
+        assert!(obs.len() >= 4);
     }
 
     #[test]

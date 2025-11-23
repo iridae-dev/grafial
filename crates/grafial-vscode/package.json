@@ -1,12 +1,16 @@
 {
   "name": "grafial",
   "displayName": "Grafial Language Support",
-  "description": "Syntax highlighting for Grafial Bayesian Belief Graph Language",
+  "description": "Language support for Grafial Bayesian Belief Graph Language (syntax + LSP)",
   "version": "0.1.0",
   "publisher": "grafial",
   "engines": {
     "vscode": "^1.74.0"
   },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:grafial"
+  ],
   "categories": [
     "Programming Languages"
   ],
@@ -21,7 +25,21 @@
     "type": "git",
     "url": "https://github.com/yourusername/grafial"
   },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.0"
+  },
   "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "Grafial",
+      "properties": {
+        "grafial.serverPath": {
+          "type": "string",
+          "default": "grafial-lsp",
+          "description": "Path to the grafial-lsp server binary. Use an absolute path or ensure it's on PATH."
+        }
+      }
+    },
     "languages": [
       {
         "id": "grafial",
@@ -44,4 +62,3 @@
     ]
   }
 }
-

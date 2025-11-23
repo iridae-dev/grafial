@@ -14,24 +14,18 @@ belief_model TestBeliefs on ABTest {
   node Variant {
     // Prior: conversion rate around 10% (typical for web applications)
     // Moderate uncertainty to let data dominate after sufficient samples
-    conversion_rate ~ GaussianPosterior(
-      prior_mean=0.1,
-      prior_precision=10.0  // τ = 10 → σ² = 0.1
+    conversion_rate ~ Gaussian(
+      mean=0.1,
+      precision=10.0  // τ = 10 → σ² = 0.1
       // Prior standard deviation: √0.1 ≈ 0.316
       // 95% credible interval: [0.1 - 1.96×0.316, 0.1 + 1.96×0.316] ≈ [-0.52, 0.72]
     )
-    sample_size ~ GaussianPosterior(
-      prior_mean=1000.0,
-      prior_precision=0.01
-    )
+    sample_size ~ Gaussian(mean=1000.0, precision=0.01)
   }
   edge OUTPERFORMS {
     // Does variant A outperform variant B?
     // Prior: 50% chance (no preference before seeing data)
-    exist ~ BernoulliPosterior(
-      prior=0.5,
-      pseudo_count=2.0  // Weak prior: Beta(1, 1) uniform
-    )
+    exist ~ Bernoulli(prior=0.5, weight=2.0)  // Weak prior: Beta(1, 1) uniform
   }
 }
 
@@ -41,8 +35,7 @@ evidence VariantAData on TestBeliefs {
   // With default observation precision = 1.0:
   // τ_post = 10 + 1 = 11
   // μ_post = (10×0.1 + 1×0.12) / 11 = 1.12/11 ≈ 0.102
-  observe Variant["A"].conversion_rate = 0.12
-  observe Variant["A"].sample_size = 1000.0
+  Variant { "A" { conversion_rate: 0.12, sample_size: 1000.0 } }
 }
 
 evidence VariantBData on TestBeliefs {
@@ -50,8 +43,7 @@ evidence VariantBData on TestBeliefs {
   // (e.g., 150 conversions out of 1000 impressions)
   // τ_post = 10 + 1 = 11
   // μ_post = (10×0.1 + 1×0.15) / 11 = 1.15/11 ≈ 0.105
-  observe Variant["B"].conversion_rate = 0.15
-  observe Variant["B"].sample_size = 1000.0
+  Variant { "B" { conversion_rate: 0.15, sample_size: 1000.0 } }
 }
 
 // Rule to determine winner based on practical significance
@@ -91,17 +83,14 @@ flow ABTestAnalysis on TestBeliefs {
 
   graph with_winner = b |> apply_rule DetermineWinner
 
-  metric mean_A = sum_nodes(
-    label=Variant,
-    where=E[node.sample_size] > 0.0,
-    contrib=E[node.conversion_rate]
-  ) / count_nodes(label=Variant, where=E[node.sample_size] > 0.0)
+  metric mean_A = nodes(Variant)
+    |> where(E[node.sample_size] > 0.0)
+    |> avg(by=E[node.conversion_rate])
 
   // Count variants with "good" conversion rates
-  metric good_variants = count_nodes(
-    label=Variant,
-    where=E[node.conversion_rate] > 0.12
-  )
+  metric good_variants = nodes(Variant)
+    |> where(E[node.conversion_rate] > 0.12)
+    |> count()
 
   export with_winner as "winner"
 }
@@ -141,6 +130,22 @@ rule DecideWithLoss on TestBeliefs {
   }
 
   mode: for_each
+}
+
+// Additional examples (not used in flows):
+// Node-only iteration sugar with a soft update for calibration
+rule CalibrateLowRates on TestBeliefs {
+  for (V:Variant) where E[V.conversion_rate] < 0.08 => {
+    V.conversion_rate ~= 0.09 precision=0.5
+  }
+}
+
+// Cleanup weak OUTPERFORMS edges
+rule CleanupWeakEdges on TestBeliefs {
+  pattern (X:Variant)-[xy:OUTPERFORMS]->(Y:Variant)
+  where prob(xy) < 0.05 => {
+    delete xy confidence=high
+  }
 }
 
 // Note on sample size calculation:

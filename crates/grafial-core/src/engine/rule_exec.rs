@@ -40,6 +40,8 @@ use std::collections::HashMap;
 
 use crate::engine::errors::ExecError;
 use crate::engine::expr_eval::{eval_binary_op, eval_expr_core, eval_unary_op, ExprContext};
+use crate::engine::expr_utils::split_args as split_call_args;
+use crate::engine::expr_utils::inv_norm_cdf;
 use crate::engine::graph::{BeliefGraph, EdgeId, NodeId};
 use crate::engine::query_plan::QueryPlanCache;
 use grafial_frontend::ast::{ActionStmt, CallArg, ExprAst, PatternItem, RuleDef};
@@ -147,12 +149,20 @@ impl<'a> ExprContext for RuleExprContext<'a> {
         match name {
             "E" => self.eval_expectation_function(pos_args, all_args, graph),
             "prob" => self.eval_prob_function(pos_args, all_args, graph),
+            "variance" => self.eval_variance_function(pos_args, all_args, graph),
+            "stddev" => self.eval_stddev_function(pos_args, all_args, graph),
+            "ci_lo" => self.eval_ci_function(pos_args, all_args, graph, true),
+            "ci_hi" => self.eval_ci_function(pos_args, all_args, graph, false),
+            "effective_n" => self.eval_effective_n_function(pos_args, all_args, graph),
             "degree" => self.eval_degree_function(pos_args, all_args, graph),
             "winner" => self.eval_winner_function(pos_args, all_args, graph),
             "entropy" => self.eval_entropy_function(pos_args, all_args, graph),
+            "quantile" => self.eval_quantile_function(pos_args, all_args, graph),
             other => Err(ExecError::Internal(format!("unknown function '{}'", other))),
         }
     }
+
+    /// Evaluates quantile(NodeVar.attr, p) assuming Normal posterior
 
     fn eval_field(
         &self,
@@ -175,6 +185,189 @@ impl<'a> RuleExprContext<'a> {
             .get(var_name)
             .copied()
             .ok_or_else(|| ExecError::Internal(format!("unknown node var '{}'", var_name)))
+    }
+
+    /// Evaluates quantile(NodeVar.attr, p) assuming Normal posterior
+    fn eval_quantile_function(
+        &self,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        // Only positional args supported: (field, p)
+        if !all_args.is_empty() && matches!(all_args[0], CallArg::Named { .. }) {
+            return Err(ExecError::Internal(
+                "quantile(): named args not supported".into(),
+            ));
+        }
+        if pos_args.len() < 2 {
+            return Err(ExecError::Internal(
+                "quantile(): requires field and p arguments".into(),
+            ));
+        }
+        let p = match pos_args[1] {
+            ExprAst::Number(v) => v,
+            _ => {
+                return Err(ExecError::ValidationError(
+                    "quantile(): p must be numeric".into(),
+                ))
+            }
+        };
+        if p <= 0.0 || p >= 1.0 {
+            return Err(ExecError::ValidationError(
+                "quantile(): p must be in (0,1)".into(),
+            ));
+        }
+        match &pos_args[0] {
+            ExprAst::Field { target, field } => match &**target {
+                ExprAst::Var(var_name) => {
+                    let nid = self.resolve_node_var(var_name)?;
+                    let mu = graph.expectation(nid, field)?;
+                    let sigma = graph.stddev(nid, field)?;
+                    let z = inv_norm_cdf(p);
+                    Ok(mu + z * sigma)
+                }
+                _ => Err(ExecError::Internal(
+                    "quantile(): first argument must be NodeVar.attr".into(),
+                )),
+            },
+            _ => Err(ExecError::Internal(
+                "quantile(): first argument must be a field expression".into(),
+            )),
+        }
+    }
+
+    /// Evaluates variance(NodeVar.attr) - returns posterior variance for an attribute
+    fn eval_variance_function(
+        &self,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        self.ensure_positional_only(all_args, "variance")?;
+        if pos_args.len() != 1 {
+            return Err(ExecError::Internal(
+                "variance() expects one positional argument".into(),
+            ));
+        }
+        match &pos_args[0] {
+            ExprAst::Field { target, field } => match &**target {
+                ExprAst::Var(var_name) => {
+                    let nid = self.resolve_node_var(var_name)?;
+                    graph.variance(nid, field)
+                }
+                _ => Err(ExecError::Internal(
+                    "variance() requires NodeVar.attr".into(),
+                )),
+            },
+            _ => Err(ExecError::Internal(
+                "variance() requires a field expression".into(),
+            )),
+        }
+    }
+
+    /// Evaluates stddev(NodeVar.attr) - returns posterior standard deviation
+    fn eval_stddev_function(
+        &self,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        self.ensure_positional_only(all_args, "stddev")?;
+        if pos_args.len() != 1 {
+            return Err(ExecError::Internal(
+                "stddev() expects one positional argument".into(),
+            ));
+        }
+        match &pos_args[0] {
+            ExprAst::Field { target, field } => match &**target {
+                ExprAst::Var(var_name) => {
+                    let nid = self.resolve_node_var(var_name)?;
+                    graph.stddev(nid, field)
+                }
+                _ => Err(ExecError::Internal(
+                    "stddev() requires NodeVar.attr".into(),
+                )),
+            },
+            _ => Err(ExecError::Internal(
+                "stddev() requires a field expression".into(),
+            )),
+        }
+    }
+
+    /// Evaluates ci_lo/ci_hi(NodeVar.attr, p) assuming Normal posterior
+    fn eval_ci_function(
+        &self,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+        lower: bool,
+    ) -> Result<f64, ExecError> {
+        self.ensure_positional_only(all_args, if lower { "ci_lo" } else { "ci_hi" })?;
+        if pos_args.len() != 2 {
+            return Err(ExecError::Internal(
+                "ci_lo/ci_hi() expects field and p".into(),
+            ));
+        }
+        let p = match pos_args[1] {
+            ExprAst::Number(v) => v,
+            _ => return Err(ExecError::ValidationError("ci(): p must be numeric".into())),
+        };
+        if !(0.0 < p && p < 1.0) {
+            return Err(ExecError::ValidationError(
+                "ci(): p must be in (0,1)".into(),
+            ));
+        }
+        match &pos_args[0] {
+            ExprAst::Field { target, field } => match &**target {
+                ExprAst::Var(var_name) => {
+                    let nid = self.resolve_node_var(var_name)?;
+                    let mean = graph.expectation(nid, field)?;
+                    let sigma = graph.stddev(nid, field)?;
+                    // Convert central coverage p into one-sided quantile
+                    let q = (1.0 + p) / 2.0;
+                    let z = crate::engine::expr_utils::inv_norm_cdf(q);
+                    if lower {
+                        Ok(mean - z * sigma)
+                    } else {
+                        Ok(mean + z * sigma)
+                    }
+                }
+                _ => Err(ExecError::Internal("ci() requires NodeVar.attr".into())),
+            },
+            _ => Err(ExecError::Internal(
+                "ci() requires a field expression".into(),
+            )),
+        }
+    }
+
+    /// Evaluates effective_n(NodeVar.attr) as posterior precision (τ)
+    fn eval_effective_n_function(
+        &self,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        self.ensure_positional_only(all_args, "effective_n")?;
+        if pos_args.len() != 1 {
+            return Err(ExecError::Internal(
+                "effective_n() expects one positional argument".into(),
+            ));
+        }
+        match &pos_args[0] {
+            ExprAst::Field { target, field } => match &**target {
+                ExprAst::Var(var_name) => {
+                    let nid = self.resolve_node_var(var_name)?;
+                    graph.precision(nid, field)
+                }
+                _ => Err(ExecError::Internal(
+                    "effective_n() requires NodeVar.attr".into(),
+                )),
+            },
+            _ => Err(ExecError::Internal(
+                "effective_n() requires a field expression".into(),
+            )),
+        }
     }
 
     /// Helper: Extract edge ID from edge variable name
@@ -268,8 +461,61 @@ impl<'a> RuleExprContext<'a> {
                 let result = graph.prob_mean(eid)?;
                 Ok(result)
             }
+            ExprAst::Binary { op, left, right } => {
+                use grafial_frontend::ast::BinaryOp::*;
+                // Support prob(lhs > rhs | < | <= | >=) for Gaussian attributes assuming independence
+                match op {
+                    Gt | Ge | Lt | Le => {
+                        let (m_l, v_l) = self.extract_mean_var(left, graph)?;
+                        let (m_r, v_r) = self.extract_mean_var(right, graph)?;
+                        let m = m_l - m_r;
+                        let s2 = v_l + v_r;
+                        if s2 <= 1e-18 {
+                            // Deterministic fallback
+                            let val = match op {
+                                Gt | Ge => (m > 0.0) as i32 as f64,
+                                Lt | Le => (m < 0.0) as i32 as f64,
+                                _ => unreachable!(),
+                            };
+                            return Ok(val);
+                        }
+                        let z = m / s2.sqrt();
+                        let p_gt = crate::engine::expr_utils::norm_cdf(z);
+                        let p = match op {
+                            Gt | Ge => p_gt,
+                            Lt | Le => 1.0 - p_gt,
+                            _ => unreachable!(),
+                        };
+                        Ok(p)
+                    }
+                    _ => Err(ExecError::ValidationError(
+                        "prob(): only supports comparisons like prob(A > B)".into(),
+                    )),
+                }
+            }
             _ => Err(ExecError::Internal(
-                "prob(): argument must be an edge variable".into(),
+                "prob(): argument must be an edge variable or comparison".into(),
+            )),
+        }
+    }
+
+    /// Helper: extract mean and variance for simple expressions: node.attr or number
+    fn extract_mean_var(&self, expr: &ExprAst, graph: &BeliefGraph) -> Result<(f64, f64), ExecError> {
+        match expr {
+            ExprAst::Number(x) => Ok((*x, 0.0)),
+            ExprAst::Field { target, field } => match &**target {
+                ExprAst::Var(var_name) => {
+                    let nid = self.resolve_node_var(var_name)?;
+                    let m = graph.expectation(nid, field)?;
+                    let v = graph.variance(nid, field)?;
+                    Ok((m, v))
+                }
+                _ => Err(ExecError::ValidationError(
+                    "prob(): comparison must reference node variables".into(),
+                )),
+            },
+            _ => Err(ExecError::ValidationError(
+                "prob(): only supports node.attr or numeric in comparisons".into(),
             )),
         }
     }
@@ -581,6 +827,38 @@ pub fn execute_actions(
                 let eid = ctx.resolve_edge_var(edge_var)?;
                 graph.force_absent(eid)?;
             }
+            ActionStmt::NonBayesianNudge {
+                node_var,
+                attr,
+                expr,
+                variance,
+            } => {
+                let nid = ctx.resolve_node_var(node_var)?;
+                let value = eval_expr_core(expr, graph, &ctx)?;
+                let variance = variance.as_ref().unwrap_or(&grafial_frontend::ast::VarianceSpec::Preserve);
+                graph.non_bayesian_nudge(nid, attr, value, variance)?;
+            }
+            ActionStmt::SoftUpdate {
+                node_var,
+                attr,
+                expr,
+                precision,
+                count,
+            } => {
+                let nid = ctx.resolve_node_var(node_var)?;
+                let value = eval_expr_core(expr, graph, &ctx)?;
+                let tau = precision.unwrap_or(1.0);
+                let c = count.unwrap_or(1.0);
+                graph.soft_update(nid, attr, value, tau, c)?;
+            }
+            ActionStmt::DeleteEdge { edge_var, confidence } => {
+                let eid = ctx.resolve_edge_var(edge_var)?;
+                graph.delete_edge(eid, confidence.as_deref())?;
+            }
+            ActionStmt::SuppressEdge { edge_var, weight } => {
+                let eid = ctx.resolve_edge_var(edge_var)?;
+                graph.suppress_edge(eid, *weight)?;
+            }
         }
     }
     Ok(())
@@ -680,6 +958,39 @@ pub fn run_rule_for_each_with_globals(
     // Single-pattern path: optimized for the common case (no join needed)
     if rule.patterns.len() == 1 {
         let pat = &rule.patterns[0];
+        // Special-case: node-only iteration sugar uses a dummy edge type
+        if pat.edge.ty == "__FOR_NODE__" {
+            // First pass: collect matching nodes by label
+            let mut matches = Vec::new();
+            for node in input.nodes() {
+                if node.label.as_ref() == pat.src.label.as_str() {
+                    let mut bindings = MatchBindings::with_capacity(&rule.patterns);
+                    // Bind both src and dst to the same node
+                    bindings.node_vars.insert(pat.src.var.clone(), node.id);
+                    bindings.node_vars.insert(pat.dst.var.clone(), node.id);
+                    matches.push(bindings);
+                }
+            }
+
+            // Filter matches by where clause
+            let mut filtered = Vec::new();
+            for b in matches.into_iter() {
+                if evaluate_where_clause(&rule.where_expr, &b, globals, input)? {
+                    filtered.push(b);
+                }
+            }
+
+            if filtered.is_empty() {
+                return Ok(input.clone());
+            }
+
+            let mut work = input.clone();
+            work.ensure_owned();
+            for b in filtered.iter() {
+                execute_actions(&mut work, &rule.actions, b, globals)?;
+            }
+            return Ok(work);
+        }
         // Use input graph for candidate finding (we want to iterate over original edges)
         let candidates = find_candidate_edges(input, &pat.edge.ty);
 

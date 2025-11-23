@@ -13,27 +13,23 @@ schema ResourceAllocation {
 belief_model AllocationBeliefs on ResourceAllocation {
   node Resource {
     // Uncertain allocation: we observe usage but it's noisy
-    allocation ~ GaussianPosterior(
-      prior_mean=0.5,
-      prior_precision=0.1  // Weak prior - high uncertainty
-    )
-    capacity ~ GaussianPosterior(
-      prior_mean=1.0,
-      prior_precision=1.0
-    )
+    allocation ~ Gaussian(mean=0.5, precision=0.1)  // Weak prior - high uncertainty
+    capacity ~ Gaussian(mean=1.0, precision=1.0)
   }
   edge ALLOCATED_TO {
-    exist ~ BernoulliPosterior(prior=0.2, pseudo_count=5.0)
+    exist ~ Bernoulli(prior=0.2, weight=5.0)
   }
 }
 
 evidence InitialAllocation on AllocationBeliefs {
   // Initial observations with uncertainty
-  observe Resource["R1"].allocation = 0.6
-  observe Resource["R2"].allocation = 0.4
-  observe Resource["R3"].allocation = 0.8
+  Resource { 
+    "R1" { allocation: 0.6 },
+    "R2" { allocation: 0.4 },
+    "R3" { allocation: 0.8 }
+  }
   
-  observe edge ALLOCATED_TO(Resource["R1"], Resource["R1"]) present
+  ALLOCATED_TO(Resource -> Resource) { "R1" -> "R1" }
 }
 
 // Rule that does SOFT updates: preserves uncertainty while shifting mean
@@ -110,17 +106,10 @@ flow AllocationFlow on AllocationBeliefs {
   graph disconnected = balanced |> apply_rule DisconnectOverloaded
   
   // Metrics that understand uncertainty
-  metric avg_allocation = sum_nodes(
-    label=Resource,
-    contrib=E[node.allocation]
-  ) / count_nodes(label=Resource)
+  metric avg_allocation = nodes(Resource) |> avg(by=E[node.allocation])
   
   // Can compute probability of overload
-  metric overload_risk = sum_nodes(
-    label=Resource,
-    contrib=E[node.allocation] / E[node.capacity]
-  ) / count_nodes(label=Resource)
+  metric overload_risk = nodes(Resource) |> avg(by=E[node.allocation] / E[node.capacity])
   
   export disconnected as "final_allocation"
 }
-

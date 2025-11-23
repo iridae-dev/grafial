@@ -59,6 +59,7 @@ fn build_graph_from_evidence_creates_nodes() {
             node: ("Person".into(), "Alice".into()),
             attr: "score".into(),
             value: 10.0,
+            precision: None,
         }],
         body_src: "".into(),
     };
@@ -127,11 +128,13 @@ fn build_graph_from_evidence_handles_multiple_observations() {
                 node: ("Person".into(), "Alice".into()),
                 attr: "score".into(),
                 value: 10.0,
+                precision: None,
             },
             ObserveStmt::Attribute {
                 node: ("Person".into(), "Bob".into()),
                 attr: "score".into(),
                 value: 5.0,
+                precision: None,
             },
             ObserveStmt::Edge {
                 edge_type: "KNOWS".into(),

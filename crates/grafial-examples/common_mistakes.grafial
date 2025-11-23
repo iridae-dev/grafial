@@ -12,18 +12,17 @@ schema Examples {
 
 belief_model ExampleBeliefs on Examples {
   node Item {
-    value ~ GaussianPosterior(prior_mean=0.0, prior_precision=0.1)
-    score ~ GaussianPosterior(prior_mean=0.5, prior_precision=1.0)
+    value ~ Gaussian(mean=0.0, precision=0.1)
+    score ~ Gaussian(mean=0.5, precision=1.0)
   }
   edge LINKS {
-    exist ~ BernoulliPosterior(prior=0.5, pseudo_count=2.0)
+    exist ~ Bernoulli(prior=0.5, weight=2.0)
   }
 }
 
 evidence ExampleEvidence on ExampleBeliefs {
-  observe Item["A"].value = 10.0
-  observe Item["B"].value = 20.0
-  observe edge LINKS(Item["A"], Item["B"]) present
+  Item { "A" { value: 10.0 }, "B" { value: 20.0 } }
+  LINKS(Item -> Item) { "A" -> "B" }
 }
 
 // ========================================
@@ -43,10 +42,7 @@ metric bad = count_nodes(
 flow CorrectConnectivityCheck on ExampleBeliefs {
   graph g = from_evidence ExampleEvidence
 
-  metric good = count_nodes(
-    label=Item,
-    where=degree(node, min_prob=0.5) > 0
-  )
+  metric good = nodes(Item) |> where(degree(node, min_prob=0.5) > 0) |> count()
   // degree() counts edges, which is what we actually want
 
   export g as "output"
@@ -205,8 +201,8 @@ flow RiskyDivision on ExampleBeliefs {
 flow SafeDivision on ExampleBeliefs {
   graph g = from_evidence ExampleEvidence
 
-  metric total = sum_nodes(label=Item, contrib=E[node.value])
-  metric count = count_nodes(label=Item)
+  metric total = nodes(Item) |> sum(by=E[node.value])
+  metric count = nodes(Item) |> count()
 
   // Option 1: Add small epsilon to denominator
   metric avg_safe = total / (count + 0.0001)
@@ -224,17 +220,17 @@ flow SafeDivision on ExampleBeliefs {
 // ❌ ANTI-PATTERN: Using very strong priors without justification
 belief_model TooStrongPrior on Examples {
   node Item {
-    value ~ GaussianPosterior(
-      prior_mean=0.0,
-      prior_precision=10000.0  // τ = 10000 → σ² = 0.0001 (very strong!)
+    value ~ Gaussian(
+      mean=0.0,
+      precision=10000.0  // τ = 10000 → σ² = 0.0001 (very strong!)
       // This prior will dominate even large amounts of data
       // Only use if you're very confident about the prior
     )
   }
   edge LINKS {
-    exist ~ BernoulliPosterior(
+    exist ~ Bernoulli(
       prior=0.5,
-      pseudo_count=1000000.0  // Extremely strong prior!
+      weight=1000000.0  // Extremely strong prior!
       // Requires millions of observations to shift belief significantly
     )
   }
@@ -243,16 +239,16 @@ belief_model TooStrongPrior on Examples {
 // ✅ BEST PRACTICE: Use moderate priors unless you have strong justification
 belief_model ReasonablePriors on Examples {
   node Item {
-    value ~ GaussianPosterior(
-      prior_mean=0.0,
-      prior_precision=0.1  // Weak prior: lets data dominate after ~10 observations
+    value ~ Gaussian(
+      mean=0.0,
+      precision=0.1  // Weak prior: lets data dominate after ~10 observations
       // Document rationale: "No strong prior knowledge, expect data-driven learning"
     )
   }
   edge LINKS {
-    exist ~ BernoulliPosterior(
+    exist ~ Bernoulli(
       prior=0.5,
-      pseudo_count=2.0  // Minimal prior: equivalent to 2 observations
+      weight=2.0  // Minimal prior: equivalent to 2 observations
       // Document rationale: "Maximum uncertainty, no preference"
     )
   }

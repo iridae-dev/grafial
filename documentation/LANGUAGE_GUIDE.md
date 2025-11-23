@@ -25,7 +25,7 @@ This guide documents the language as actually implemented. Every feature describ
 
 A minimal Grafial program:
 
-```bayscript
+```grafial
 schema Social {
   node Person {
     score: Real
@@ -35,21 +35,21 @@ schema Social {
 
 belief_model SocialBeliefs on Social {
   node Person {
-    score ~ GaussianPosterior(prior_mean=0.0, prior_precision=0.01)
+    score ~ Gaussian(mean=0.0, precision=0.01)
   }
   edge REL {
-    exist ~ BernoulliPosterior(prior=0.1, pseudo_count=2.0)
+    exist ~ Bernoulli(prior=0.1, weight=2.0)
   }
 }
 
 evidence SocialEvidence on SocialBeliefs {
-  observe Person["Alice"].score = 10.0
-  observe edge REL(Person["Alice"], Person["Bob"]) present
+  Person { "Alice" { score: 10.0 } }
+  REL(Person -> Person) { "Alice" -> "Bob" }
 }
 
 flow Demo on SocialBeliefs {
   graph base = from_evidence SocialEvidence
-  metric total_score = sum_nodes(label=Person, contrib=E[node.score])
+  metric total_score = nodes(Person) |> sum(by=E[node.score])
   export base as "demo"
 }
 ```
@@ -120,15 +120,15 @@ belief_model ModelName on SchemaName {
 
 ### Posterior Types
 
-#### GaussianPosterior (Normal-Normal)
+#### Gaussian (Normal-Normal)
 
 For continuous numeric attributes. Assumes observations come from a Normal distribution with known precision.
 
-```bayscript
+```grafial
 node Person {
-  age ~ GaussianPosterior(
-    prior_mean = 35.0,
-    prior_precision = 0.01,
+  age ~ Gaussian(
+    mean = 35.0,
+    precision = 0.01,
     observation_precision = 1.0
   )
 }
@@ -141,15 +141,15 @@ node Person {
 
 **When to use:** Continuous measurements (age, salary, temperature, etc.)
 
-#### BernoulliPosterior (Beta-Bernoulli)
+#### Bernoulli (Beta-Bernoulli)
 
 For independent edge existence probabilities. Each edge exists or doesn't exist independently.
 
-```bayscript
+```grafial
 edge KNOWS {
-  exist ~ BernoulliPosterior(
+  exist ~ Bernoulli(
     prior = 0.1,
-    pseudo_count = 2.0
+    weight = 2.0
   )
 }
 ```
@@ -160,14 +160,14 @@ edge KNOWS {
 
 **When to use:** Independent relationships (friendship, follows, etc.)
 
-#### CategoricalPosterior (Dirichlet-Categorical)
+#### Categorical (Dirichlet-Categorical)
 
 For competing edges where exactly one destination is chosen per source. Probabilities sum to 1 within each group.
 
-```bayscript
+```grafial
 edge ROUTES_TO {
-  exist ~ CategoricalPosterior(
-    group_by = "source",
+  exist ~ Categorical(
+    group_by = source,
     prior = uniform,
     pseudo_count = 1.0
   )
@@ -390,6 +390,22 @@ pattern
 
 This finds all paths of length 2 where intermediate node `B` is shared.
 
+### Node-only Iteration Sugar
+
+When you want to iterate over nodes of a given label without binding an edge, use the sugar form:
+
+```grafial
+// for (Var:Label) [where ...] => { actions }
+rule BoostLowScores on SocialBeliefs {
+  for (P:Person) where E[P.score] < 50.0 => {
+    // Add weak evidence nudging low scores upward
+    P.score ~= 55.0 precision=0.1
+  }
+}
+```
+
+This desugars to an internal pattern and executes deterministically over all nodes of the label.
+
 ### Where Clauses
 
 Filter matches using boolean expressions:
@@ -408,25 +424,64 @@ where
 
 See [Built-in Functions](#built-in-functions) for available functions.
 
+Examples with explicit uncertainty and probability comparisons:
+
+```grafial
+// Compare Gaussian attributes (independence assumption for prob())
+where prob(E[A.score] > E[B.score]) > 0.9
+
+// Equivalent shorthand (the engine interprets node.attr as Gaussian)
+where prob(A.score > B.score) > 0.9
+```
+
 ### Actions
 
-Actions mutate the graph deterministically:
+Actions apply interventions and updates to the belief graph:
 
-```bayscript
+```grafial
 action {
-  let v = E[A.score] / 2
-  set_expectation A.score = E[A.score] - v
-  set_expectation B.score = E[B.score] + v
-  force_absent bc
+  let v = E[A.score] * 0.1
+  // Non‑Bayesian intervention: set mean with explicit variance policy
+  non_bayesian_nudge B.score to (E[B.score] + v) variance=preserve
+
+  // Bayesian soft update (Normal–Normal): add weak evidence
+  A.score ~= 50.0 precision=0.2  // optionally: count=3
+
+  // Edge operations
+  delete ab confidence=high      // very strong prior against existence
+  suppress bc weight=10          // moderate prior against existence
 }
 ```
 
-**Available actions:**
-- `let var = expr` - Define local variable
-- `set_expectation node.attr = expr` - Update attribute mean (soft update)
-- `force_absent edge_var` - Force edge to be absent (high certainty)
+**Available actions (canonical):**
+- `let var = expr` — Define local scalar
+- `non_bayesian_nudge node.attr to expr variance=preserve|increase(f)|decrease(f)` — Set posterior mean; control precision (τ) policy explicitly
+- `node.attr ~= value precision=τ [count=n]` — Bayesian soft update toward `value` (Normal–Normal)
+- `delete edge_var [confidence=low|high]` — Set a near‑zero Beta prior (confidence presets map to large β)
+- `suppress edge_var [weight=k]` — Set a moderate Beta prior against existence
 
-**Note:** `set_expectation` updates the posterior mean while preserving precision. It's a "soft" update, not a hard constraint.
+Legacy alias:
+- `set_expectation node.attr = expr` — Equivalent to `non_bayesian_nudge ... variance=preserve`. Prefer the canonical form for clarity.
+
+Full example combining soft update and edge operations:
+
+```grafial
+rule ReviewEdges on SocialBeliefs {
+  pattern
+    (A:Person)-[ab:REL]->(B:Person)
+
+  where prob(ab) < 0.2 or (prob(ab) < 0.5 and E[B.score] < 40.0) => {
+    // Apply a Bayesian soft update to B's score (weak evidence)
+    B.score ~= 45.0 precision=0.05
+
+    // If the edge is very unlikely, strongly bias against it
+    delete ab confidence=high
+
+    // Or moderately suppress it (alternative to delete)
+    // suppress ab weight=10
+  }
+}
+```
 
 ### Rule Modes
 
@@ -708,6 +763,21 @@ degree(B, min_prob=0.8)
 
 **Returns:** Number of edges (f64 for use in expressions)
 
+### prob(comparison)
+
+Probability that a comparison holds, for Gaussian attributes under an independence assumption.
+
+```grafial
+// In where: explicit E[] wrappers are recommended for clarity
+where prob(E[A.score] > E[B.score]) > 0.95
+
+// Shorthand also works: prob(A.score > B.score)
+```
+
+Supported comparisons: `>`, `>=`, `<`, `<=` with operands `node.attr` or numbers.
+
+Note: Assumes independent Normal posteriors for the operands; correlation is not yet modeled.
+
 ### winner(node, edge_type, epsilon=0.01)
 
 For competing edges, returns the destination node with maximum probability, or null if tied.
@@ -765,6 +835,66 @@ E[node.age]
 - `attr` - Attribute name
 
 **Returns:** Posterior mean (f64)
+
+### variance(node.attr)
+
+Posterior variance σ² of a Gaussian attribute.
+
+```bayscript
+where variance(A.score) < 4.0
+```
+
+### stddev(node.attr)
+
+Posterior standard deviation σ of a Gaussian attribute.
+
+```bayscript
+metric avg_uncertainty = Person.avg(stddev(node.score))
+```
+
+### quantile(node.attr, p)
+
+Quantile of the Gaussian posterior (e.g., p=0.95).
+
+```bayscript
+where quantile(A.score, 0.05) > 40.0
+```
+
+### ci_lo(node.attr, p) / ci_hi(node.attr, p)
+
+Credible interval bounds for symmetric Normal CI with central mass `p`.
+
+```bayscript
+where ci_lo(A.score, 0.95) > 40.0 and ci_hi(A.score, 0.95) < 60.0
+```
+
+### effective_n(node.attr)
+
+Effective precision τ for a Gaussian attribute (in units of observation precision).
+
+```bayscript
+where effective_n(A.score) > 10.0
+```
+
+Use to gauge how strongly the posterior is concentrated relative to the default observation precision.
+
+---
+
+## Statistical Guardrails
+
+- Explicit uncertainty in `where`:
+  - Always wrap uncertain quantities: use `E[...]` for node attributes and `prob(edge)` for edges.
+  - Mixed implicit/explicit comparisons are rejected by validation.
+- Non-Bayesian vs Bayesian updates:
+  - `non_bayesian_nudge` changes the mean without adding evidence; specify variance policy to avoid accidental overconfidence.
+  - Prefer `~=` for evidential updates; it increases precision using conjugate math.
+- Probability of comparisons:
+  - `prob(A > B)` assumes independent Gaussians; correlation support is a planned extension.
+- Edge deletion/suppression semantics:
+  - `delete` maps to a very strong Beta prior against existence; use `confidence` to tune strength.
+  - The number of present observations required to return to ~0.5 probability grows with β − α (undelete analysis surfaces this in tooling).
+- Determinism:
+  - Iteration and accumulation order is stable; rule execution and metrics are deterministic.
 
 ---
 
@@ -838,4 +968,3 @@ All features described in this guide have been validated against the implementat
 - ✅ Exists/not exists subqueries
 
 For implementation details, see `Grafial_design.md`. For performance considerations, see `performance_ideas.md`.
-

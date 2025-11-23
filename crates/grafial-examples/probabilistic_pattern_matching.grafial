@@ -13,31 +13,27 @@ schema SocialNetwork {
 
 belief_model SocialBeliefs on SocialNetwork {
   node Person {
-    influence ~ GaussianPosterior(prior_mean=0.5, prior_precision=0.1)
-    trust_level ~ GaussianPosterior(prior_mean=0.5, prior_precision=0.1)
+    influence ~ Gaussian(mean=0.5, precision=0.1)
+    trust_level ~ Gaussian(mean=0.5, precision=0.1)
   }
   // Friendship is uncertain - we observe connections but aren't 100% sure
-  edge FRIENDS {
-    exist ~ BernoulliPosterior(prior=0.1, pseudo_count=2.0)
-  }
-  edge INFLUENCES {
-    exist ~ BernoulliPosterior(prior=0.05, pseudo_count=5.0)
-  }
+  edge FRIENDS { exist ~ Bernoulli(prior=0.1, weight=2.0) }
+  edge INFLUENCES { exist ~ Bernoulli(prior=0.05, weight=5.0) }
 }
 
 evidence SocialEvidence on SocialBeliefs {
   // Initial observations: some friendships are more certain than others
-  observe edge FRIENDS(Person["Alice"], Person["Bob"]) present
-  observe edge FRIENDS(Person["Alice"], Person["Bob"]) present  // Repeated evidence strengthens belief
-  observe edge FRIENDS(Person["Bob"], Person["Carol"]) present
+  FRIENDS(Person -> Person) { "Alice" -> "Bob"; "Alice" -> "Bob"; "Bob" -> "Carol" }
   
   // Influence relationships
-  observe edge INFLUENCES(Person["Alice"], Person["Bob"]) present
+  INFLUENCES(Person -> Person) { "Alice" -> "Bob" }
   
   // Person attributes
-  observe Person["Alice"].influence = 0.8
-  observe Person["Bob"].influence = 0.6
-  observe Person["Carol"].influence = 0.4
+  Person {
+    "Alice" { influence: 0.8 },
+    "Bob"   { influence: 0.6 },
+    "Carol" { influence: 0.4 }
+  }
 }
 
 // Rule that matches probabilistically: find influential people who likely
@@ -132,19 +128,14 @@ flow SocialAnalysis on SocialBeliefs {
   graph cleaned = step2 |> apply_rule PruneWeakConnections
   
   // Metrics that understand probabilistic structure
-  metric avg_influence = sum_nodes(
-    label=Person,
-    contrib=E[node.influence]
-  ) / count_nodes(label=Person)
+  metric avg_influence = nodes(Person) |> avg(by=E[node.influence])
   
   metric avg_strong_connections = avg_degree(Person, FRIENDS, min_prob=0.8)
   
   // Count nodes with many weak connections (uncertain structure)
-  metric uncertain_connections = count_nodes(
-    label=Person,
-    where=degree(node, min_prob=0.3) > degree(node, min_prob=0.7)
-  )
+  metric uncertain_connections = nodes(Person)
+    |> where(degree(node, min_prob=0.3) > degree(node, min_prob=0.7))
+    |> count()
   
   export cleaned as "influence_graph"
 }
-

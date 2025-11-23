@@ -202,6 +202,12 @@ impl GaussianPosterior {
         self.mean = x;
         self.precision = FORCE_PRECISION;
     }
+
+    /// Returns the posterior variance σ² = 1/τ (with precision floor applied).
+    pub fn variance(&self) -> f64 {
+        let tau = self.precision.max(MIN_PRECISION);
+        1.0 / tau
+    }
 }
 
 /// A Beta posterior distribution for edge existence probability.
@@ -1595,6 +1601,27 @@ impl BeliefGraph {
         Ok(posterior.mean)
     }
 
+    /// Returns the posterior variance (σ²) for a node attribute.
+    pub fn variance(&self, node: NodeId, attr: &str) -> Result<f64, ExecError> {
+        let posterior = self
+            .get_node_attr_with_deltas(node, attr)
+            .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
+        Ok(posterior.variance())
+    }
+
+    /// Returns the posterior standard deviation (σ) for a node attribute.
+    pub fn stddev(&self, node: NodeId, attr: &str) -> Result<f64, ExecError> {
+        Ok(self.variance(node, attr)?.sqrt())
+    }
+
+    /// Returns the posterior precision (τ) for a node attribute.
+    pub fn precision(&self, node: NodeId, attr: &str) -> Result<f64, ExecError> {
+        let posterior = self
+            .get_node_attr_with_deltas(node, attr)
+            .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
+        Ok(posterior.precision)
+    }
+
     pub fn set_expectation(
         &mut self,
         node: NodeId,
@@ -1616,6 +1643,78 @@ impl BeliefGraph {
             old_precision: old_posterior.precision,
             new_mean: value,
             new_precision: old_posterior.precision,
+        });
+        Ok(())
+    }
+
+    /// Non-Bayesian nudge: set mean to value with explicit variance handling.
+    ///
+    /// Variance strategy semantics:
+    /// - preserve: keep τ unchanged
+    /// - increase(f): τ_new = τ_old × f (default f=0.5 if None)
+    /// - decrease(f): τ_new = τ_old × f (default f=2.0 if None)
+    pub fn non_bayesian_nudge(
+        &mut self,
+        node: NodeId,
+        attr: &str,
+        value: f64,
+        variance: &grafial_frontend::ast::VarianceSpec,
+    ) -> Result<(), ExecError> {
+        self.ensure_ready_for_delta();
+
+        let old = self
+            .get_node_attr_with_deltas(node, attr)
+            .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
+
+        let new_tau = match variance {
+            grafial_frontend::ast::VarianceSpec::Preserve => old.precision,
+            grafial_frontend::ast::VarianceSpec::Increase { factor } => {
+                let f = factor.unwrap_or(0.5);
+                (old.precision * f).max(MIN_PRECISION)
+            }
+            grafial_frontend::ast::VarianceSpec::Decrease { factor } => {
+                let f = factor.unwrap_or(2.0);
+                (old.precision * f).max(MIN_PRECISION)
+            }
+        };
+
+        self.delta.push(GraphDelta::NodeAttributeChange {
+            node,
+            attr: Arc::from(attr),
+            old_mean: old.mean,
+            old_precision: old.precision,
+            new_mean: value,
+            new_precision: new_tau,
+        });
+        Ok(())
+    }
+
+    /// Bayesian soft update for Gaussian attribute: Normal–Normal conjugate.
+    /// τ_new = τ_old + τ_obs; μ_new = (τ_old μ_old + τ_obs x)/τ_new
+    pub fn soft_update(
+        &mut self,
+        node: NodeId,
+        attr: &str,
+        value: f64,
+        obs_precision: f64,
+        count: f64,
+    ) -> Result<(), ExecError> {
+        self.ensure_ready_for_delta();
+        let old = self
+            .get_node_attr_with_deltas(node, attr)
+            .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
+
+        let tau_obs_eff = (obs_precision.max(MIN_OBS_PRECISION)) * count.max(1.0);
+        let tau_new = (old.precision + tau_obs_eff).max(MIN_PRECISION);
+        let mu_new = (old.precision * old.mean + tau_obs_eff * value) / tau_new;
+
+        self.delta.push(GraphDelta::NodeAttributeChange {
+            node,
+            attr: Arc::from(attr),
+            old_mean: old.mean,
+            old_precision: old.precision,
+            new_mean: mu_new,
+            new_precision: tau_new,
         });
         Ok(())
     }
@@ -1643,6 +1742,63 @@ impl BeliefGraph {
             Err(ExecError::ValidationError(
                 "force_absent() only valid for independent edges".into(),
             ))
+        }
+    }
+
+    /// Delete an independent edge with optional confidence mapping.
+    /// Defaults to near-zero mean with very large β.
+    pub fn delete_edge(
+        &mut self,
+        edge: EdgeId,
+        confidence: Option<&str>,
+    ) -> Result<(), ExecError> {
+        self.ensure_ready_for_delta();
+        let current = self
+            .get_edge_posterior_with_deltas(edge)
+            .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
+        let scale = match confidence.map(|s| s.to_ascii_lowercase()) {
+            Some(ref s) if s == "low" => 1_000.0,
+            Some(ref s) if s == "high" => 1_000_000_000.0,
+            _ => FORCE_PRECISION,
+        };
+        match current {
+            EdgePosterior::Independent(beta) => {
+                self.delta.push(GraphDelta::EdgeProbChange {
+                    edge,
+                    old_alpha: beta.alpha,
+                    old_beta: beta.beta,
+                    new_alpha: 1.0_f64.max(MIN_BETA_PARAM),
+                    new_beta: scale.max(MIN_BETA_PARAM),
+                });
+                Ok(())
+            }
+            _ => Err(ExecError::ValidationError(
+                "delete: only supported for independent edges".into(),
+            )),
+        }
+    }
+
+    /// Suppress an independent edge by setting a moderate Beta prior against existence.
+    pub fn suppress_edge(&mut self, edge: EdgeId, weight: Option<f64>) -> Result<(), ExecError> {
+        self.ensure_ready_for_delta();
+        let current = self
+            .get_edge_posterior_with_deltas(edge)
+            .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
+        let w = weight.unwrap_or(10.0).max(MIN_BETA_PARAM);
+        match current {
+            EdgePosterior::Independent(beta) => {
+                self.delta.push(GraphDelta::EdgeProbChange {
+                    edge,
+                    old_alpha: beta.alpha,
+                    old_beta: beta.beta,
+                    new_alpha: 1.0_f64.max(MIN_BETA_PARAM),
+                    new_beta: w,
+                });
+                Ok(())
+            }
+            _ => Err(ExecError::ValidationError(
+                "suppress: only supported for independent edges".into(),
+            )),
         }
     }
 
@@ -1704,11 +1860,9 @@ impl BeliefGraph {
             }
         }
 
-        // Slow path: scan all edges (current implementation handles delta correctly)
-        // For iteration, we need to consider both base and delta
+        // Fallback: scan edges (base + delta-aware)
         let mut count = 0;
-
-        // Check base edges
+        // Base edges
         for e in &self.inner.edges {
             if e.src == node {
                 let prob = e
@@ -1721,87 +1875,86 @@ impl BeliefGraph {
             }
         }
 
-        // Check delta edges (new or modified)
+        // Delta edges (new/modified/removed)
         for change in &self.delta {
-            if let GraphDelta::EdgeChange { id: _, edge } = change {
-                if edge.src == node {
-                    // Check if this edge is in base (if so, we already counted it)
-                    let in_base = self.inner.edge_index.contains_key(&edge.id);
-                    if !in_base {
-                        // New edge from delta
-                        let prob = edge
-                            .exist
-                            .mean_probability(&self.inner.competing_groups)
-                            .unwrap_or(0.0);
-                        if prob >= min_prob {
-                            count += 1;
-                        }
-                    } else {
-                        // Modified edge - need to recalculate
-                        // Remove old count, add new count
-                        // For now, just check the new version
-                        let prob = edge
-                            .exist
-                            .mean_probability(&self.inner.competing_groups)
-                            .unwrap_or(0.0);
-                        if prob >= min_prob {
-                            // Find the old edge to see if we counted it
-                            if let Some(&old_idx) = self.inner.edge_index.get(&edge.id) {
-                                if let Some(old_e) = self.inner.edges.get(old_idx) {
-                                    let old_prob = old_e
-                                        .exist
-                                        .mean_probability(&self.inner.competing_groups)
-                                        .unwrap_or(0.0);
-                                    if old_prob < min_prob {
-                                        count += 1; // Wasn't counted before, should be now
-                                    }
-                                    // else: was counted before, still should be (no change)
+            match change {
+                GraphDelta::EdgeChange { id, edge } => {
+                    if edge.src != node {
+                        continue;
+                    }
+                    let in_base = self.inner.edge_index.contains_key(id);
+                    let prob = edge
+                        .exist
+                        .mean_probability(&self.inner.competing_groups)
+                        .unwrap_or(0.0);
+                    if in_base {
+                        // Compare old vs new
+                        if let Some(&old_idx) = self.inner.edge_index.get(id) {
+                            if let Some(old_e) = self.inner.edges.get(old_idx) {
+                                let old_prob = old_e
+                                    .exist
+                                    .mean_probability(&self.inner.competing_groups)
+                                    .unwrap_or(0.0);
+                                if old_prob < min_prob && prob >= min_prob {
+                                    count += 1;
+                                } else if old_prob >= min_prob && prob < min_prob {
+                                    count -= 1;
                                 }
                             }
-                        } else {
-                            // New version doesn't meet threshold
-                            // Check if old version did
-                            if let Some(&old_idx) = self.inner.edge_index.get(&edge.id) {
-                                if let Some(old_e) = self.inner.edges.get(old_idx) {
-                                    let old_prob = old_e
-                                        .exist
-                                        .mean_probability(&self.inner.competing_groups)
-                                        .unwrap_or(0.0);
-                                    if old_prob >= min_prob {
-                                        count -= 1; // Was counted before, shouldn't be now
-                                    }
+                        }
+                    } else if prob >= min_prob {
+                        count += 1;
+                    }
+                }
+                GraphDelta::EdgeRemoved { id } => {
+                    if let Some(&idx) = self.inner.edge_index.get(id) {
+                        if let Some(e) = self.inner.edges.get(idx) {
+                            if e.src == node {
+                                let prob = e
+                                    .exist
+                                    .mean_probability(&self.inner.competing_groups)
+                                    .unwrap_or(0.0);
+                                if prob >= min_prob {
+                                    count -= 1;
                                 }
                             }
                         }
                     }
                 }
-            } else if let GraphDelta::EdgeRemoved { id } = change {
-                // Check if this edge was in our count
-                if let Some(&idx) = self.inner.edge_index.get(id) {
-                    if let Some(e) = self.inner.edges.get(idx) {
-                        if e.src == node {
-                            let prob = e
-                                .exist
-                                .mean_probability(&self.inner.competing_groups)
-                                .unwrap_or(0.0);
-                            if prob >= min_prob {
-                                count -= 1;
-                            }
-                        }
-                    }
-                }
+                _ => {}
             }
         }
 
         count
     }
 
-    /// Gets the competing edge group for a node and edge type.
+    /// Computes the number of present observations required for the posterior mean
+    /// probability to reach approximately 0.5 after a strong delete operation.
     ///
-    /// Returns the group if it exists, None if the edges are independent or no edges exist.
-    ///
-    /// # Arguments
-    ///
+    /// For a Beta(α, β) independent edge, the posterior mean is α/(α+β).
+    /// To reach ≥ 0.5 with only present observations, we need α + n ≥ β,
+    /// so n_needed = max(0, ceil(β - α)).
+    pub fn observations_to_half(&self, edge: EdgeId) -> Result<f64, ExecError> {
+        let post = self
+            .get_edge_posterior_with_deltas(edge)
+            .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
+        match post {
+            EdgePosterior::Independent(beta) => {
+                let diff = (beta.beta - beta.alpha).max(0.0);
+                Ok(diff.ceil())
+            }
+            _ => Err(ExecError::ValidationError(
+                "observations_to_half only valid for independent edges".into(),
+            )),
+        }
+    }
+
+        // Gets the competing edge group for a node and edge type.
+        ///
+        /// Returns the group if it exists, None if the edges are independent or no edges exist.
+        ///
+        /// # Arguments
+        ///
     /// * `node` - The source node ID
     /// * `edge_type` - The edge type name
     ///
@@ -3355,5 +3508,108 @@ mod tests {
         // Should build index lazily and return correct result
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0], EdgeId(1));
+    }
+
+    // ===================== Phase 2 semantics tests =====================
+    #[test]
+    fn non_bayesian_nudge_variance_policies() {
+        let mut g = BeliefGraph::default();
+        let mut attrs = HashMap::new();
+        attrs.insert(
+            "x".into(),
+            GaussianPosterior {
+                mean: 0.0,
+                precision: 2.0,
+            },
+        );
+        let nid = g.add_node("N".to_string(), attrs);
+
+        // preserve
+        g.non_bayesian_nudge(nid, "x", 10.0, &grafial_frontend::ast::VarianceSpec::Preserve)
+            .unwrap();
+        assert_eq!(g.expectation(nid, "x").unwrap(), 10.0);
+        assert!((g.precision(nid, "x").unwrap() - 2.0).abs() < 1e-12);
+
+        // decrease(f=2.0) -> precision doubles
+        g.non_bayesian_nudge(
+            nid,
+            "x",
+            5.0,
+            &grafial_frontend::ast::VarianceSpec::Decrease { factor: Some(2.0) },
+        )
+        .unwrap();
+        assert_eq!(g.expectation(nid, "x").unwrap(), 5.0);
+        assert!((g.precision(nid, "x").unwrap() - 4.0).abs() < 1e-12);
+
+        // increase(f=0.5) -> precision halves
+        g.non_bayesian_nudge(
+            nid,
+            "x",
+            -1.0,
+            &grafial_frontend::ast::VarianceSpec::Increase { factor: Some(0.5) },
+        )
+        .unwrap();
+        assert_eq!(g.expectation(nid, "x").unwrap(), -1.0);
+        assert!((g.precision(nid, "x").unwrap() - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn soft_update_normal_normal() {
+        let mut g = BeliefGraph::default();
+        let mut attrs = HashMap::new();
+        attrs.insert(
+            "x".into(),
+            GaussianPosterior {
+                mean: 0.0,
+                precision: 1.0,
+            },
+        );
+        let nid = g.add_node("N".to_string(), attrs);
+
+        // observe x=10 with τ_obs=1, count=1
+        g.soft_update(nid, "x", 10.0, 1.0, 1.0).unwrap();
+        let mu = g.expectation(nid, "x").unwrap();
+        let tau = g.precision(nid, "x").unwrap();
+        assert!((mu - 5.0).abs() < 1e-12);
+        assert!((tau - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn delete_and_suppress_edge_and_undelete_math() {
+        let mut g = BeliefGraph::default();
+        let mut attrs = HashMap::new();
+        let a = g.add_node("N".to_string(), attrs.clone());
+        let b = g.add_node("N".to_string(), attrs);
+        let e = g.add_edge(
+            a,
+            b,
+            "E".to_string(),
+            BetaPosterior { alpha: 1.0, beta: 1.0 },
+        );
+
+        // Suppress -> Beta(1,10) by default
+        g.suppress_edge(e, None).unwrap();
+        let post1 = g.get_edge_posterior_with_deltas(e).unwrap();
+        match post1 {
+            EdgePosterior::Independent(beta) => {
+                assert!((beta.alpha - 1.0).abs() < 1e-12);
+                assert!((beta.beta - 10.0).abs() < 1e-12);
+            }
+            _ => panic!("not independent"),
+        }
+
+        // Delete high -> Beta(1, 1e9)
+        g.delete_edge(e, Some("high")).unwrap();
+        let post2 = g.get_edge_posterior_with_deltas(e).unwrap();
+        match post2 {
+            EdgePosterior::Independent(beta) => {
+                assert!((beta.alpha - 1.0).abs() < 1e-12);
+                assert!(beta.beta > 1e8);
+            }
+            _ => panic!("not independent"),
+        }
+
+        let needed = g.observations_to_half(e).unwrap();
+        assert!(needed >= 1.0e8);
     }
 }

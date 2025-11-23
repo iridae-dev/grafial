@@ -1,6 +1,6 @@
 # Grafial Language Support for VS Code / Cursor
 
-Syntax highlighting for the Grafial Bayesian Belief Graph Language.
+Syntax highlighting and Language Server (LSP) features for the Grafial Bayesian Belief Graph Language.
 
 ## Features
 
@@ -12,6 +12,10 @@ Syntax highlighting for the Grafial Bayesian Belief Graph Language.
   - Pattern matching syntax
   - Expressions and operators
 
+- **Language Server (Phase 1)**:
+  - Real-time diagnostics (syntax and validation errors)
+  - Red squiggles with parse error locations (via Pest → LSP range)
+
 - **Editor Features**:
   - Comment toggling (`//` and `/* */`)
   - Bracket matching
@@ -20,12 +24,35 @@ Syntax highlighting for the Grafial Bayesian Belief Graph Language.
 
 ## Installation
 
-### From Source
+### From Source (Syntax Only)
 
 1. Clone or download this repository
 2. Open VS Code / Cursor
 3. Press `F5` to open Extension Development Host
 4. Open a `.grafial` file to see syntax highlighting
+
+### Enable LSP (Development)
+
+The LSP server is a Rust binary (`grafial-lsp`). Build it, then point the extension to the binary path:
+
+```bash
+# in repo root
+cargo build -p grafial-lsp --release
+
+# ensure the path to the server binary
+# macOS/Linux: target/release/grafial-lsp
+# Windows:     target\\release\\grafial-lsp.exe
+```
+
+In VS Code settings, set `grafial.serverPath` to the absolute path of the binary, or ensure `grafial-lsp` is on your PATH.
+
+Note: This extension uses `vscode-languageclient`. For packaging, install dev dependencies and package as usual (requires internet to fetch npm packages):
+
+```bash
+cd crates/grafial-vscode
+npm install
+vsce package
+```
 
 ### Package and Install
 
@@ -69,5 +96,4 @@ The extension recognizes:
 
 ## Contributing
 
-Improvements to syntax highlighting are welcome! The grammar is defined in `syntaxes/grafial.tmLanguage.json` using TextMate grammar format.
-
+Contributions welcome! The TextMate grammar is in `syntaxes/grafial.tmLanguage.json`. The LSP server lives in `crates/grafial-lsp` and uses `tower-lsp`.

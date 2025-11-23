@@ -179,6 +179,8 @@ pub enum ObserveStmt {
         attr: String,
         /// Observed value
         value: f64,
+        /// Optional per-observation precision (τ_obs)
+        precision: Option<f64>,
     },
 }
 
@@ -386,6 +388,38 @@ pub enum ActionStmt {
         /// The edge variable
         edge_var: String,
     },
+    /// Non-Bayesian nudge: set mean to expr with variance strategy
+    NonBayesianNudge {
+        node_var: String,
+        attr: String,
+        expr: ExprAst,
+        variance: Option<VarianceSpec>,
+    },
+    /// Bayesian soft update: ~= value with precision and optional count
+    SoftUpdate {
+        node_var: String,
+        attr: String,
+        expr: ExprAst,
+        precision: Option<f64>,
+        count: Option<f64>,
+    },
+    /// Delete edge with optional confidence preset
+    DeleteEdge {
+        edge_var: String,
+        confidence: Option<String>,
+    },
+    /// Suppress edge with optional weight
+    SuppressEdge {
+        edge_var: String,
+        weight: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VarianceSpec {
+    Preserve,
+    Increase { factor: Option<f64> },
+    Decrease { factor: Option<f64> },
 }
 
 /// An expression in the Grafial expression language.

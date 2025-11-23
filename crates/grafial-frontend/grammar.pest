@@ -29,11 +29,11 @@ edge_belief_decl = { KW_edge ~ ident ~ "{" ~ (COMMENT | exist_belief_decl)* ~ "}
 exist_belief_decl = { "exist" ~ "~" ~ posterior_type ~ ";"? }
 
 posterior_type = { gaussian_posterior | bernoulli_posterior | categorical_posterior }
-gaussian_posterior = { "GaussianPosterior" ~ "(" ~ gaussian_param ~ ("," ~ gaussian_param)* ~ ")" }
+gaussian_posterior = { ("GaussianPosterior" | "Gaussian") ~ "(" ~ gaussian_param ~ ("," ~ gaussian_param)* ~ ")" }
 gaussian_param = { (ident ~ "=" ~ number) }
-bernoulli_posterior = { "BernoulliPosterior" ~ "(" ~ bernoulli_param ~ ("," ~ bernoulli_param)* ~ ")" }
+bernoulli_posterior = { ("BernoulliPosterior" | "Bernoulli") ~ "(" ~ bernoulli_param ~ ("," ~ bernoulli_param)* ~ ")" }
 bernoulli_param = { (ident ~ "=" ~ number) }
-categorical_posterior = { "CategoricalPosterior" ~ "(" ~ categorical_param ~ ("," ~ categorical_param)* ~ ")" }
+categorical_posterior = { ("CategoricalPosterior" | "Categorical") ~ "(" ~ categorical_param ~ ("," ~ categorical_param)* ~ ")" }
 categorical_param = {
     (ident ~ "=" ~ categorical_param_value)
 }
@@ -44,18 +44,40 @@ categorical_categories_array = { "[" ~ string ~ ("," ~ string)* ~ "]" }
 prior_array = { "[" ~ number ~ ("," ~ number)* ~ "]" }
 
 evidence_decl = { KW_evidence ~ ident ~ KW_on ~ ident ~ evidence_body }
-evidence_body = { "{" ~ (COMMENT | observe_stmt)* ~ "}" }
+evidence_body = { "{" ~ (COMMENT | observe_stmt | choose_stmt | unchoose_stmt | node_group | edge_group)* ~ "}" }
+// Grouped evidence sugar
+node_group = { ident ~ "{" ~ (node_entry ~ ("," ~ node_entry)*)? ~ "}" }
+node_entry = { node_label ~ "{" ~ (node_attr_kv ~ ("," ~ node_attr_kv)*)? ~ "}" }
+node_attr_kv = { ident ~ ":" ~ number ~ precision_annot? }
+
+edge_group = { ident ~ "(" ~ ident ~ "->" ~ ident ~ ")" ~ "{" ~ (edge_entry ~ ( (";" | ",") ~ edge_entry )* )? ~ "}" }
+edge_op = { "->" | "-/>" }
+edge_entry = { node_label ~ edge_op ~ node_label }
+choose_stmt = { KW_choose ~ edge_observe ~ ";"? }
+unchoose_stmt = { KW_unchoose ~ edge_observe ~ ";"? }
 observe_stmt = { observe_edge_stmt | observe_attr_stmt }
 observe_edge_stmt = { KW_observe ~ edge_observe ~ evidence_mode ~ ";"? }
 observe_attr_stmt = { KW_observe ~ attr_observe ~ ";"? }
 observe_target = { edge_observe | attr_observe }
 edge_observe = { KW_edge ~ ident ~ "(" ~ node_ref ~ "," ~ node_ref ~ ")" }
-attr_observe = { node_ref ~ "." ~ ident ~ "=" ~ number }
-node_ref = { ident ~ "[" ~ string ~ "]" }
+attr_observe = { node_ref ~ "." ~ ident ~ "=" ~ number ~ precision_annot? }
+precision_annot = { "(" ~ ident ~ "=" ~ number ~ ")" }
+// Node reference supports both bracket and call-style forms:
+// - Label["id"]  (original)
+// - Label("id")  (string)
+// - Label(id)    (identifier or number)
+node_ref = { ident ~ ( node_ref_bracket | node_ref_call ) }
+node_ref_bracket = { "[" ~ string ~ "]" }
+node_ref_call = { "(" ~ node_label ~ ")" }
+node_label = { string | ident | number }
 evidence_mode = { "present" | "absent" | "chosen" | "unchosen" | "forced_choice" }
 
 kw_observe_tok = @{ "observe" ~ !(ASCII_ALPHANUMERIC | "_") }
 KW_observe = _{ kw_observe_tok }
+kw_choose_tok = @{ "choose" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_unchoose_tok = @{ "unchoose" ~ !(ASCII_ALPHANUMERIC | "_") }
+KW_choose = _{ kw_choose_tok }
+KW_unchoose = _{ kw_unchoose_tok }
 
 // Balanced block text (captures nested braces) - for evidence and other opaque bodies
 block = { "{" ~ block_inner* ~ "}" }
@@ -63,7 +85,11 @@ block_inner = _{ block | (!("{" | "}") ~ ANY) }
 
 // --- rule ---
 rule_decl = { KW_rule ~ ident ~ KW_on ~ ident ~ "{" ~ rule_body ~ "}" }
-rule_body = { (COMMENT | pattern_clause | where_clause | action_clause | mode_clause )* }
+rule_body = { (COMMENT | sugar_rule | for_sugar | pattern_clause | where_clause | action_clause | mode_clause )* }
+// Sugar: single-line pattern with optional where and arrow to action block
+sugar_rule = { pattern_item ~ (KW_where ~ expr)? ~ "=>" ~ action_block }
+// Node-only sugar: for (Var:Label) [where expr]? => { actions }
+for_sugar = { KW_for ~ "(" ~ ident ~ ":" ~ label ~ ")" ~ (KW_where ~ expr)? ~ "=>" ~ action_block }
 
 pattern_clause = { KW_pattern ~ pattern_list }
 pattern_list = { pattern_item ~ ("," ~ pattern_item)* }
@@ -75,11 +101,20 @@ where_clause = { KW_where ~ expr }
 
 action_clause = { KW_action ~ action_block }
 action_block = { "{" ~ (COMMENT | action_stmt)* ~ "}" }
-action_stmt = _{ let_stmt | set_expectation_stmt | force_absent_stmt }
+action_stmt = _{ let_stmt | set_expectation_stmt | force_absent_stmt | nbnudge_stmt | soft_update_stmt | delete_stmt | suppress_stmt }
 let_stmt = { KW_let ~ ident ~ "=" ~ expr ~ ";"? }
 set_expectation_stmt = { KW_set_expectation ~ node_attr ~ "=" ~ expr ~ ";"? }
 force_absent_stmt = { KW_force_absent ~ ident ~ ";"? }
 node_attr = { ident ~ "." ~ ident }
+nbnudge_stmt = { KW_non_bayesian_nudge ~ node_attr ~ KW_to ~ expr ~ variance_clause? ~ ";"? }
+variance_clause = { KW_variance ~ "=" ~ ( KW_preserve | increase_clause | decrease_clause ) }
+increase_clause = { KW_increase ~ ( "(" ~ "factor" ~ "=" ~ number ~ ")" )? }
+decrease_clause = { KW_decrease ~ ( "(" ~ "factor" ~ "=" ~ number ~ ")" )? }
+soft_update_stmt = { node_attr ~ "~=" ~ expr ~ soft_args? ~ ";"? }
+soft_args = { "(" ~ soft_arg ~ ( "," ~ soft_arg )* ~ ")" }
+soft_arg = { ( "precision" ~ "=" ~ number ) | ( "count" ~ "=" ~ number ) }
+delete_stmt = { KW_delete ~ ident ~ ( "(" ~ "confidence" ~ "=" ~ ident ~ ")" )? ~ ";"? }
+suppress_stmt = { KW_suppress ~ ident ~ ( "(" ~ "weight" ~ "=" ~ number ~ ")" )? ~ ";"? }
 mode_clause = { KW_mode ~ ":" ~ ident }
 
 // --- flow ---
@@ -99,7 +134,20 @@ apply_ruleset_tr = { KW_apply_ruleset ~ "{" ~ ident ~ ("," ~ ident)* ~ "}" }
 snapshot_tr = { KW_snapshot ~ string }
 prune_edges_tr = { KW_prune_edges ~ ident ~ KW_where ~ expr }
 
-metric_stmt = { KW_metric ~ ident ~ "=" ~ expr }
+metric_stmt = { KW_metric ~ ident ~ "=" ~ (metric_builder_expr | expr) }
+
+// Metric builder pipeline: nodes(Label) |> where(expr)? |> (sum(by=expr) | count() | avg(by=expr) | fold(init=expr, step=expr, order_by=expr) )
+metric_builder_expr = { builder_start ~ (pipe_op ~ builder_step)+ }
+builder_start = { KW_nodes ~ "(" ~ label ~ ")" }
+builder_step = { builder_where | builder_sum | builder_count | builder_avg | builder_fold | builder_order }
+builder_where = { KW_where ~ expr }
+builder_sum = { KW_sum ~ "(" ~ "by" ~ "=" ~ expr ~ ")" }
+builder_count = { KW_count ~ "(" ~ ")" }
+builder_avg = { KW_avg ~ "(" ~ "by" ~ "=" ~ expr ~ ")" }
+builder_order = { KW_order_by ~ "(" ~ expr ~ ")" }
+builder_fold = { KW_fold ~ "(" ~ fold_args ~ ")" }
+fold_args = { fold_arg ~ ( "," ~ fold_arg )* }
+fold_arg = { ("init" ~ "=" ~ expr) | ("step" ~ "=" ~ expr) | ("order_by" ~ "=" ~ expr) }
 export_stmt = { KW_export ~ ident ~ KW_as ~ string }
 metric_export_stmt = { KW_export_metric ~ ident ~ KW_as ~ string }
 metric_import_stmt = { KW_import_metric ~ ident ~ KW_as ~ ident }
@@ -138,6 +186,7 @@ kw_belief_model_tok = @{ "belief_model" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_on_tok = @{ "on" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_evidence_tok = @{ "evidence" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_rule_tok = @{ "rule" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_for_tok = @{ "for" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_pattern_tok = @{ "pattern" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_where_tok = @{ "where" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_action_tok = @{ "action" ~ !(ASCII_ALPHANUMERIC | "_") }
@@ -151,6 +200,12 @@ kw_apply_ruleset_tok = @{ "apply_ruleset" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_snapshot_tok = @{ "snapshot" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_prune_edges_tok = @{ "prune_edges" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_metric_tok = @{ "metric" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_nodes_tok = @{ "nodes" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_sum_tok = @{ "sum" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_count_tok = @{ "count" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_avg_tok = @{ "avg" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_order_by_tok = @{ "order_by" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_fold_tok = @{ "fold" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_export_tok = @{ "export" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_as_tok = @{ "as" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_export_metric_tok = @{ "export_metric" ~ !(ASCII_ALPHANUMERIC | "_") }
@@ -163,9 +218,19 @@ KW_belief_model = _{ kw_belief_model_tok }
 KW_on = _{ kw_on_tok }
 KW_evidence = _{ kw_evidence_tok }
 KW_rule = _{ kw_rule_tok }
+KW_for = _{ kw_for_tok }
 KW_pattern = _{ kw_pattern_tok }
 KW_where = _{ kw_where_tok }
 KW_action = _{ kw_action_tok }
+// Additional keywords for new action syntax
+kw_to_tok = @{ "to" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_non_bayesian_nudge_tok = @{ "non_bayesian_nudge" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_delete_tok = @{ "delete" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_suppress_tok = @{ "suppress" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_variance_tok = @{ "variance" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_preserve_tok = @{ "preserve" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_increase_tok = @{ "increase" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_decrease_tok = @{ "decrease" ~ !(ASCII_ALPHANUMERIC | "_") }
 KW_mode = _{ kw_mode_tok }
 KW_flow = _{ kw_flow_tok }
 KW_graph = _{ kw_graph_tok }
@@ -176,6 +241,12 @@ KW_apply_ruleset = _{ kw_apply_ruleset_tok }
 KW_snapshot = _{ kw_snapshot_tok }
 KW_prune_edges = _{ kw_prune_edges_tok }
 KW_metric = _{ kw_metric_tok }
+KW_nodes = _{ kw_nodes_tok }
+KW_sum = _{ kw_sum_tok }
+KW_count = _{ kw_count_tok }
+KW_avg = _{ kw_avg_tok }
+KW_order_by = _{ kw_order_by_tok }
+KW_fold = _{ kw_fold_tok }
 KW_export = _{ kw_export_tok }
 KW_as = _{ kw_as_tok }
 KW_export_metric = _{ kw_export_metric_tok }
@@ -199,3 +270,11 @@ KW_let = _{ kw_let_tok }
 KW_set_expectation = _{ kw_set_expectation_tok }
 KW_force_absent = _{ kw_force_absent_tok }
 KW_exists = _{ kw_exists_tok }
+KW_to = _{ kw_to_tok }
+KW_non_bayesian_nudge = _{ kw_non_bayesian_nudge_tok }
+KW_delete = _{ kw_delete_tok }
+KW_suppress = _{ kw_suppress_tok }
+KW_variance = _{ kw_variance_tok }
+KW_preserve = _{ kw_preserve_tok }
+KW_increase = _{ kw_increase_tok }
+KW_decrease = _{ kw_decrease_tok }

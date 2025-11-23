@@ -257,9 +257,53 @@ fn validate_rule(rule: &RuleDef) -> Result<(), FrontendError> {
         edge_vars.insert(p.edge.var.clone());
     }
     if let Some(expr) = &rule.where_expr {
+        // Enforce explicit uncertainty in where: no bare field access
+        validate_no_bare_field(expr, false)?;
         validate_expr_in_rule(expr, &node_vars, &edge_vars)?;
     }
     Ok(())
+}
+
+/// Ensures there are no bare field accesses (e.g., A.score) in boolean contexts.
+/// Users must wrap node attributes with E[NodeVar.attr] in where clauses.
+fn validate_no_bare_field(expr: &ExprAst, under_e: bool) -> Result<(), FrontendError> {
+    match expr {
+        ExprAst::Call { name, args } if name == "E" => {
+            // Recurse into E[] argument with under_e=true to allow field
+            for a in args {
+                if let CallArg::Positional(e) = a {
+                    validate_no_bare_field(e, true)?;
+                } else if let CallArg::Named { value, .. } = a {
+                    validate_no_bare_field(value, true)?;
+                }
+            }
+            Ok(())
+        }
+        ExprAst::Field { .. } => {
+            if under_e {
+                Ok(())
+            } else {
+                Err(FrontendError::ValidationError(
+                    "Bare field access in where clause is not allowed; use E[NodeVar.attr] or prob(...)".into(),
+                ))
+            }
+        }
+        ExprAst::Unary { expr, .. } => validate_no_bare_field(expr, under_e),
+        ExprAst::Binary { left, right, .. } => {
+            validate_no_bare_field(left, under_e)?;
+            validate_no_bare_field(right, under_e)
+        }
+        ExprAst::Call { args, .. } => {
+            for a in args {
+                match a {
+                    CallArg::Positional(e) => validate_no_bare_field(e, under_e)?,
+                    CallArg::Named { value, .. } => validate_no_bare_field(value, under_e)?,
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 fn validate_flow(flow: &FlowDef) -> Result<(), FrontendError> {
@@ -776,6 +820,30 @@ mod tests {
         };
 
         assert!(validate_rule(&rule).is_ok());
+    }
+
+    #[test]
+    fn validate_rule_bare_field_in_where_fails() {
+        let rule = RuleDef {
+            name: "R".into(),
+            on_model: "M".into(),
+            patterns: vec![PatternItem {
+                src: NodePattern { var: "A".into(), label: "N".into() },
+                edge: EdgePattern { var: "e".into(), ty: "E".into() },
+                dst: NodePattern { var: "B".into(), label: "N".into() },
+            }],
+            where_expr: Some(ExprAst::Binary {
+                op: BinaryOp::Gt,
+                left: Box::new(ExprAst::Field { target: Box::new(ExprAst::Var("A".into())), field: "x".into() }),
+                right: Box::new(ExprAst::Number(0.0)),
+            }),
+            actions: vec![],
+            mode: None,
+        };
+        let result = validate_rule(&rule);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Bare field access"));
     }
 
     #[test]

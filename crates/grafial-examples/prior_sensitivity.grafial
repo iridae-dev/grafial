@@ -17,10 +17,7 @@ belief_model WeakPrior on Measurement {
   node Sensor {
     // Weak prior: "I have almost no prior knowledge"
     // High variance (σ² = 100) means prior has little influence on posterior
-    reading ~ GaussianPosterior(
-      prior_mean=0.0,
-      prior_precision=0.01  // τ₀ = 0.01 → σ² = 1/0.01 = 100
-    )
+    reading ~ Gaussian(mean=0.0, precision=0.01)  // τ₀ = 0.01 → σ² = 100
   }
 }
 
@@ -28,10 +25,7 @@ belief_model ModeratePrior on Measurement {
   node Sensor {
     // Moderate prior: "I have some prior knowledge"
     // Moderate variance (σ² = 1) gives prior equal weight to one observation
-    reading ~ GaussianPosterior(
-      prior_mean=0.0,
-      prior_precision=1.0  // τ₀ = 1.0 → σ² = 1
-    )
+    reading ~ Gaussian(mean=0.0, precision=1.0)  // τ₀ = 1.0 → σ² = 1
   }
 }
 
@@ -39,17 +33,14 @@ belief_model StrongPrior on Measurement {
   node Sensor {
     // Strong prior: "I'm confident about my prior knowledge"
     // Low variance (σ² = 0.01) means prior dominates over observations
-    reading ~ GaussianPosterior(
-      prior_mean=0.0,
-      prior_precision=100.0  // τ₀ = 100.0 → σ² = 0.01
-    )
+    reading ~ Gaussian(mean=0.0, precision=100.0)  // τ₀ = 100.0 → σ² = 0.01
   }
 }
 
 evidence OneSensorReading on WeakPrior {
   // One observation: reading = 10.0
   // Assume observation_precision = 1.0 (default) → σ²_obs = 1
-  observe Sensor["S1"].reading = 10.0
+  Sensor { "S1" { reading: 10.0 } }
 }
 
 // Bayesian update with weak prior:
@@ -61,7 +52,7 @@ evidence OneSensorReading on WeakPrior {
 flow WeakPriorFlow on WeakPrior {
   graph g = from_evidence OneSensorReading
 
-  metric posterior_mean = sum_nodes(label=Sensor, contrib=E[node.reading])
+  metric posterior_mean = nodes(Sensor) |> sum(by=E[node.reading])
   // Expected value: ~9.90 (very close to observed 10.0)
   // Prior contributes only ~1% to posterior
 
@@ -92,19 +83,12 @@ flow WeakPriorFlow on WeakPrior {
 
 // Rule demonstrating how prior strength affects decision-making
 rule FlagAnomalies on WeakPrior {
-  pattern
-    (S:Sensor)-[dummy:reading]->(S:Sensor)  // Dummy self-edge pattern
-
-  where
-    // Flag if reading deviates significantly from prior
-    E[S.reading] > 5.0  // Threshold depends on prior!
-
-  action {
+  for (S:Sensor)
+  where E[S.reading] > 5.0  // Threshold depends on prior!
+  => {
     // With weak prior: E[reading] ≈ 9.90 → triggers flag
     // With moderate prior: E[reading] ≈ 5.0 → borderline
     // With strong prior: E[reading] ≈ 0.10 → no flag
     set_expectation S.reading = E[S.reading] * 1.1
   }
-
-  mode: for_each
 }

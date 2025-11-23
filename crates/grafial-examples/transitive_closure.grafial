@@ -13,38 +13,25 @@ schema Network {
 belief_model NetworkBeliefs on Network {
   node Server {
     // Reachability: 0.0 = unreachable, 1.0 = fully reachable
-    reachability ~ GaussianPosterior(
-      prior_mean=0.0,
-      prior_precision=0.1  // Weak prior: σ² = 10
-    )
+    reachability ~ Gaussian(mean=0.0, precision=0.1)  // Weak prior: σ² = 10
     // Distance: hop count from source (0 = source, higher = further)
-    distance ~ GaussianPosterior(
-      prior_mean=100.0,  // Large default (effectively "infinity")
-      prior_precision=0.01
-    )
+    distance ~ Gaussian(mean=100.0, precision=0.01)  // Large default (effectively "infinity")
   }
   edge CONNECTS {
     // Edge existence: uncertain connectivity
-    exist ~ BernoulliPosterior(
-      prior=0.5,
-      pseudo_count=2.0
-    )
+    exist ~ Bernoulli(prior=0.5, weight=2.0)
   }
 }
 
 evidence DirectConnections on NetworkBeliefs {
   // Source node: fully reachable at distance 0
-  observe Server["S1"].reachability = 1.0
-  observe Server["S1"].distance = 0.0
+  Server { "S1" { reachability: 1.0, distance: 0.0 } }
 
   // Direct connections from source
-  observe edge CONNECTS(Server["S1"], Server["S2"]) present
-  observe edge CONNECTS(Server["S2"], Server["S3"]) present
-  observe edge CONNECTS(Server["S1"], Server["S4"]) present
-  observe edge CONNECTS(Server["S4"], Server["S5"]) present
+  CONNECTS(Server -> Server) { "S1" -> "S2"; "S2" -> "S3"; "S1" -> "S4"; "S4" -> "S5" }
 
   // Some uncertain edges
-  observe edge CONNECTS(Server["S3"], Server["S5"]) present
+  CONNECTS(Server -> Server) { "S3" -> "S5" }
 }
 
 // Fixpoint rule: propagate reachability through edges until convergence
@@ -89,21 +76,15 @@ flow ReachabilityAnalysis on NetworkBeliefs {
   // S4: reachability≈0.9, distance≈1 (1 hop from S1)
   // S5: reachability≈0.81, distance≈2 (2 hops via S4, or S1→S4→S5)
 
-  metric avg_reachability = sum_nodes(
-    label=Server,
-    contrib=E[node.reachability]
-  ) / count_nodes(label=Server)
+  metric avg_reachability = nodes(Server) |> avg(by=E[node.reachability])
 
-  metric reachable_count = count_nodes(
-    label=Server,
-    where=E[node.reachability] > 0.5
-  )
+  metric reachable_count = nodes(Server)
+    |> where(E[node.reachability] > 0.5)
+    |> count()
 
-  metric avg_distance = sum_nodes(
-    label=Server,
-    where=E[node.reachability] > 0.5,
-    contrib=E[node.distance]
-  ) / count_nodes(label=Server, where=E[node.reachability] > 0.5)
+  metric avg_distance = nodes(Server)
+    |> where(E[node.reachability] > 0.5)
+    |> avg(by=E[node.distance])
 
   export with_transitive as "reachable"
 }

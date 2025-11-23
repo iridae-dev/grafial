@@ -611,6 +611,152 @@ impl<'a> ExprContext for MetricExprContext<'a> {
                     Ok(0.0)
                 }
             }
+            "variance" => {
+                // variance(node.attr)
+                if !all_args.is_empty() && matches!(all_args[0], CallArg::Named { .. }) {
+                    return Err(ExecError::ValidationError(
+                        "variance() does not accept named arguments".into(),
+                    ));
+                }
+                if pos_args.len() != 1 {
+                    return Err(ExecError::ValidationError(
+                        "variance() expects one positional argument".into(),
+                    ));
+                }
+                match &pos_args[0] {
+                    ExprAst::Field { target, field } => match &**target {
+                        ExprAst::Var(v) if v == "node" => graph.variance(self.node, field),
+                        _ => Err(ExecError::ValidationError(
+                            "variance() requires node.attr with 'node' variable".into(),
+                        )),
+                    },
+                    _ => Err(ExecError::ValidationError(
+                        "variance() requires a field expression".into(),
+                    )),
+                }
+            }
+            "stddev" => {
+                // stddev(node.attr)
+                if !all_args.is_empty() && matches!(all_args[0], CallArg::Named { .. }) {
+                    return Err(ExecError::ValidationError(
+                        "stddev() does not accept named arguments".into(),
+                    ));
+                }
+                if pos_args.len() != 1 {
+                    return Err(ExecError::ValidationError(
+                        "stddev() expects one positional argument".into(),
+                    ));
+                }
+                match &pos_args[0] {
+                    ExprAst::Field { target, field } => match &**target {
+                        ExprAst::Var(v) if v == "node" => graph.stddev(self.node, field),
+                        _ => Err(ExecError::ValidationError(
+                            "stddev() requires node.attr with 'node' variable".into(),
+                        )),
+                    },
+                    _ => Err(ExecError::ValidationError(
+                        "stddev() requires a field expression".into(),
+                    )),
+                }
+            }
+            "ci_lo" | "ci_hi" => {
+                // ci_lo(node.attr, p), ci_hi(node.attr, p)
+                if pos_args.len() != 2 {
+                    return Err(ExecError::ValidationError(
+                        "ci_lo/ci_hi(): requires node.attr and p".into(),
+                    ));
+                }
+                let p = match &pos_args[1] {
+                    ExprAst::Number(v) => *v,
+                    _ => {
+                        return Err(ExecError::ValidationError(
+                            "ci_lo/ci_hi(): p must be numeric".into(),
+                        ))
+                    }
+                };
+                if p <= 0.0 || p >= 1.0 {
+                    return Err(ExecError::ValidationError(
+                        "ci_lo/ci_hi(): p must be in (0,1)".into(),
+                    ));
+                }
+                match &pos_args[0] {
+                    ExprAst::Field { target, field } => match &**target {
+                        ExprAst::Var(v) if v == "node" => {
+                            let mu = graph.expectation(self.node, field)?;
+                            let sigma = graph.stddev(self.node, field)?;
+                            let q = (1.0 + p) / 2.0;
+                            let z = crate::engine::expr_utils::inv_norm_cdf(q);
+                            if name == "ci_lo" {
+                                Ok(mu - z * sigma)
+                            } else {
+                                Ok(mu + z * sigma)
+                            }
+                        }
+                        _ => Err(ExecError::ValidationError(
+                            "ci_lo/ci_hi(): first arg must be node.attr".into(),
+                        )),
+                    },
+                    _ => Err(ExecError::ValidationError(
+                        "ci_lo/ci_hi(): first arg must be field expr".into(),
+                    )),
+                }
+            }
+            "effective_n" => {
+                // effective_n(node.attr)
+                if pos_args.len() != 1 {
+                    return Err(ExecError::ValidationError(
+                        "effective_n(): expects one positional argument".into(),
+                    ));
+                }
+                match &pos_args[0] {
+                    ExprAst::Field { target, field } => match &**target {
+                        ExprAst::Var(v) if v == "node" => graph.precision(self.node, field),
+                        _ => Err(ExecError::ValidationError(
+                            "effective_n(): requires node.attr with 'node' variable".into(),
+                        )),
+                    },
+                    _ => Err(ExecError::ValidationError(
+                        "effective_n(): requires a field expression".into(),
+                    )),
+                }
+            }
+            "quantile" => {
+                // quantile(node.attr, p)
+                if pos_args.len() < 2 {
+                    return Err(ExecError::ValidationError(
+                        "quantile(): requires node.attr and p".into(),
+                    ));
+                }
+                let p = match &pos_args[1] {
+                    ExprAst::Number(v) => *v,
+                    _ => {
+                        return Err(ExecError::ValidationError(
+                            "quantile(): second argument must be numeric p".into(),
+                        ))
+                    }
+                };
+                if p <= 0.0 || p >= 1.0 {
+                    return Err(ExecError::ValidationError(
+                        "quantile(): p must be in (0,1)".into(),
+                    ));
+                }
+                match &pos_args[0] {
+                    ExprAst::Field { target, field } => match &**target {
+                        ExprAst::Var(v) if v == "node" => {
+                            let mu = graph.expectation(self.node, field)?;
+                            let sigma = graph.stddev(self.node, field)?;
+                            let z = crate::engine::expr_utils::inv_norm_cdf(p);
+                            Ok(mu + z * sigma)
+                        }
+                        _ => Err(ExecError::ValidationError(
+                            "quantile(): first argument must be node.attr".into(),
+                        )),
+                    },
+                    _ => Err(ExecError::ValidationError(
+                        "quantile(): first argument must be a field expression".into(),
+                    )),
+                }
+            }
             "degree" => {
                 if pos_args.is_empty() {
                     return Err(ExecError::ValidationError(

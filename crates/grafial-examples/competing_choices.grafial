@@ -11,13 +11,13 @@ schema PacketRouting {
 
 belief_model RoutingBeliefs on PacketRouting {
   node Router {
-    latency ~ GaussianPosterior(prior_mean=50.0, prior_precision=0.1)
+    latency ~ Gaussian(mean=50.0, precision=0.1)
   }
   edge ROUTES_TO {
     // Competing edges: each router routes to exactly ONE destination
     // Probabilities sum to 1.0 within each group
-    exist ~ CategoricalPosterior(
-      group_by="source",
+    exist ~ Categorical(
+      group_by=source,
       prior=uniform,
       pseudo_count=1.0
     )
@@ -31,22 +31,22 @@ evidence RoutingEvidence on RoutingBeliefs {
   // - E[π_R2] = E[π_R3] = 0.5
 
   // Router R1 chooses R2
-  observe edge ROUTES_TO(Router["R1"], Router["R2"]) chosen
+  choose edge ROUTES_TO(Router["R1"], Router["R2"]) 
   // After R2 chosen: α = [1.5, 0.5] → P(R2)=0.75, P(R3)=0.25
 
   // Router R1 chooses R3 (conflicting with previous choice)
-  observe edge ROUTES_TO(Router["R1"], Router["R3"]) chosen
+  choose edge ROUTES_TO(Router["R1"], Router["R3"]) 
   // After R3 chosen: α = [1.5, 1.5] → P(R2)=0.5, P(R3)=0.5
   // Now balanced: 1 observation each + 0.5 pseudo-count each
   // High entropy indicates uncertainty
 
   // Router R4 chooses R5
-  observe edge ROUTES_TO(Router["R4"], Router["R5"]) chosen
+  choose edge ROUTES_TO(Router["R4"], Router["R5"]) 
 
   // Dynamic category discovery: R1 routes to R6 (new destination)
   // α automatically expands: [1.5, 1.5] → [1.5, 1.5, 1.0]
   // Preserves existing evidence, adds new category with prior only
-  observe edge ROUTES_TO(Router["R1"], Router["R6"]) chosen
+  choose edge ROUTES_TO(Router["R1"], Router["R6"]) 
   // After R6 chosen: α = [1.5, 1.5, 2.0] → P(R2)≈0.3, P(R3)≈0.3, P(R6)≈0.4
 }
 
@@ -98,16 +98,12 @@ flow RoutingPipeline on RoutingBeliefs {
   graph reviewed = optimized |> apply_rule HandleUncertainRoute
   
   // Metrics that understand competing probabilities
-  metric avg_entropy = sum_nodes(
-    label=Router,
-    contrib=entropy(node, ROUTES_TO)
-  ) / count_nodes(label=Router)
+  metric avg_entropy = nodes(Router)
+    |> avg(by=entropy(node, ROUTES_TO))
   
-  metric deterministic_routes = count_nodes(
-    label=Router,
-    where=entropy(node, ROUTES_TO) < 0.5
-  )
+  metric deterministic_routes = nodes(Router)
+    |> where(entropy(node, ROUTES_TO) < 0.5)
+    |> count()
   
   export reviewed as "final_routing"
 }
-
