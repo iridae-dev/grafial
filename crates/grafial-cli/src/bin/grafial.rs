@@ -207,6 +207,23 @@ fn print_summary(flow_name: &str, result: &grafial_core::engine::flow_exec::Flow
             );
         }
     }
+
+    if !result.intervention_audit.is_empty() {
+        println!(
+            "\nIntervention Audit Events ({}):",
+            result.intervention_audit.len()
+        );
+        for event in &result.intervention_audit {
+            println!(
+                "  [{}:{}] rule={} matched={} actions={}",
+                event.graph,
+                event.transform,
+                event.rule,
+                event.matched_bindings,
+                event.actions_executed
+            );
+        }
+    }
 }
 
 /// Format FlowResult for JSON serialization
@@ -267,6 +284,23 @@ fn format_flow_result(
         })
         .collect();
     output.insert("snapshots".to_string(), json!(snapshots));
+
+    let intervention_audit: Vec<serde_json::Value> = result
+        .intervention_audit
+        .iter()
+        .map(|event| {
+            json!({
+                "flow": event.flow,
+                "graph": event.graph,
+                "transform": event.transform,
+                "rule": event.rule,
+                "mode": event.mode,
+                "matched_bindings": event.matched_bindings,
+                "actions_executed": event.actions_executed,
+            })
+        })
+        .collect();
+    output.insert("intervention_audit".to_string(), json!(intervention_audit));
 
     output
 }

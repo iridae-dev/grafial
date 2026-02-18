@@ -393,6 +393,8 @@ Notes:
 - Graph transforms produce immutable snapshots (copy-on-write under the hood).
 - Flow planning and execution order are deterministic.
 - Rule matching and metric evaluation are deterministic by stable ID order.
+- Runtime flow outputs include `intervention_audit` events for `apply_rule`/`apply_ruleset`
+  transforms (rule name, match count, action count) for reproducibility/traceability hooks.
 
 ## 14. Current Non-Goals / Not Implemented in Syntax
 

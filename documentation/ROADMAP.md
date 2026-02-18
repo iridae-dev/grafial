@@ -13,7 +13,7 @@ This is the canonical compiler/runtime roadmap for Grafial.
 - Phase 6: Completed
 - Phase 7: Completed
 - Phase 8: Completed
-- Phase 9: Future
+- Phase 9: Completed
 - Phase 10: Future
 - Phase 11: Future
 - Phase 12: Future
@@ -238,6 +238,19 @@ Completion notes (this change):
 - Add correlation-aware probability comparison support (for example `prob_correlated`) while retaining explicit independence semantics where used.
 - Evaluate and, if justified, add `credible(...)` as a first-class comparison helper with clear semantics.
 - Add intervention audit metadata hooks for reproducibility and traceability in compiler/runtime outputs.
+
+Completion notes (this change):
+- Added `prob_correlated(...)` in rule evaluation:
+  - explicit correlation-aware Gaussian comparison probability (`rho` in `[-1, 1]`)
+  - existing `prob(...)` comparison behavior remains the explicit independence form
+- Added `credible(...)` as a first-class probability-threshold helper:
+  - supports edge events (`credible(e, p=...)`)
+  - supports comparison events with optional correlation (`credible(A.x > B.x, p=..., rho=...)`)
+- Added validation and integration coverage for new semantics in frontend/core/test crates.
+- Added runtime intervention audit hooks in flow outputs:
+  - `FlowResult.intervention_audit` now records per-transform rule execution metadata
+    (flow, graph, transform id, rule name, mode, matched bindings, actions executed)
+  - CLI summary/JSON output now surfaces intervention audit events.
 
 ## Phase 10 - JIT Backend Prototype
 

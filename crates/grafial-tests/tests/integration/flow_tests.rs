@@ -152,6 +152,15 @@ fn run_flow_demo_applies_rule_and_prunes() {
     // cleaned graph exported as "demo" should have zero edges after force_absent + prune
     let exported = result.exports.get("demo").expect("exported graph");
     assert_eq!(exported.edges().len(), 0);
+
+    // intervention audit hook should include the apply_rule transform event
+    assert_eq!(result.intervention_audit.len(), 1);
+    let event = &result.intervention_audit[0];
+    assert_eq!(event.flow, "Demo");
+    assert_eq!(event.graph, "cleaned");
+    assert_eq!(event.rule, "ForceLowProb");
+    assert!(event.matched_bindings >= 1);
+    assert!(event.actions_executed >= 1);
 }
 
 #[test]

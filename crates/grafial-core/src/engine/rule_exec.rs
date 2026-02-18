@@ -105,6 +105,22 @@ impl Locals {
     }
 }
 
+/// Lightweight runtime audit metadata for a single rule application.
+///
+/// This is intended as a stable hook for downstream traceability surfaces
+/// (flow results, logs, external telemetry).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleExecutionAudit {
+    /// Rule name that was executed.
+    pub rule_name: String,
+    /// Rule mode used for execution (`for_each` here).
+    pub mode: String,
+    /// Number of match bindings that passed `where` and executed actions.
+    pub matched_bindings: usize,
+    /// Total action statements executed (`matched_bindings * actions_per_match`).
+    pub actions_executed: usize,
+}
+
 /// Expression evaluation context for rule execution.
 ///
 /// Provides variable resolution from locals, globals, and pattern bindings,
@@ -1088,6 +1104,15 @@ pub fn run_rule_for_each_with_globals(
     rule: &RuleDef,
     globals: &HashMap<String, f64>,
 ) -> Result<BeliefGraph, ExecError> {
+    run_rule_for_each_with_globals_audit(input, rule, globals).map(|(graph, _)| graph)
+}
+
+/// Executes a rule with globals and returns runtime audit metadata.
+pub fn run_rule_for_each_with_globals_audit(
+    input: &BeliefGraph,
+    rule: &RuleDef,
+    globals: &HashMap<String, f64>,
+) -> Result<(BeliefGraph, RuleExecutionAudit), ExecError> {
     if rule.patterns.is_empty() {
         return Err(ExecError::ValidationError(
             "rule must have at least one pattern".into(),
@@ -1120,7 +1145,15 @@ pub fn run_rule_for_each_with_globals(
             }
 
             if filtered.is_empty() {
-                return Ok(input.clone());
+                return Ok((
+                    input.clone(),
+                    RuleExecutionAudit {
+                        rule_name: rule.name.clone(),
+                        mode: "for_each".into(),
+                        matched_bindings: 0,
+                        actions_executed: 0,
+                    },
+                ));
             }
 
             let mut work = input.clone();
@@ -1128,7 +1161,15 @@ pub fn run_rule_for_each_with_globals(
             for b in filtered.iter() {
                 execute_actions(&mut work, &rule.actions, b, globals)?;
             }
-            return Ok(work);
+            return Ok((
+                work,
+                RuleExecutionAudit {
+                    rule_name: rule.name.clone(),
+                    mode: "for_each".into(),
+                    matched_bindings: filtered.len(),
+                    actions_executed: filtered.len().saturating_mul(rule.actions.len()),
+                },
+            ));
         }
         // Use input graph for candidate finding (we want to iterate over original edges)
         let candidates = find_candidate_edges(input, &pat.edge.ty);
@@ -1156,20 +1197,36 @@ pub fn run_rule_for_each_with_globals(
 
         // If no matches, return input graph (no clone needed)
         if matches.is_empty() {
-            return Ok(input.clone());
+            return Ok((
+                input.clone(),
+                RuleExecutionAudit {
+                    rule_name: rule.name.clone(),
+                    mode: "for_each".into(),
+                    matched_bindings: 0,
+                    actions_executed: 0,
+                },
+            ));
         }
 
         // Second pass: clone only if we have matches to process
         // Clone and ensure deltas are applied so find_candidate_edges can see all edges
         let mut work = input.clone();
         work.ensure_owned();
+        let matched_bindings = matches.len();
 
         // Apply actions for all matches
         for bindings in matches {
             execute_actions(&mut work, &rule.actions, &bindings, globals)?;
         }
-
-        return Ok(work);
+        return Ok((
+            work,
+            RuleExecutionAudit {
+                rule_name: rule.name.clone(),
+                mode: "for_each".into(),
+                matched_bindings,
+                actions_executed: matched_bindings.saturating_mul(rule.actions.len()),
+            },
+        ));
     }
 
     // Multi-pattern matching: use query plan to optimize join order
@@ -1209,7 +1266,15 @@ pub fn run_rule_for_each_with_globals(
 
     // If no matches, return input graph (no clone needed)
     if filtered_matches.is_empty() {
-        return Ok(input.clone());
+        return Ok((
+            input.clone(),
+            RuleExecutionAudit {
+                rule_name: rule.name.clone(),
+                mode: "for_each".into(),
+                matched_bindings: 0,
+                actions_executed: 0,
+            },
+        ));
     }
 
     // Debug logging removed for clean output
@@ -1223,7 +1288,15 @@ pub fn run_rule_for_each_with_globals(
         execute_actions(&mut work, &rule.actions, bindings, globals)?;
     }
 
-    Ok(work)
+    Ok((
+        work,
+        RuleExecutionAudit {
+            rule_name: rule.name.clone(),
+            mode: "for_each".into(),
+            matched_bindings: filtered_matches.len(),
+            actions_executed: filtered_matches.len().saturating_mul(rule.actions.len()),
+        },
+    ))
 }
 
 /// Finds candidate edges matching a pattern's edge type, sorted deterministically.

@@ -10,7 +10,7 @@ use crate::engine::errors::ExecError;
 use crate::engine::evidence::build_graph_from_evidence_ir;
 use crate::engine::expr_eval::{eval_expr_core, ExprContext};
 use crate::engine::graph::{BeliefGraph, EdgeId};
-use crate::engine::rule_exec::run_rule_for_each_with_globals;
+use crate::engine::rule_exec::run_rule_for_each_with_globals_audit;
 use crate::metrics::{eval_metric_expr, MetricContext, MetricRegistry};
 use grafial_frontend::ast::RuleDef;
 use grafial_frontend::{CallArg, ExprAst, ProgramAst};
@@ -73,6 +73,27 @@ pub struct FlowResult {
     pub metric_exports: HashMap<String, f64>,
     /// Named graph snapshots saved during pipeline execution
     pub snapshots: HashMap<String, BeliefGraph>,
+    /// Runtime intervention audit events emitted by rule transforms.
+    pub intervention_audit: Vec<InterventionAuditEvent>,
+}
+
+/// Runtime trace event for a rule-based intervention during flow execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterventionAuditEvent {
+    /// Flow name where the rule was executed.
+    pub flow: String,
+    /// Graph variable currently being transformed.
+    pub graph: String,
+    /// Transform descriptor (`apply_rule#i`, `apply_ruleset#i[j]`).
+    pub transform: String,
+    /// Rule name.
+    pub rule: String,
+    /// Rule execution mode.
+    pub mode: String,
+    /// Number of bindings that executed actions.
+    pub matched_bindings: usize,
+    /// Total action statements executed.
+    pub actions_executed: usize,
 }
 
 /// Runs a named flow from a parsed and validated program.
@@ -148,12 +169,15 @@ fn run_flow_internal<B: GraphBuilder>(
                         ExecError::Internal(format!("unknown start graph '{}'", start_graph))
                     })?
                     .clone();
-                for transform in transforms {
+                for (transform_idx, transform) in transforms.iter().enumerate() {
                     current = apply_transform(
                         transform,
                         &current,
                         &rule_defs_by_name,
                         &rule_globals,
+                        flow_name,
+                        &graph_def.name,
+                        transform_idx,
                         &mut result,
                     )?;
                 }
@@ -363,6 +387,9 @@ fn apply_transform(
     graph: &BeliefGraph,
     rules_by_name: &HashMap<String, RuleDef>,
     rule_globals: &HashMap<String, f64>,
+    flow_name: &str,
+    graph_name: &str,
+    transform_idx: usize,
     result: &mut FlowResult,
 ) -> Result<BeliefGraph, ExecError> {
     match transform {
@@ -370,16 +397,37 @@ fn apply_transform(
             let r = rules_by_name
                 .get(rule)
                 .ok_or_else(|| ExecError::Internal(format!("unknown rule '{}'", rule)))?;
-            run_rule_for_each_with_globals(graph, r, rule_globals)
+            let (next, audit) = run_rule_for_each_with_globals_audit(graph, r, rule_globals)?;
+            result.intervention_audit.push(InterventionAuditEvent {
+                flow: flow_name.to_string(),
+                graph: graph_name.to_string(),
+                transform: format!("apply_rule#{}", transform_idx),
+                rule: audit.rule_name,
+                mode: audit.mode,
+                matched_bindings: audit.matched_bindings,
+                actions_executed: audit.actions_executed,
+            });
+            Ok(next)
         }
         TransformIR::ApplyRuleset { rules } => {
             // Sequential application: each rule receives the previous rule's output
             let mut current = graph.clone();
-            for rule_name in rules {
+            for (rule_idx, rule_name) in rules.iter().enumerate() {
                 let r = rules_by_name.get(rule_name).ok_or_else(|| {
                     ExecError::Internal(format!("unknown rule '{}' in ruleset", rule_name))
                 })?;
-                current = run_rule_for_each_with_globals(&current, r, rule_globals)?;
+                let (next, audit) =
+                    run_rule_for_each_with_globals_audit(&current, r, rule_globals)?;
+                result.intervention_audit.push(InterventionAuditEvent {
+                    flow: flow_name.to_string(),
+                    graph: graph_name.to_string(),
+                    transform: format!("apply_ruleset#{}[{}]", transform_idx, rule_idx),
+                    rule: audit.rule_name,
+                    mode: audit.mode,
+                    matched_bindings: audit.matched_bindings,
+                    actions_executed: audit.actions_executed,
+                });
+                current = next;
             }
             Ok(current)
         }
