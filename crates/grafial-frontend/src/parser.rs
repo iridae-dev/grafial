@@ -1233,8 +1233,6 @@ fn collect_actions_from_block(
         match stmt.as_rule() {
             Rule::action_stmt
             | Rule::let_stmt
-            | Rule::set_expectation_stmt
-            | Rule::force_absent_stmt
             | Rule::nbnudge_stmt
             | Rule::soft_update_stmt
             | Rule::delete_stmt
@@ -1372,68 +1370,6 @@ fn build_action_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ActionStmt, Fr
                     FrontendError::ParseError("Missing expression in let statement".to_string())
                 })?,
             })
-        }
-        Rule::set_expectation_stmt => {
-            let mut node_var: Option<String> = None;
-            let mut attr: Option<String> = None;
-            let mut expr: Option<ExprAst> = None;
-            for p in inner.into_inner() {
-                match p.as_rule() {
-                    Rule::node_attr => {
-                        let mut na_it = p.into_inner();
-                        node_var = Some(
-                            na_it
-                                .next()
-                                .ok_or_else(|| {
-                                    FrontendError::ParseError(
-                                        "Missing node variable in set_expectation".to_string(),
-                                    )
-                                })?
-                                .as_str()
-                                .to_string(),
-                        );
-                        attr = Some(
-                            na_it
-                                .next()
-                                .ok_or_else(|| {
-                                    FrontendError::ParseError(
-                                        "Missing attribute name in set_expectation".to_string(),
-                                    )
-                                })?
-                                .as_str()
-                                .to_string(),
-                        );
-                    }
-                    Rule::expr => expr = Some(build_expr(p)),
-                    _ => {}
-                }
-            }
-            Ok(ActionStmt::SetExpectation {
-                node_var: node_var.ok_or_else(|| {
-                    FrontendError::ParseError(
-                        "Missing node attribute in set_expectation".to_string(),
-                    )
-                })?,
-                attr: attr.ok_or_else(|| {
-                    FrontendError::ParseError(
-                        "Missing node attribute in set_expectation".to_string(),
-                    )
-                })?,
-                expr: expr.ok_or_else(|| {
-                    FrontendError::ParseError("Missing expression in set_expectation".to_string())
-                })?,
-            })
-        }
-        Rule::force_absent_stmt => {
-            let edge_var = inner
-                .into_inner()
-                .find(|p| p.as_rule() == Rule::ident)
-                .ok_or_else(|| {
-                    FrontendError::ParseError("Missing edge variable in force_absent".to_string())
-                })?
-                .as_str()
-                .to_string();
-            Ok(ActionStmt::ForceAbsent { edge_var })
         }
         Rule::nbnudge_stmt => {
             // non_bayesian_nudge node.attr to expr [variance=...]
@@ -2514,8 +2450,8 @@ mod tests {
             rule R on M {
                 pattern (A:N)-[e:E]->(B:N)
                 action {
-                    set_expectation A.x = 10
-                    force_absent e
+                    non_bayesian_nudge A.x to 10 variance=preserve
+                    delete e confidence=high
                 }
             }
         "#;
@@ -2526,8 +2462,28 @@ mod tests {
         assert_eq!(rule.name, "R");
         assert_eq!(rule.patterns.len(), 1);
         assert_eq!(rule.actions.len(), 2);
-        assert!(matches!(rule.actions[0], ActionStmt::SetExpectation { .. }));
-        assert!(matches!(rule.actions[1], ActionStmt::ForceAbsent { .. }));
+        assert!(matches!(
+            rule.actions[0],
+            ActionStmt::NonBayesianNudge { .. }
+        ));
+        assert!(matches!(rule.actions[1], ActionStmt::DeleteEdge { .. }));
+    }
+
+    #[test]
+    fn parse_rule_rejects_legacy_action_keywords() {
+        let src = r#"
+            schema S { node N { x: Real } edge E {} }
+            belief_model M on S {}
+            rule R on M {
+                pattern (A:N)-[e:E]->(B:N)
+                action {
+                    set_expectation A.x = 10
+                    force_absent e
+                }
+            }
+        "#;
+        let result = parse_program(src);
+        assert!(result.is_err(), "legacy action keywords should be rejected");
     }
 
     #[test]
@@ -2639,7 +2595,7 @@ mod tests {
                 pattern (A:N)-[e:E]->(B:N)
                 action {
                     let temp = E[A.x] / 2
-                    set_expectation B.x = temp
+                    non_bayesian_nudge B.x to temp variance=preserve
                 }
             }
         "#;

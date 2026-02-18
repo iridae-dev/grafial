@@ -217,7 +217,7 @@ rule TagHighValueEntities on AnalyticsBeliefs {
 
   action {
     // Boost priority for high-value entities
-    set_expectation E.priority = E[E.priority] * 1.2
+    non_bayesian_nudge E.priority to E[E.priority] * 1.2 variance=preserve
   }
 
   mode: for_each

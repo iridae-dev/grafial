@@ -207,8 +207,6 @@ fn collect_action_spans(action_block: pest::iterators::Pair<Rule>, out: &mut Vec
                 }
             }
             Rule::let_stmt
-            | Rule::set_expectation_stmt
-            | Rule::force_absent_stmt
             | Rule::nbnudge_stmt
             | Rule::soft_update_stmt
             | Rule::delete_stmt
@@ -1034,8 +1032,8 @@ rule R on M {
     (A:N)-[ab:E]->(B:N)
   where prob(ab) > 0.1 and prob(ab) > 0.2 and prob(ab) > 0.3
   action {
-    set_expectation A.x = E[B.x]
-    set_expectation B.x = E[A.x]
+    non_bayesian_nudge A.x to E[B.x] variance=preserve
+    non_bayesian_nudge B.x to E[A.x] variance=preserve
     non_bayesian_nudge A.x to E[A.x] + 0.1 variance=decrease(factor=2.0)
     delete ab confidence=high
     suppress ab weight=20

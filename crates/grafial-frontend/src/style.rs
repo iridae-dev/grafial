@@ -19,6 +19,15 @@ pub struct CanonicalStyleLint {
 }
 
 const LINT_CANONICAL_INLINE_ARGS: &str = "canonical_inline_args";
+const LINT_CANONICAL_SET_EXPECTATION: &str = "canonical_set_expectation";
+const LINT_CANONICAL_FORCE_ABSENT: &str = "canonical_force_absent";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LineRewrite {
+    code: &'static str,
+    message: &'static str,
+    replacement: String,
+}
 
 /// Returns canonical-style lints for compatibility syntax forms.
 pub fn lint_canonical_style(source: &str) -> Vec<CanonicalStyleLint> {
@@ -26,8 +35,8 @@ pub fn lint_canonical_style(source: &str) -> Vec<CanonicalStyleLint> {
         .lines()
         .enumerate()
         .filter_map(|(line_idx, line)| {
-            let rewrite = canonicalize_line(line)?;
-            if rewrite == line {
+            let rewrite = rewrite_line(line)?;
+            if rewrite.replacement == line {
                 return None;
             }
             let range = SourceRange {
@@ -41,11 +50,10 @@ pub fn lint_canonical_style(source: &str) -> Vec<CanonicalStyleLint> {
                 },
             };
             Some(CanonicalStyleLint {
-                code: LINT_CANONICAL_INLINE_ARGS,
-                message: "Use canonical inline args instead of parenthesized compatibility syntax"
-                    .into(),
+                code: rewrite.code,
+                message: rewrite.message.into(),
                 range,
-                replacement: rewrite,
+                replacement: rewrite.replacement,
             })
         })
         .collect()
@@ -60,8 +68,8 @@ pub fn format_canonical_style(source: &str) -> String {
         } else {
             (segment, "")
         };
-        match canonicalize_line(line) {
-            Some(rewrite) => out.push_str(&rewrite),
+        match rewrite_line(line) {
+            Some(rewrite) => out.push_str(&rewrite.replacement),
             None => out.push_str(line),
         }
         out.push_str(newline);
@@ -69,22 +77,54 @@ pub fn format_canonical_style(source: &str) -> String {
     out
 }
 
-fn canonicalize_line(line: &str) -> Option<String> {
+fn rewrite_line(line: &str) -> Option<LineRewrite> {
     let (code_part, comment_part) = split_line_comment(line);
 
     let mut rewritten = code_part.to_string();
+    let mut lint_code = "";
+    let mut lint_message = "";
     let mut changed = false;
 
+    if let Some(next) = rewrite_set_expectation_legacy(&rewritten) {
+        rewritten = next;
+        lint_code = LINT_CANONICAL_SET_EXPECTATION;
+        lint_message =
+            "Use non_bayesian_nudge ... variance=preserve instead of legacy set_expectation";
+        changed = true;
+    }
+    if let Some(next) = rewrite_force_absent_legacy(&rewritten) {
+        rewritten = next;
+        if lint_code.is_empty() {
+            lint_code = LINT_CANONICAL_FORCE_ABSENT;
+            lint_message = "Use delete ... confidence=high instead of legacy force_absent";
+        }
+        changed = true;
+    }
     if let Some(next) = rewrite_soft_update_parenthesized(&rewritten) {
         rewritten = next;
+        if lint_code.is_empty() {
+            lint_code = LINT_CANONICAL_INLINE_ARGS;
+            lint_message =
+                "Use canonical inline args instead of parenthesized compatibility syntax";
+        }
         changed = true;
     }
     if let Some(next) = rewrite_keyword_parenthesized(&rewritten, "delete", &["confidence="]) {
         rewritten = next;
+        if lint_code.is_empty() {
+            lint_code = LINT_CANONICAL_INLINE_ARGS;
+            lint_message =
+                "Use canonical inline args instead of parenthesized compatibility syntax";
+        }
         changed = true;
     }
     if let Some(next) = rewrite_keyword_parenthesized(&rewritten, "suppress", &["weight="]) {
         rewritten = next;
+        if lint_code.is_empty() {
+            lint_code = LINT_CANONICAL_INLINE_ARGS;
+            lint_message =
+                "Use canonical inline args instead of parenthesized compatibility syntax";
+        }
         changed = true;
     }
 
@@ -99,7 +139,11 @@ fn canonicalize_line(line: &str) -> Option<String> {
         }
         out.push_str(comment.trim_start());
     }
-    Some(out)
+    Some(LineRewrite {
+        code: lint_code,
+        message: lint_message,
+        replacement: out,
+    })
 }
 
 fn split_line_comment(line: &str) -> (&str, Option<&str>) {
@@ -108,6 +152,100 @@ fn split_line_comment(line: &str) -> (&str, Option<&str>) {
     } else {
         (line, None)
     }
+}
+
+fn rewrite_set_expectation_legacy(code: &str) -> Option<String> {
+    let trimmed = code.trim_start();
+    let leading = &code[..code.len().saturating_sub(trimmed.len())];
+    let keyword = "set_expectation";
+    if !trimmed.starts_with(keyword) {
+        return None;
+    }
+    let post_keyword = trimmed.chars().nth(keyword.len());
+    if !matches!(post_keyword, Some(c) if c.is_whitespace()) {
+        return None;
+    }
+
+    let rhs = trimmed[keyword.len()..].trim_start();
+    let (target, expr) = rhs.split_once('=')?;
+    let target = target.trim();
+    if !is_node_attr(target) {
+        return None;
+    }
+
+    let (expr, had_semicolon) = split_trailing_semicolon(expr.trim());
+    if expr.is_empty() {
+        return None;
+    }
+
+    let mut rewritten = format!(
+        "{}non_bayesian_nudge {} to {} variance=preserve",
+        leading, target, expr
+    );
+    if had_semicolon {
+        rewritten.push(';');
+    }
+    if rewritten == code.trim_end() {
+        None
+    } else {
+        Some(rewritten)
+    }
+}
+
+fn rewrite_force_absent_legacy(code: &str) -> Option<String> {
+    let trimmed = code.trim_start();
+    let leading = &code[..code.len().saturating_sub(trimmed.len())];
+    let keyword = "force_absent";
+    if !trimmed.starts_with(keyword) {
+        return None;
+    }
+    let post_keyword = trimmed.chars().nth(keyword.len());
+    if !matches!(post_keyword, Some(c) if c.is_whitespace()) {
+        return None;
+    }
+
+    let rhs = trimmed[keyword.len()..].trim_start();
+    let (edge_var, had_semicolon) = split_trailing_semicolon(rhs);
+    let edge_var = edge_var.trim();
+    if !is_ident(edge_var) {
+        return None;
+    }
+
+    let mut rewritten = format!("{}delete {} confidence=high", leading, edge_var);
+    if had_semicolon {
+        rewritten.push(';');
+    }
+    if rewritten == code.trim_end() {
+        None
+    } else {
+        Some(rewritten)
+    }
+}
+
+fn split_trailing_semicolon(input: &str) -> (&str, bool) {
+    let trimmed = input.trim_end();
+    if let Some(stripped) = trimmed.strip_suffix(';') {
+        (stripped.trim_end(), true)
+    } else {
+        (trimmed, false)
+    }
+}
+
+fn is_ident(input: &str) -> bool {
+    let mut chars = input.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn is_node_attr(input: &str) -> bool {
+    let (lhs, rhs) = match input.split_once('.') {
+        Some(parts) => parts,
+        None => return false,
+    };
+    is_ident(lhs) && is_ident(rhs)
 }
 
 fn rewrite_soft_update_parenthesized(code: &str) -> Option<String> {
@@ -193,6 +331,7 @@ mod tests {
             lints[0].replacement,
             "soft_update A.score ~= 1.0 precision=0.2 count=3"
         );
+        assert_eq!(lints[0].code, LINT_CANONICAL_INLINE_ARGS);
     }
 
     #[test]
@@ -202,6 +341,29 @@ mod tests {
         assert_eq!(lints.len(), 2);
         assert_eq!(lints[0].replacement, "delete e confidence=high");
         assert_eq!(lints[1].replacement, "suppress e weight=10");
+        assert_eq!(lints[0].code, LINT_CANONICAL_INLINE_ARGS);
+        assert_eq!(lints[1].code, LINT_CANONICAL_INLINE_ARGS);
+    }
+
+    #[test]
+    fn lint_flags_legacy_set_expectation() {
+        let src = "set_expectation A.score = E[A.score] + 0.1";
+        let lints = lint_canonical_style(src);
+        assert_eq!(lints.len(), 1);
+        assert_eq!(lints[0].code, LINT_CANONICAL_SET_EXPECTATION);
+        assert_eq!(
+            lints[0].replacement,
+            "non_bayesian_nudge A.score to E[A.score] + 0.1 variance=preserve"
+        );
+    }
+
+    #[test]
+    fn lint_flags_legacy_force_absent() {
+        let src = "force_absent e";
+        let lints = lint_canonical_style(src);
+        assert_eq!(lints.len(), 1);
+        assert_eq!(lints[0].code, LINT_CANONICAL_FORCE_ABSENT);
+        assert_eq!(lints[0].replacement, "delete e confidence=high");
     }
 
     #[test]
@@ -209,6 +371,16 @@ mod tests {
         let src = "  delete e (confidence=high) // keep\n";
         let out = format_canonical_style(src);
         assert_eq!(out, "  delete e confidence=high // keep\n");
+    }
+
+    #[test]
+    fn format_rewrites_legacy_forms() {
+        let src = "  set_expectation A.x = 10 // keep\n  force_absent e\n";
+        let out = format_canonical_style(src);
+        assert_eq!(
+            out,
+            "  non_bayesian_nudge A.x to 10 variance=preserve // keep\n  delete e confidence=high\n"
+        );
     }
 
     #[test]

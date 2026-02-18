@@ -56,7 +56,7 @@
         },
         {
           "name": "keyword.other.grafial",
-          "match": "\\b(node|edge|on|pattern|where|action|observe|graph|metric|export|import_metric|export_metric|as|let|set_expectation|force_absent|mode|from_evidence|from_graph|apply_rule|apply_ruleset|snapshot|prune_edges|exists|exist)\\b"
+          "match": "\\b(node|edge|on|pattern|where|action|observe|graph|metric|export|import_metric|export_metric|as|let|non_bayesian_nudge|to|variance|delete|suppress|mode|from_evidence|from_graph|apply_rule|apply_ruleset|snapshot|prune_edges|exists|exist)\\b"
         },
         {
           "name": "keyword.operator.logical.grafial",
@@ -396,4 +396,3 @@
     }
   }
 }
-

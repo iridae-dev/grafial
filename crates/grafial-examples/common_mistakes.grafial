@@ -64,7 +64,7 @@ rule BadMultiHopPattern on ExampleBeliefs {
     and exists (X)-[xb:LINKS]->(B) where prob(xb) >= 0.7  // ERROR: second exists not supported
 
   action {
-    set_expectation B.value = E[A.value] * 0.9
+    non_bayesian_nudge B.value to E[A.value] * 0.9 variance=preserve
   }
 
   mode: for_each
@@ -81,17 +81,17 @@ rule CorrectMultiHopPattern on ExampleBeliefs {
     and E[A.value] > E[B.value] + 0.1
 
   action {
-    set_expectation B.value = E[A.value] * 0.9
+    non_bayesian_nudge B.value to E[A.value] * 0.9 variance=preserve
   }
 
   mode: fixpoint  // Iterates until convergence, achieving transitive effect
 }
 
 // ========================================
-// MISTAKE 3: Forgetting that set_expectation preserves precision
+// MISTAKE 3: Forgetting that non_bayesian_nudge(... variance=preserve) preserves precision
 // ========================================
 
-// ❌ MISCONCEPTION: Thinking set_expectation is a full Bayesian update
+// ❌ MISCONCEPTION: Thinking non_bayesian_nudge(... variance=preserve) is a full Bayesian update
 rule MisunderstoodUpdate on ExampleBeliefs {
   pattern
     (A:Item)-[ab:LINKS]->(B:Item)
@@ -100,26 +100,24 @@ rule MisunderstoodUpdate on ExampleBeliefs {
     prob(ab) >= 0.7
 
   action {
-    // set_expectation shifts mean but preserves variance
+    // non_bayesian_nudge(... variance=preserve) shifts mean but preserves variance
     // This is NOT equivalent to observing new evidence
     // It's a manual intervention for control actions
-    set_expectation A.value = E[A.value] + 1.0
-
-    // If you want a true Bayesian update, use evidence blocks instead!
+    non_bayesian_nudge A.value to E[A.value] + 1.0 variance=preserve // If you want a true Bayesian update, use evidence blocks instead!
   }
 
   mode: for_each
 }
 
 // ✅ CORRECT: Understanding when to use each approach
-// - set_expectation: Control actions, policy enforcement, counterfactuals
+// - non_bayesian_nudge(... variance=preserve): Control actions, policy enforcement, counterfactuals
 // - observe (in evidence): True data observations, Bayesian belief updates
 
 // ========================================
-// MISTAKE 4: Confusing force_absent with hard constraint
+// MISTAKE 4: Confusing delete ... confidence=high with hard constraint
 // ========================================
 
-// ❌ MISCONCEPTION: Thinking force_absent sets probability to exactly 0
+// ❌ MISCONCEPTION: Thinking delete ... confidence=high sets probability to exactly 0
 rule MisunderstoodForceAbsent on ExampleBeliefs {
   pattern
     (A:Item)-[ab:LINKS]->(B:Item)
@@ -128,8 +126,7 @@ rule MisunderstoodForceAbsent on ExampleBeliefs {
     prob(ab) >= 0.7
 
   action {
-    force_absent ab
-    // Sets edge to Beta(1, 10⁶) → P(exist) ≈ 0.000001
+    delete ab confidence=high // Sets edge to Beta(1, 10⁶) → P(exist) ≈ 0.000001
     // NOT exactly zero! Still a valid probability distribution
     // Strong evidence could theoretically update this (though unlikely)
   }
@@ -137,7 +134,7 @@ rule MisunderstoodForceAbsent on ExampleBeliefs {
   mode: for_each
 }
 
-// ✅ UNDERSTANDING: force_absent is a finite approximation to determinism
+// ✅ UNDERSTANDING: delete ... confidence=high is a finite approximation to determinism
 // - Preserves probabilistic semantics
 // - Avoids numerical issues with exact zeros
 // - Effectively removes edge from consideration
@@ -157,7 +154,7 @@ rule BadProbUsage on ExampleBeliefs {
     prob(A) >= 0.7  // ERROR: A is a node, not an edge
 
   action {
-    set_expectation B.value = E[A.value]
+    non_bayesian_nudge B.value to E[A.value] variance=preserve
   }
 
   mode: for_each
@@ -174,7 +171,7 @@ rule CorrectProbUsage on ExampleBeliefs {
     and E[A.value] > 10.0  // Correct: E[] for node attributes
 
   action {
-    set_expectation B.value = E[A.value]
+    non_bayesian_nudge B.value to E[A.value] variance=preserve
   }
 
   mode: for_each
@@ -274,8 +271,8 @@ rule PotentiallyNonConvergent on ExampleBeliefs {
 
   action {
     // Oscillation risk: values might bounce back and forth
-    set_expectation A.value = E[B.value] * 1.1
-    set_expectation B.value = E[A.value] * 1.1
+    non_bayesian_nudge A.value to E[B.value] * 1.1 variance=preserve
+    non_bayesian_nudge B.value to E[A.value] * 1.1 variance=preserve
   }
 
   mode: fixpoint  // May not converge!
@@ -293,7 +290,7 @@ rule ConvergentFixpoint on ExampleBeliefs {
 
   action {
     // Unidirectional update with decay prevents oscillation
-    set_expectation B.value = E[A.value] * 0.9  // Decay factor < 1.0
+    non_bayesian_nudge B.value to E[A.value] * 0.9 variance=preserve // Decay factor < 1.0
   }
 
   mode: fixpoint
@@ -314,14 +311,14 @@ rule ConvergentFixpoint on ExampleBeliefs {
 rule FirstRule on ExampleBeliefs {
   pattern (A:Item)
   where E[A.value] > 0.0
-  action { set_expectation A.score = 0.5 }
+  action { non_bayesian_nudge A.score to 0.5 variance=preserve }
   mode: for_each
 }
 
 rule SecondRule on ExampleBeliefs {
   pattern (A:Item)
   where E[A.score] == 0.5  // Assumes FirstRule ran first!
-  action { set_expectation A.value = 100.0 }
+  action { non_bayesian_nudge A.value to 100.0 variance=preserve }
   mode: for_each
 }
 */
@@ -335,7 +332,7 @@ rule SequenceStepOne on ExampleBeliefs {
     E[A.value] > 0.0
 
   action {
-    set_expectation A.score = 0.5
+    non_bayesian_nudge A.score to 0.5 variance=preserve
   }
 
   mode: for_each
@@ -349,7 +346,7 @@ rule SequenceStepTwo on ExampleBeliefs {
     E[A.score] >= 0.5
 
   action {
-    set_expectation A.value = 100.0
+    non_bayesian_nudge A.value to 100.0 variance=preserve
   }
 
   mode: for_each
@@ -381,7 +378,7 @@ rule BadNodeComparison on ExampleBeliefs {
     A == Item["A"]  // ERROR: Cannot compare node variables to literals this way
 
   action {
-    set_expectation B.value = 10.0
+    non_bayesian_nudge B.value to 10.0 variance=preserve
   }
 
   mode: for_each
@@ -399,7 +396,7 @@ rule CorrectNodeSelection on ExampleBeliefs {
     and prob(ab) >= 0.7
 
   action {
-    set_expectation B.value = E[A.value] * 0.9
+    non_bayesian_nudge B.value to E[A.value] * 0.9 variance=preserve
   }
 
   mode: for_each
@@ -413,8 +410,8 @@ rule CorrectNodeSelection on ExampleBeliefs {
 
 // 1. Use degree() instead of exists in metrics
 // 2. Use fixpoint mode for multi-hop inference
-// 3. Understand set_expectation is NOT a Bayesian update
-// 4. Remember force_absent is not exactly zero
+// 3. Understand non_bayesian_nudge(... variance=preserve) is NOT a Bayesian update
+// 4. Remember delete ... confidence=high is not exactly zero
 // 5. Use prob() for edges, E[] for node attributes
 // 6. Handle division by zero carefully
 // 7. Document and justify prior choices

@@ -5,6 +5,7 @@
 use grafial_core::{
     parse_and_validate, parse_validate_and_lower, run_flow, run_flow_ir, ExecError,
 };
+use grafial_frontend::lint_canonical_style;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -48,6 +49,13 @@ fn phase6_release_gate_examples_parse_validate_and_execute_all_flows() -> Result
 
     for file in files {
         let src = read_file(&file)?;
+        let style_lints = lint_canonical_style(&src);
+        assert!(
+            style_lints.is_empty(),
+            "example {} must use canonical syntax only (found {} style lints)",
+            file.display(),
+            style_lints.len()
+        );
         let ast = parse_and_validate(&src)?;
         let ir = parse_validate_and_lower(&src)?;
 

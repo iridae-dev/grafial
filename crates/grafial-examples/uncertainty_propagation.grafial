@@ -74,7 +74,7 @@ rule FlagHighRisk on FraudBeliefs {
   action {
     // Soft update: increase risk score but preserve uncertainty
     // This is different from a hard constraint - we're updating beliefs
-    set_expectation T.risk_score = E[T.risk_score] * 1.1
+    non_bayesian_nudge T.risk_score to E[T.risk_score] * 1.1 variance=preserve
   }
   
   mode: for_each

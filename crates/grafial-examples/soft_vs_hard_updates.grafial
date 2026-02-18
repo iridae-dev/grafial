@@ -43,7 +43,7 @@ rule BalanceAllocation on AllocationBeliefs {
     and E[B.allocation] < 0.5
   
   action {
-    // SOFT UPDATE: set_expectation shifts the posterior mean while preserving precision
+    // SOFT UPDATE: non_bayesian_nudge(... variance=preserve) shifts the posterior mean while preserving precision
     // This is NOT a full Bayesian update - it's a manual intervention for control actions
     //
     // Mechanically: updates μ while keeping τ (precision) unchanged
@@ -57,19 +57,17 @@ rule BalanceAllocation on AllocationBeliefs {
     //
     // For true Bayesian evidence incorporation, use observe statements instead
     let transfer = (E[A.allocation] - E[B.allocation]) * 0.2
-    set_expectation A.allocation = E[A.allocation] - transfer
-    set_expectation B.allocation = E[B.allocation] + transfer
-
-    // Compare to alternatives:
+    non_bayesian_nudge A.allocation to E[A.allocation] - transfer variance=preserve
+    non_bayesian_nudge B.allocation to E[B.allocation] + transfer variance=preserve // Compare to alternatives:
     // 1. Hard constraint (not supported): A.allocation = 0.7 → eliminates uncertainty
     // 2. Bayesian observation: observe A.allocation = 0.7 → combines with prior
-    // 3. set_expectation (used here): sets mean directly, preserves variance
+    // 3. non_bayesian_nudge(... variance=preserve) (used here): sets mean directly, preserves variance
   }
   
   mode: for_each
 }
 
-// Rule that uses force_absent: sets edge probability to near-zero
+// Rule that uses delete ... confidence=high: sets edge probability to near-zero
 // But this is still probabilistic (not exactly zero)
 rule DisconnectOverloaded on AllocationBeliefs {
   pattern
@@ -81,7 +79,7 @@ rule DisconnectOverloaded on AllocationBeliefs {
     and E[B.allocation] > 0.9
   
   action {
-    // force_absent: sets edge to Beta(1, 10⁶) → P(exist) ≈ 0.000001
+    // delete ... confidence=high: sets edge to Beta(1, 10⁶) → P(exist) ≈ 0.000001
     // Properties:
     // - NOT exactly zero (still a valid probability distribution)
     // - Highly concentrated: variance ≈ 10⁻¹²
@@ -90,7 +88,7 @@ rule DisconnectOverloaded on AllocationBeliefs {
     //
     // This is a finite approximation to a deterministic constraint
     // Preserves probabilistic semantics while achieving near-determinism
-    force_absent ab
+    delete ab confidence=high
   }
   
   mode: for_each

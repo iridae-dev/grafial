@@ -35,7 +35,10 @@ The server speaks stdio LSP. It is started by the VS Code extension, but you can
     - `stat_delete_explanation`
     - `stat_suppress_explanation`
 - Code actions (quick fixes):
-  - Rewrite compatibility forms to canonical inline arguments
+  - Rewrite legacy/compatibility forms to canonical syntax:
+    - `set_expectation` -> `non_bayesian_nudge ... variance=preserve`
+    - `force_absent` -> `delete ... confidence=high`
+    - parenthesized inline args -> canonical inline args
   - Wrap bare uncertain field accesses with `E[...]` when validation requests explicit wrappers
 - Scoped lint suppression pragmas:
   - `// grafial-lint: ignore(<code>)`

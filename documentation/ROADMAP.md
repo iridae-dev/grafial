@@ -12,7 +12,7 @@ This is the canonical compiler/runtime roadmap for Grafial.
 - Phase 5: Completed
 - Phase 6: Completed
 - Phase 7: Completed
-- Phase 8: Future
+- Phase 8: Completed
 - Phase 9: Future
 - Phase 10: Future
 - Phase 11: Future
@@ -214,6 +214,24 @@ Completion notes (this change):
 - Expand canonical style lint/fix coverage for remaining compatibility forms.
 - Migrate examples/docs to canonical syntax-first presentation and gate/retire remaining legacy parser paths.
 - We don't have to support anything "legacy" since we haven't yet released Grafial to the public. Ensure the right way is the only way. 
+
+Completion notes (this change):
+- Added canonical modernization lint/fix coverage for legacy actions:
+  - `canonical_set_expectation`
+  - `canonical_force_absent`
+  - existing `canonical_inline_args` coverage retained
+- Updated style tooling rewrites:
+  - `set_expectation A.attr = expr` -> `non_bayesian_nudge A.attr to expr variance=preserve`
+  - `force_absent e` -> `delete e confidence=high`
+  - parenthesized compatibility args remain auto-rewritten to inline canonical form
+- Retired legacy parser paths:
+  - removed `set_expectation` and `force_absent` from grammar + parser action parsing
+  - canonical action syntax is now the only accepted source syntax for these operations
+- Migrated shipped examples and language docs to canonical syntax-first usage.
+- Added migration documentation in `documentation/MIGRATION_GUIDE.md`.
+- Strengthened gates/tests:
+  - phase release-gate now enforces zero canonical-style compatibility lints across all shipped examples
+  - added frontend/LSP tests for legacy modernization quick-fix payloads and rewrites
 
 ## Phase 9 - Advanced Probabilistic Semantics
 

@@ -227,7 +227,7 @@ fn parse_numbers_with_different_formats() {
         rule R on M {
             pattern (A:N)-[e:E]->(B:N)
             where E[A.x] >= 42
-            set_expectation A.x = 3.14159
+            action { non_bayesian_nudge A.x to 3.14159 variance=preserve }
         }
     "#;
     let result = parse_program(src);
@@ -316,7 +316,7 @@ fn parse_program_with_all_components() {
         rule R on M {
             pattern (A:N)-[e:E]->(B:N)
             where prob(e) >= 0.5
-            set_expectation A.x = 10
+            action { non_bayesian_nudge A.x to 10 variance=preserve }
         }
 
         flow F on M {

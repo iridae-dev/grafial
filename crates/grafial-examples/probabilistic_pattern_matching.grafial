@@ -53,7 +53,7 @@ rule PropagateInfluence on SocialBeliefs {
   action {
     // Soft update: increase B's influence based on A's, but preserve uncertainty
     let influence_transfer = (E[A.influence] - E[B.influence]) * 0.1
-    set_expectation B.influence = E[B.influence] + influence_transfer
+    non_bayesian_nudge B.influence to E[B.influence] + influence_transfer variance=preserve
   }
   
   mode: for_each
@@ -75,7 +75,7 @@ rule IndirectInfluence on SocialBeliefs {
   action {
     // Indirect influence: weaker than direct
     let influence_transfer = (E[A.influence] - E[B.influence]) * 0.05
-    set_expectation B.influence = E[B.influence] + influence_transfer
+    non_bayesian_nudge B.influence to E[B.influence] + influence_transfer variance=preserve
   }
 
   mode: for_each
@@ -92,7 +92,7 @@ rule BoostIsolatedNodes on SocialBeliefs {
 
   action {
     // Boost influence for isolated but valuable nodes
-    set_expectation A.influence = E[A.influence] * 1.1
+    non_bayesian_nudge A.influence to E[A.influence] * 1.1 variance=preserve
   }
 
   mode: for_each
@@ -109,7 +109,7 @@ rule PruneWeakConnections on SocialBeliefs {
   
   action {
     // Force absent: but this is still probabilistic (sets to near-zero, not exactly zero)
-    force_absent ab
+    delete ab confidence=high
   }
   
   mode: for_each

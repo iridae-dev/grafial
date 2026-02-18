@@ -101,10 +101,8 @@ where_clause = { KW_where ~ expr ~ ("=>" ~ action_block)? }
 
 action_clause = { KW_action ~ action_block }
 action_block = { "{" ~ (COMMENT | action_stmt)* ~ "}" }
-action_stmt = { let_stmt | set_expectation_stmt | force_absent_stmt | nbnudge_stmt | soft_update_stmt | delete_stmt | suppress_stmt }
+action_stmt = { let_stmt | nbnudge_stmt | soft_update_stmt | delete_stmt | suppress_stmt }
 let_stmt = { KW_let ~ ident ~ "=" ~ expr ~ ";"? }
-set_expectation_stmt = { KW_set_expectation ~ node_attr ~ "=" ~ expr ~ ";"? }
-force_absent_stmt = { KW_force_absent ~ ident ~ ";"? }
 node_attr = { ident ~ "." ~ ident }
 nbnudge_stmt = { KW_non_bayesian_nudge ~ node_attr ~ KW_to ~ expr ~ variance_clause? ~ ";"? }
 variance_clause = { KW_variance ~ "=" ~ ( KW_preserve | increase_clause | decrease_clause ) }
@@ -259,8 +257,6 @@ KW_as = _{ kw_as_tok }
 KW_export_metric = _{ kw_export_metric_tok }
 KW_import_metric = _{ kw_import_metric_tok }
 kw_let_tok = @{ "let" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_set_expectation_tok = @{ "set_expectation" ~ !(ASCII_ALPHANUMERIC | "_") }
-kw_force_absent_tok = @{ "force_absent" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_exists_tok = @{ "exists" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_and_tok = @{ "and" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_or_tok = @{ "or" ~ !(ASCII_ALPHANUMERIC | "_") }
@@ -274,8 +270,6 @@ KW_not = _{ kw_not_tok }
 KW_true = _{ kw_true_tok }
 KW_false = _{ kw_false_tok }
 KW_let = _{ kw_let_tok }
-KW_set_expectation = _{ kw_set_expectation_tok }
-KW_force_absent = _{ kw_force_absent_tok }
 KW_exists = _{ kw_exists_tok }
 KW_to = _{ kw_to_tok }
 KW_non_bayesian_nudge = _{ kw_non_bayesian_nudge_tok }

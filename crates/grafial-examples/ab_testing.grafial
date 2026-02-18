@@ -60,7 +60,7 @@ rule DetermineWinner on TestBeliefs {
   action {
     // Mark B as winner by boosting its posterior slightly
     // In production, this might trigger deployment or further testing
-    set_expectation B.conversion_rate = E[B.conversion_rate] * 1.01
+    non_bayesian_nudge B.conversion_rate to E[B.conversion_rate] * 1.01 variance=preserve
   }
 
   mode: for_each
@@ -126,7 +126,7 @@ rule DecideWithLoss on TestBeliefs {
   action {
     // Deploy variant A if it clears threshold
     // In practice, would trigger deployment pipeline
-    set_expectation A.conversion_rate = E[A.conversion_rate] * 1.05
+    non_bayesian_nudge A.conversion_rate to E[A.conversion_rate] * 1.05 variance=preserve
   }
 
   mode: for_each

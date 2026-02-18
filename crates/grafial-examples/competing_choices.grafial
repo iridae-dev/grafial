@@ -63,7 +63,7 @@ rule OptimizeLatency on RoutingBeliefs {
   action {
     // Route to faster destination
     // But this is still probabilistic - we're updating beliefs, not forcing
-    set_expectation A.latency = E[A.latency] * 0.9
+    non_bayesian_nudge A.latency to E[A.latency] * 0.9 variance=preserve
   }
   
   mode: for_each
@@ -82,7 +82,7 @@ rule HandleUncertainRoute on RoutingBeliefs {
   action {
     // Flag router for manual review by adjusting latency (proxy for attention)
     // In production, this might trigger an alert or additional data collection
-    set_expectation A.latency = E[A.latency] * 1.1
+    non_bayesian_nudge A.latency to E[A.latency] * 1.1 variance=preserve
   }
 
   mode: for_each

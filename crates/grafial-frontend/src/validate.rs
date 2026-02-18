@@ -217,8 +217,6 @@ fn collect_action_spans(action_block: pest::iterators::Pair<Rule>, out: &mut Vec
                 }
             }
             Rule::let_stmt
-            | Rule::set_expectation_stmt
-            | Rule::force_absent_stmt
             | Rule::nbnudge_stmt
             | Rule::soft_update_stmt
             | Rule::delete_stmt

@@ -220,12 +220,17 @@ rule BoostLow on SocialBeliefs {
 Supported action statements:
 
 - `let x = expr`
-- `set_expectation A.attr = expr` (legacy-compatible)
-- `force_absent e` (legacy-compatible)
 - `non_bayesian_nudge A.attr to expr variance=...`
 - `A.attr ~= expr precision=... count=...`
 - `delete e confidence=low|high`
 - `suppress e weight=...`
+
+Legacy action keywords are no longer accepted:
+
+- `set_expectation A.attr = expr`
+- `force_absent e`
+
+Use `grafial <file> --fix-style` (or the LSP quick fix) to rewrite legacy files automatically.
 
 Soft-update and edge-action argument forms:
 
@@ -240,9 +245,8 @@ Soft-update and edge-action argument forms:
 
 Semantics summary:
 
-- `set_expectation`: set mean only; preserve precision.
 - `non_bayesian_nudge`:
-  - `preserve`: keep precision
+  - `preserve`: set mean only; keep precision
   - `increase(f)`: multiply precision by `f` (default `0.5`)
   - `decrease(f)`: multiply precision by `f` (default `2.0`)
 - `~=`: Normal-Normal soft update with optional `count` multiplier.
@@ -403,11 +407,23 @@ grafial file.grafial --lint-style
 grafial file.grafial --fix-style
 ```
 
-Current canonical-style rewrites target compatibility argument forms for:
+Current canonical-style rewrites cover:
 
-- soft updates (`~=`)
-- `delete`
-- `suppress`
+- legacy action keywords:
+  - `set_expectation` -> `non_bayesian_nudge ... variance=preserve`
+  - `force_absent` -> `delete ... confidence=high`
+- compatibility argument forms:
+  - soft updates (`~=`)
+  - `delete`
+  - `suppress`
+
+Stable canonical-style lint codes:
+
+- `canonical_set_expectation`
+- `canonical_force_absent`
+- `canonical_inline_args`
+
+See `documentation/MIGRATION_GUIDE.md` for migration details.
 
 ## 16. Statistical Lints and Suppression Pragmas
 

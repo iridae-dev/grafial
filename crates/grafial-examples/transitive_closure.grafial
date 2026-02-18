@@ -50,10 +50,8 @@ rule PropagateReachability on NetworkBeliefs {
     // Propagate reachability with decay (distance penalty)
     // Reachability decreases as we move further from source
     let propagated = E[A.reachability] * 0.9
-    set_expectation B.reachability = propagated
-
-    // Update distance: increment by 1 hop
-    set_expectation B.distance = E[A.distance] + 1.0
+    non_bayesian_nudge B.reachability to propagated variance=preserve // Update distance: increment by 1 hop
+    non_bayesian_nudge B.distance to E[A.distance] + 1.0 variance=preserve
   }
 
   mode: fixpoint  // Run until convergence (no more changes above threshold)
@@ -104,7 +102,7 @@ rule PropagateInfluence on NetworkBeliefs {
     let out_degree = degree(A, min_prob=0.7)
     let influence_share = E[A.reachability] / out_degree
     let new_influence = E[B.reachability] + influence_share * 0.15
-    set_expectation B.reachability = new_influence
+    non_bayesian_nudge B.reachability to new_influence variance=preserve
   }
 
   mode: fixpoint
@@ -142,11 +140,9 @@ rule ComputeShortestPath on NetworkBeliefs {
 
   action {
     // Bellman-Ford style update: distance via A + 1
-    set_expectation B.distance = E[A.distance] + 1.0
-
-    // Reachability inverse of distance (higher distance = lower reachability)
+    non_bayesian_nudge B.distance to E[A.distance] + 1.0 variance=preserve // Reachability inverse of distance (higher distance = lower reachability)
     let reach = 1.0 / (1.0 + E[B.distance])
-    set_expectation B.reachability = reach
+    non_bayesian_nudge B.reachability to reach variance=preserve
   }
 
   mode: fixpoint

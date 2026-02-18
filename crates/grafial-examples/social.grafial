@@ -41,14 +41,12 @@ rule TransferAndDisconnect on SocialBeliefs {
   action {
     // Transfer half of A's value to B
     let v_ab = E[A.some_value] / 2
-    set_expectation A.some_value = E[A.some_value] - v_ab
-    set_expectation B.some_value = E[B.some_value] + v_ab
-
-    // Disconnect B->C to prevent further propagation
-    // force_absent sets edge to Beta(1, 10⁶) → P(exist) ≈ 0.000001
+    non_bayesian_nudge A.some_value to E[A.some_value] - v_ab variance=preserve
+    non_bayesian_nudge B.some_value to E[B.some_value] + v_ab variance=preserve // Disconnect B->C to prevent further propagation
+    // delete ... confidence=high sets edge to Beta(1, 10⁶) → P(exist) ≈ 0.000001
     // NOT exactly zero - still a valid probability distribution
     // Strong subsequent evidence could theoretically shift this belief
-    force_absent bc
+    delete bc confidence=high
   }
 
   mode: for_each

@@ -160,6 +160,7 @@ impl Backend {
         let mut diagnostics: Vec<lsp::Diagnostic> = Vec::new();
         let mut syntax_ok = false;
         let mut parsed_ast = None;
+        let suppressions = collect_lint_suppressions(&text);
 
         // Phase 1: syntax diagnostics via Pest parse
         match BayGraphParser::parse(Rule::program, &text) {
@@ -184,9 +185,8 @@ impl Backend {
             }
         }
 
+        diagnostics.extend(canonical_style_diagnostics(&text, &suppressions));
         if syntax_ok {
-            let suppressions = collect_lint_suppressions(&text);
-            diagnostics.extend(canonical_style_diagnostics(&text, &suppressions));
             if let Some(ast) = parsed_ast.as_ref() {
                 diagnostics.extend(statistical_guardrail_diagnostics(ast, &text));
             }
@@ -369,7 +369,7 @@ fn style_lint_to_diag(lint: CanonicalStyleLint) -> lsp::Diagnostic {
         tags: None,
         data: Some(json!({
             "quickfix": {
-                "title": "Rewrite to canonical inline args",
+                "title": "Rewrite to canonical syntax",
                 "replacement": lint.replacement,
             }
         })),
@@ -763,6 +763,29 @@ mod tests {
             .and_then(|fix| fix.get("replacement"))
             .and_then(|value| value.as_str());
         assert_eq!(replacement, Some("delete e confidence=high"));
+    }
+
+    #[test]
+    fn legacy_style_lint_diagnostic_carries_quick_fix_payload() {
+        let src = "set_expectation A.score = 0.5\n";
+        let diagnostics = canonical_style_diagnostics(src, &[]);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].code,
+            Some(lsp::NumberOrString::String(
+                "canonical_set_expectation".into()
+            ))
+        );
+        let replacement = diagnostics[0]
+            .data
+            .as_ref()
+            .and_then(|data| data.get("quickfix"))
+            .and_then(|fix| fix.get("replacement"))
+            .and_then(|value| value.as_str());
+        assert_eq!(
+            replacement,
+            Some("non_bayesian_nudge A.score to 0.5 variance=preserve")
+        );
     }
 
     #[test]

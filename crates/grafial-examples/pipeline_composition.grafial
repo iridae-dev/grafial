@@ -48,8 +48,8 @@ rule CleanData on PipelineBeliefs {
 
   action {
     // Impute missing/bad values using prior mean
-    set_expectation R.clean_value = 0.0
-    set_expectation R.quality_score = 0.3  // Mark as low quality
+    non_bayesian_nudge R.clean_value to 0.0 variance=preserve
+    non_bayesian_nudge R.quality_score to 0.3 variance=preserve // Mark as low quality
   }
 
   mode: for_each
@@ -64,8 +64,8 @@ rule CopyCleanValues on PipelineBeliefs {
     E[R.raw_value] >= -100.0 and E[R.raw_value] <= 100.0
 
   action {
-    set_expectation R.clean_value = E[R.raw_value]
-    set_expectation R.quality_score = 0.9  // Mark as high quality
+    non_bayesian_nudge R.clean_value to E[R.raw_value] variance=preserve
+    non_bayesian_nudge R.quality_score to 0.9 variance=preserve // Mark as high quality
   }
 
   mode: for_each
@@ -108,8 +108,8 @@ rule EnrichFromNeighbors on PipelineBeliefs {
   action {
     // Enriched value: combination of both records
     let enriched = (E[A.clean_value] + E[B.clean_value]) / 2.0
-    set_expectation A.enriched_value = enriched
-    set_expectation B.enriched_value = enriched
+    non_bayesian_nudge A.enriched_value to enriched variance=preserve
+    non_bayesian_nudge B.enriched_value to enriched variance=preserve
   }
 
   mode: for_each
@@ -209,7 +209,7 @@ rule FlagLowQualityPipeline on PipelineBeliefs {
     E[R.quality_score] < 0.6
 
   action {
-    set_expectation R.quality_score = E[R.quality_score] * 0.8
+    non_bayesian_nudge R.quality_score to E[R.quality_score] * 0.8 variance=preserve
   }
 
   mode: for_each

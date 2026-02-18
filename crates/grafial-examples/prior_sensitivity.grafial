@@ -89,6 +89,6 @@ rule FlagAnomalies on WeakPrior {
     // With weak prior: E[reading] ≈ 9.90 → triggers flag
     // With moderate prior: E[reading] ≈ 5.0 → borderline
     // With strong prior: E[reading] ≈ 0.10 → no flag
-    set_expectation S.reading = E[S.reading] * 1.1
+    non_bayesian_nudge S.reading to E[S.reading] * 1.1 variance=preserve
   }
 }
