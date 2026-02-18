@@ -90,9 +90,8 @@ baygraph/
 - `run_flow(program: &ProgramAst, flow_name: &str, prior: Option<&FlowResult>) -> Result<FlowResult, ExecError>`
 - `run_flow_ir(program: &ProgramIR, flow_name: &str, prior: Option<&FlowResult>) -> Result<FlowResult, ExecError>`
 - `run_flow_ir_with_backend(program: &ProgramIR, flow_name: &str, prior: Option<&FlowResult>, backend: &dyn IrExecutionBackend) -> Result<FlowResult, ExecError>`
-- `IrExecutionBackend` + `InterpreterExecutionBackend` define the IR execution backend boundary (interpreter default; JIT-pluggable path for future phases)
-- `PrototypeJitExecutionBackend` with `PrototypeJitConfig` and `PrototypeJitProfile` provides a hot-expression compilation/cache prototype with interpreter fallback
-- `LlvmCandidateExecutionBackend` and `CraneliftCandidateExecutionBackend` provide benchmarkable backend candidates on the same execution boundary
+- `IrExecutionBackend` + `InterpreterExecutionBackend` define the IR execution backend boundary
+- `CraneliftJitExecutionBackend` with `JitConfig` and `JitProfile` provides hot-expression compilation/cache with deterministic interpreter fallback for unsupported expressions
 
 ---
 
@@ -356,8 +355,6 @@ pub trait MetricFn: Send + Sync + 'static {
 - Located in `crates/grafial-benches/benches/`
 - Use `criterion` for performance tracking
 - Bench evidence application, rule evaluation, metric scans
-- Phase 10 backend spike harness in `crates/grafial-benches/benches/backend_spike.rs`
-- Phase 10 backend matrix report runner in `crates/grafial-benches/src/bin/backend_matrix.rs`
 - Track allocations with profiling tools
 
 ---

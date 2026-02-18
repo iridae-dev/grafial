@@ -154,18 +154,6 @@ Run performance benchmarks:
 cargo bench -p grafial-benches
 ```
 
-Run the Phase 10 backend spike benchmark scaffold:
-
-```bash
-./scripts/phase10_backend_spike.sh
-```
-
-Run the Phase 10 backend matrix report generator (multi-workload parity + latency report):
-
-```bash
-./scripts/phase10_backend_matrix.sh
-```
-
 ## Development Environment
 
 ### Using Nix (Recommended)

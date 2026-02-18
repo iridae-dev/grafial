@@ -14,7 +14,7 @@ This is the canonical compiler/runtime roadmap for Grafial.
 - Phase 7: Completed
 - Phase 8: Completed
 - Phase 9: Completed
-- Phase 10: Future
+- Phase 10: Completed
 - Phase 11: Future
 - Phase 12: Future
 - Phase 13: Future
@@ -32,7 +32,7 @@ This is the canonical compiler/runtime roadmap for Grafial.
 8. Phase 7 - Statistical Guardrails
 9. Phase 8 - Canonicalization Completion
 10. Phase 9 - Advanced Probabilistic Semantics
-11. Phase 10 - JIT Backend Prototype
+11. Phase 10 - JIT Backend Finalization
 12. Phase 11 - AOT + Vectorized Runtime
 13. Phase 12 - Parallel Engine Execution
 14. Phase 13 - Graph Storage + Indexing
@@ -252,40 +252,25 @@ Completion notes (this change):
     (flow, graph, transform id, rule name, mode, matched bindings, actions executed)
   - CLI summary/JSON output now surfaces intervention audit events.
 
-## Phase 10 - JIT Backend Prototype
+## Phase 10 - JIT Backend Finalization
 
-- Define an IR-level codegen backend boundary (`ProgramIR`/`ExprIR`/`RuleIR`) so execution can swap interpreter vs JIT without frontend changes.
-- Prototype expression JIT for hot metric and predicate expressions with compilation caching and deterministic fallback to interpreter.
-- Add hot-path thresholds and profiling hooks so JIT only triggers when execution count amortizes compile cost.
-- Run backend spike comparison (LLVM vs Cranelift) and select default backend based on compile latency, runtime speed, complexity, and maintenance cost.
+- Define an IR-level backend boundary (`ProgramIR`/`ExprIR`/`RuleIR`) so execution can swap interpreter vs JIT without frontend changes.
+- Implement hot-expression JIT for metric and prune expressions with caching and deterministic interpreter fallback for unsupported forms.
+- Select and standardize on a single JIT backend to reduce maintenance and avoid parallel half-implemented paths.
 
 Progress notes (this change):
-- Added an IR execution backend boundary in `flow_exec`:
+- Added the IR execution backend boundary in `flow_exec`:
   - `IrExecutionBackend` trait
-  - `InterpreterExecutionBackend` default implementation
+  - `InterpreterExecutionBackend` for explicit interpreter execution
   - `run_flow_ir_with_backend(...)` explicit backend entrypoint
-- `run_flow_ir(...)` now dispatches through the interpreter backend boundary (no behavior change).
-- Added core unit coverage validating explicit backend dispatch.
-- Added `PrototypeJitExecutionBackend` hot-expression prototype:
-  - profiles metric/prune expression evaluation counts
-  - compiles hot supported expressions into cached execution trees
-  - deterministically falls back to interpreter execution for unsupported expressions
-- Added parity coverage ensuring prototype backend output matches interpreter output.
-- Added backend spike benchmark scaffold:
-  - `crates/grafial-benches/benches/backend_spike.rs` (cold/warm backend comparisons)
-  - `scripts/phase10_backend_spike.sh` benchmark runner
-  - `documentation/PHASE10_BACKEND_SPIKE.md` decision matrix + scoring rubric for LLVM vs Cranelift selection
-- Added explicit backend candidates and harness wiring:
-  - `LlvmCandidateExecutionBackend`
-  - `CraneliftCandidateExecutionBackend`
-  - backend spike benchmark now runs parity + cold/warm probes for interpreter, prototype, LLVM candidate, and Cranelift candidate
-  - LLVM and Cranelift now run distinct candidate expression pipelines with independent compile/eval caches and profiles
-    - LLVM candidate: stack bytecode program format for metric/prune execution
-    - Cranelift candidate: register-style IR program format for metric/prune execution
-- Added backend matrix report runner:
-  - `crates/grafial-benches/src/bin/backend_matrix.rs` executes all shipped examples across all backend candidates
-  - `scripts/phase10_backend_matrix.sh` writes Markdown + JSON reports for decision analysis
-  - matrix runner exposes `--metric-threshold` and `--prune-threshold` to drive compile-threshold sensitivity runs
+- Finalized on Cranelift JIT:
+  - `CraneliftJitExecutionBackend` with `JitConfig` and `JitProfile`
+  - `run_flow_ir(...)` now dispatches through Cranelift JIT by default
+  - parity/fallback behavior remains deterministic via interpreter fallback on unsupported expressions
+- Removed Phase 10 decision artifacts and alternate candidate scaffolding:
+  - removed LLVM candidate backend path
+  - removed backend spike/matrix harnesses and generated reports
+  - removed Phase 10 benchmark scripts and decision docs
 
 ## Phase 11 - AOT + Vectorized Runtime
 

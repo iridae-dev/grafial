@@ -12,7 +12,8 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use std::collections::HashMap;
 
 use grafial_core::engine::graph::{
-    BeliefGraph, BetaPosterior, EdgeData, EdgeId, GaussianPosterior, NodeData, NodeId,
+    BeliefGraph, BetaPosterior, EdgeData, EdgeId, EdgePosterior, GaussianPosterior, NodeData,
+    NodeId,
 };
 use grafial_core::engine::rule_exec::run_rule_for_each;
 use grafial_frontend::ast::{
@@ -40,7 +41,7 @@ fn create_synthetic_graph(num_nodes: usize, edge_density: f64) -> BeliefGraph {
         );
         graph.insert_node(NodeData {
             id: NodeId(i as u32),
-            label: "Person".to_string(),
+            label: "Person".into(),
             attrs,
         });
     }
@@ -54,11 +55,11 @@ fn create_synthetic_graph(num_nodes: usize, edge_density: f64) -> BeliefGraph {
             id: EdgeId(i as u32),
             src,
             dst,
-            ty: "KNOWS".to_string(),
-            exist: BetaPosterior {
+            ty: "KNOWS".into(),
+            exist: EdgePosterior::Independent(BetaPosterior {
                 alpha: 2.0 + (i % 10) as f64 * 0.1,
                 beta: 2.0 + ((i * 3) % 10) as f64 * 0.1,
-            },
+            }),
         });
     }
 

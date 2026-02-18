@@ -115,7 +115,7 @@ pub trait IrExecutionBackend {
     ) -> Result<FlowResult, ExecError>;
 }
 
-/// Default interpreter backend (current production behavior).
+/// Explicit interpreter backend for parity checks and diagnostics.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct InterpreterExecutionBackend;
 
@@ -134,16 +134,16 @@ impl IrExecutionBackend for InterpreterExecutionBackend {
     }
 }
 
-/// Configuration for the prototype hot-expression JIT backend.
+/// Configuration for hot-expression JIT execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PrototypeJitConfig {
+pub struct JitConfig {
     /// Number of metric expression evaluations before compile is attempted.
     pub metric_compile_threshold: usize,
     /// Number of prune predicate evaluations before compile is attempted.
     pub prune_compile_threshold: usize,
 }
 
-impl Default for PrototypeJitConfig {
+impl Default for JitConfig {
     fn default() -> Self {
         Self {
             metric_compile_threshold: 8,
@@ -152,9 +152,9 @@ impl Default for PrototypeJitConfig {
     }
 }
 
-/// Runtime profile counters for the prototype hot-expression JIT backend.
+/// Runtime profile counters for the hot-expression JIT backend.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct PrototypeJitProfile {
+pub struct JitProfile {
     pub metric_eval_count: usize,
     pub metric_compile_count: usize,
     pub metric_cache_hits: usize,
@@ -166,24 +166,10 @@ pub struct PrototypeJitProfile {
 }
 
 #[derive(Debug, Default)]
-struct PrototypeJitState {
-    metric_entries: HashMap<MetricExprKey, JitEntry<CompiledMetricExpr>>,
-    prune_entries: HashMap<PruneExprKey, JitEntry<CompiledPruneExpr>>,
-    profile: PrototypeJitProfile,
-}
-
-#[derive(Debug, Default)]
-struct LlvmCandidateState {
-    metric_entries: HashMap<MetricExprKey, JitEntry<LlvmMetricProgram>>,
-    prune_entries: HashMap<PruneExprKey, JitEntry<LlvmPruneProgram>>,
-    profile: PrototypeJitProfile,
-}
-
-#[derive(Debug, Default)]
-struct CraneliftCandidateState {
+struct JitState {
     metric_entries: HashMap<MetricExprKey, JitEntry<CraneliftMetricProgram>>,
     prune_entries: HashMap<PruneExprKey, JitEntry<CraneliftPruneProgram>>,
-    profile: PrototypeJitProfile,
+    profile: JitProfile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -216,28 +202,28 @@ impl<T> Default for JitEntry<T> {
     }
 }
 
-/// Phase 10 prototype backend that compiles hot metric/prune expressions and
+/// Cranelift JIT backend that compiles hot metric/prune expressions and
 /// falls back to interpreter evaluation for unsupported cases.
 #[derive(Debug)]
-pub struct PrototypeJitExecutionBackend {
-    config: PrototypeJitConfig,
-    state: Mutex<PrototypeJitState>,
+pub struct CraneliftJitExecutionBackend {
+    config: JitConfig,
+    state: Mutex<JitState>,
 }
 
-impl PrototypeJitExecutionBackend {
-    pub fn new(config: PrototypeJitConfig) -> Self {
+impl CraneliftJitExecutionBackend {
+    pub fn new(config: JitConfig) -> Self {
         Self {
             config,
-            state: Mutex::new(PrototypeJitState::default()),
+            state: Mutex::new(JitState::default()),
         }
     }
 
     /// Snapshot profiling counters for observability/debugging.
-    pub fn profile_snapshot(&self) -> Result<PrototypeJitProfile, ExecError> {
+    pub fn profile_snapshot(&self) -> Result<JitProfile, ExecError> {
         let state = self
             .state
             .lock()
-            .map_err(|_| ExecError::Internal("prototype JIT state lock poisoned".into()))?;
+            .map_err(|_| ExecError::Internal("cranelift JIT state lock poisoned".into()))?;
         Ok(state.profile)
     }
 
@@ -246,21 +232,21 @@ impl PrototypeJitExecutionBackend {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| ExecError::Internal("prototype JIT state lock poisoned".into()))?;
-        state.profile = PrototypeJitProfile::default();
+            .map_err(|_| ExecError::Internal("cranelift JIT state lock poisoned".into()))?;
+        state.profile = JitProfile::default();
         Ok(())
     }
 }
 
-impl Default for PrototypeJitExecutionBackend {
+impl Default for CraneliftJitExecutionBackend {
     fn default() -> Self {
-        Self::new(PrototypeJitConfig::default())
+        Self::new(JitConfig::default())
     }
 }
 
-impl IrExecutionBackend for PrototypeJitExecutionBackend {
+impl IrExecutionBackend for CraneliftJitExecutionBackend {
     fn backend_name(&self) -> &'static str {
-        "prototype-jit"
+        "cranelift-jit"
     }
 
     fn run_flow_ir(
@@ -274,148 +260,8 @@ impl IrExecutionBackend for PrototypeJitExecutionBackend {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| ExecError::Internal("prototype JIT state lock poisoned".into()))?;
-        let mut expr_evaluator = HotPathExprEvaluator {
-            config: self.config,
-            state: &mut state,
-        };
-        run_flow_internal(
-            &optimized_program,
-            flow_name,
-            prior,
-            &builder,
-            &mut expr_evaluator,
-        )
-    }
-}
-
-/// Phase 10 LLVM backend candidate using stack-VM compiled expression programs.
-#[derive(Debug)]
-pub struct LlvmCandidateExecutionBackend {
-    config: PrototypeJitConfig,
-    state: Mutex<LlvmCandidateState>,
-}
-
-impl LlvmCandidateExecutionBackend {
-    pub fn new(config: PrototypeJitConfig) -> Self {
-        Self {
-            config,
-            state: Mutex::new(LlvmCandidateState::default()),
-        }
-    }
-
-    pub fn profile_snapshot(&self) -> Result<PrototypeJitProfile, ExecError> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| ExecError::Internal("llvm candidate state lock poisoned".into()))?;
-        Ok(state.profile)
-    }
-
-    pub fn clear_profile(&self) -> Result<(), ExecError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| ExecError::Internal("llvm candidate state lock poisoned".into()))?;
-        state.profile = PrototypeJitProfile::default();
-        Ok(())
-    }
-}
-
-impl Default for LlvmCandidateExecutionBackend {
-    fn default() -> Self {
-        Self::new(PrototypeJitConfig::default())
-    }
-}
-
-impl IrExecutionBackend for LlvmCandidateExecutionBackend {
-    fn backend_name(&self) -> &'static str {
-        "llvm-candidate"
-    }
-
-    fn run_flow_ir(
-        &self,
-        program: &ProgramIR,
-        flow_name: &str,
-        prior: Option<&FlowResult>,
-    ) -> Result<FlowResult, ExecError> {
-        let optimized_program = program.optimized();
-        let builder = StandardGraphBuilder;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| ExecError::Internal("llvm candidate state lock poisoned".into()))?;
-        let mut expr_evaluator = LlvmCandidateExprEvaluator {
-            config: self.config,
-            state: &mut state,
-        };
-        run_flow_internal(
-            &optimized_program,
-            flow_name,
-            prior,
-            &builder,
-            &mut expr_evaluator,
-        )
-    }
-}
-
-/// Phase 10 Cranelift backend candidate using register-IR compiled expression programs.
-#[derive(Debug)]
-pub struct CraneliftCandidateExecutionBackend {
-    config: PrototypeJitConfig,
-    state: Mutex<CraneliftCandidateState>,
-}
-
-impl CraneliftCandidateExecutionBackend {
-    pub fn new(config: PrototypeJitConfig) -> Self {
-        Self {
-            config,
-            state: Mutex::new(CraneliftCandidateState::default()),
-        }
-    }
-
-    pub fn profile_snapshot(&self) -> Result<PrototypeJitProfile, ExecError> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| ExecError::Internal("cranelift candidate state lock poisoned".into()))?;
-        Ok(state.profile)
-    }
-
-    pub fn clear_profile(&self) -> Result<(), ExecError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| ExecError::Internal("cranelift candidate state lock poisoned".into()))?;
-        state.profile = PrototypeJitProfile::default();
-        Ok(())
-    }
-}
-
-impl Default for CraneliftCandidateExecutionBackend {
-    fn default() -> Self {
-        Self::new(PrototypeJitConfig::default())
-    }
-}
-
-impl IrExecutionBackend for CraneliftCandidateExecutionBackend {
-    fn backend_name(&self) -> &'static str {
-        "cranelift-candidate"
-    }
-
-    fn run_flow_ir(
-        &self,
-        program: &ProgramIR,
-        flow_name: &str,
-        prior: Option<&FlowResult>,
-    ) -> Result<FlowResult, ExecError> {
-        let optimized_program = program.optimized();
-        let builder = StandardGraphBuilder;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| ExecError::Internal("cranelift candidate state lock poisoned".into()))?;
-        let mut expr_evaluator = CraneliftCandidateExprEvaluator {
+            .map_err(|_| ExecError::Internal("cranelift JIT state lock poisoned".into()))?;
+        let mut expr_evaluator = CraneliftExprEvaluator {
             config: self.config,
             state: &mut state,
         };
@@ -448,7 +294,7 @@ pub fn run_flow_ir(
     flow_name: &str,
     prior: Option<&FlowResult>,
 ) -> Result<FlowResult, ExecError> {
-    let backend = InterpreterExecutionBackend;
+    let backend = CraneliftJitExecutionBackend::default();
     run_flow_ir_with_backend(program, flow_name, prior, &backend)
 }
 
@@ -516,12 +362,12 @@ impl FlowExprEvaluator for InterpreterFlowExprEvaluator {
     }
 }
 
-struct HotPathExprEvaluator<'a> {
-    config: PrototypeJitConfig,
-    state: &'a mut PrototypeJitState,
+struct CraneliftExprEvaluator<'a> {
+    config: JitConfig,
+    state: &'a mut JitState,
 }
 
-impl<'a> FlowExprEvaluator for HotPathExprEvaluator<'a> {
+impl<'a> FlowExprEvaluator for CraneliftExprEvaluator<'a> {
     fn eval_metric_expr(
         &mut self,
         flow_name: &str,
@@ -541,7 +387,7 @@ impl<'a> FlowExprEvaluator for HotPathExprEvaluator<'a> {
             self.config.metric_compile_threshold,
             key,
             expr,
-            compile_metric_expr,
+            compile_metric_expr_jit,
             |compiled| compiled.eval(ctx),
             || {
                 let expr_ast = expr.to_ast();
@@ -570,135 +416,7 @@ impl<'a> FlowExprEvaluator for HotPathExprEvaluator<'a> {
             self.config.prune_compile_threshold,
             key,
             expr,
-            compile_prune_expr,
-            |compiled| compiled.eval(graph, edge),
-            || {
-                let expr_ast = expr.to_ast();
-                eval_prune_predicate(&expr_ast, graph, edge)
-            },
-        )
-    }
-}
-
-struct LlvmCandidateExprEvaluator<'a> {
-    config: PrototypeJitConfig,
-    state: &'a mut LlvmCandidateState,
-}
-
-impl<'a> FlowExprEvaluator for LlvmCandidateExprEvaluator<'a> {
-    fn eval_metric_expr(
-        &mut self,
-        flow_name: &str,
-        metric_name: &str,
-        expr: &ExprIR,
-        graph: &BeliefGraph,
-        registry: &MetricRegistry,
-        ctx: &MetricContext,
-    ) -> Result<f64, ExecError> {
-        let key = MetricExprKey {
-            flow: flow_name.to_string(),
-            metric: metric_name.to_string(),
-        };
-        eval_hot_metric_with_cache(
-            &mut self.state.profile,
-            &mut self.state.metric_entries,
-            self.config.metric_compile_threshold,
-            key,
-            expr,
-            compile_metric_expr_llvm,
-            |compiled| compiled.eval(ctx),
-            || {
-                let expr_ast = expr.to_ast();
-                eval_metric_expr(&expr_ast, graph, registry, ctx)
-            },
-        )
-    }
-
-    fn eval_prune_predicate(
-        &mut self,
-        flow_name: &str,
-        graph_name: &str,
-        transform_idx: usize,
-        expr: &ExprIR,
-        graph: &BeliefGraph,
-        edge: EdgeId,
-    ) -> Result<f64, ExecError> {
-        let key = PruneExprKey {
-            flow: flow_name.to_string(),
-            graph: graph_name.to_string(),
-            transform_idx,
-        };
-        eval_hot_prune_with_cache(
-            &mut self.state.profile,
-            &mut self.state.prune_entries,
-            self.config.prune_compile_threshold,
-            key,
-            expr,
-            compile_prune_expr_llvm,
-            |compiled| compiled.eval(graph, edge),
-            || {
-                let expr_ast = expr.to_ast();
-                eval_prune_predicate(&expr_ast, graph, edge)
-            },
-        )
-    }
-}
-
-struct CraneliftCandidateExprEvaluator<'a> {
-    config: PrototypeJitConfig,
-    state: &'a mut CraneliftCandidateState,
-}
-
-impl<'a> FlowExprEvaluator for CraneliftCandidateExprEvaluator<'a> {
-    fn eval_metric_expr(
-        &mut self,
-        flow_name: &str,
-        metric_name: &str,
-        expr: &ExprIR,
-        graph: &BeliefGraph,
-        registry: &MetricRegistry,
-        ctx: &MetricContext,
-    ) -> Result<f64, ExecError> {
-        let key = MetricExprKey {
-            flow: flow_name.to_string(),
-            metric: metric_name.to_string(),
-        };
-        eval_hot_metric_with_cache(
-            &mut self.state.profile,
-            &mut self.state.metric_entries,
-            self.config.metric_compile_threshold,
-            key,
-            expr,
-            compile_metric_expr_cranelift,
-            |compiled| compiled.eval(ctx),
-            || {
-                let expr_ast = expr.to_ast();
-                eval_metric_expr(&expr_ast, graph, registry, ctx)
-            },
-        )
-    }
-
-    fn eval_prune_predicate(
-        &mut self,
-        flow_name: &str,
-        graph_name: &str,
-        transform_idx: usize,
-        expr: &ExprIR,
-        graph: &BeliefGraph,
-        edge: EdgeId,
-    ) -> Result<f64, ExecError> {
-        let key = PruneExprKey {
-            flow: flow_name.to_string(),
-            graph: graph_name.to_string(),
-            transform_idx,
-        };
-        eval_hot_prune_with_cache(
-            &mut self.state.profile,
-            &mut self.state.prune_entries,
-            self.config.prune_compile_threshold,
-            key,
-            expr,
-            compile_prune_expr_cranelift,
+            compile_prune_expr_jit,
             |compiled| compiled.eval(graph, edge),
             || {
                 let expr_ast = expr.to_ast();
@@ -709,7 +427,7 @@ impl<'a> FlowExprEvaluator for CraneliftCandidateExprEvaluator<'a> {
 }
 
 fn eval_hot_metric_with_cache<Compiled, CompileFn, EvalFn, FallbackFn>(
-    profile: &mut PrototypeJitProfile,
+    profile: &mut JitProfile,
     entries: &mut HashMap<MetricExprKey, JitEntry<Compiled>>,
     compile_threshold: usize,
     key: MetricExprKey,
@@ -765,7 +483,7 @@ where
 }
 
 fn eval_hot_prune_with_cache<Compiled, CompileFn, EvalFn, FallbackFn>(
-    profile: &mut PrototypeJitProfile,
+    profile: &mut JitProfile,
     entries: &mut HashMap<PruneExprKey, JitEntry<Compiled>>,
     compile_threshold: usize,
     key: PruneExprKey,
@@ -818,308 +536,6 @@ where
 
     profile.prune_fallback_count += 1;
     fallback_eval()
-}
-
-#[derive(Debug, Clone)]
-enum CompiledMetricExpr {
-    Number(f64),
-    Bool(bool),
-    MetricVar(String),
-    Unary {
-        op: UnaryOpIR,
-        expr: Box<CompiledMetricExpr>,
-    },
-    Binary {
-        op: BinaryOpIR,
-        left: Box<CompiledMetricExpr>,
-        right: Box<CompiledMetricExpr>,
-    },
-}
-
-impl CompiledMetricExpr {
-    fn eval(&self, ctx: &MetricContext) -> Result<f64, ExecError> {
-        match self {
-            Self::Number(value) => Ok(*value),
-            Self::Bool(value) => Ok(if *value { 1.0 } else { 0.0 }),
-            Self::MetricVar(name) => ctx.metrics.get(name).copied().ok_or_else(|| {
-                ExecError::ValidationError(format!("unknown metric variable '{}'", name))
-            }),
-            Self::Unary { op, expr } => {
-                let v = expr.eval(ctx)?;
-                Ok(match op {
-                    UnaryOpIR::Neg => -v,
-                    UnaryOpIR::Not => {
-                        if v == 0.0 {
-                            1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                })
-            }
-            Self::Binary { op, left, right } => {
-                let l = left.eval(ctx)?;
-                let r = right.eval(ctx)?;
-                eval_compiled_metric_binary(*op, l, r)
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-enum CompiledPruneExpr {
-    Number(f64),
-    Bool(bool),
-    ProbEdge,
-    Unary {
-        op: UnaryOpIR,
-        expr: Box<CompiledPruneExpr>,
-    },
-    Binary {
-        op: BinaryOpIR,
-        left: Box<CompiledPruneExpr>,
-        right: Box<CompiledPruneExpr>,
-    },
-}
-
-impl CompiledPruneExpr {
-    fn eval(&self, graph: &BeliefGraph, edge: EdgeId) -> Result<f64, ExecError> {
-        match self {
-            Self::Number(value) => Ok(*value),
-            Self::Bool(value) => Ok(if *value { 1.0 } else { 0.0 }),
-            Self::ProbEdge => graph.prob_mean(edge),
-            Self::Unary { op, expr } => {
-                let value = expr.eval(graph, edge)?;
-                Ok(eval_unary_op(op.to_ast(), value))
-            }
-            Self::Binary { op, left, right } => {
-                let l = left.eval(graph, edge)?;
-                let r = right.eval(graph, edge)?;
-                eval_binary_op(op.to_ast(), l, r)
-            }
-        }
-    }
-}
-
-fn compile_metric_expr(expr: &ExprIR) -> Option<CompiledMetricExpr> {
-    match expr {
-        ExprIR::Number(value) => Some(CompiledMetricExpr::Number(*value)),
-        ExprIR::Bool(value) => Some(CompiledMetricExpr::Bool(*value)),
-        ExprIR::Var(name) => Some(CompiledMetricExpr::MetricVar(name.clone())),
-        ExprIR::Unary { op, expr } => Some(CompiledMetricExpr::Unary {
-            op: *op,
-            expr: Box::new(compile_metric_expr(expr)?),
-        }),
-        ExprIR::Binary { op, left, right } => Some(CompiledMetricExpr::Binary {
-            op: *op,
-            left: Box::new(compile_metric_expr(left)?),
-            right: Box::new(compile_metric_expr(right)?),
-        }),
-        ExprIR::Field { .. } | ExprIR::Call { .. } | ExprIR::Exists { .. } => None,
-    }
-}
-
-fn compile_prune_expr(expr: &ExprIR) -> Option<CompiledPruneExpr> {
-    match expr {
-        ExprIR::Number(value) => Some(CompiledPruneExpr::Number(*value)),
-        ExprIR::Bool(value) => Some(CompiledPruneExpr::Bool(*value)),
-        ExprIR::Unary { op, expr } => Some(CompiledPruneExpr::Unary {
-            op: *op,
-            expr: Box::new(compile_prune_expr(expr)?),
-        }),
-        ExprIR::Binary { op, left, right } => Some(CompiledPruneExpr::Binary {
-            op: *op,
-            left: Box::new(compile_prune_expr(left)?),
-            right: Box::new(compile_prune_expr(right)?),
-        }),
-        ExprIR::Call { name, args } if name == "prob" => {
-            if args.len() != 1 {
-                return None;
-            }
-            match &args[0] {
-                CallArgIR::Positional(ExprIR::Var(v)) if v == "edge" => {
-                    Some(CompiledPruneExpr::ProbEdge)
-                }
-                _ => None,
-            }
-        }
-        ExprIR::Var(_) | ExprIR::Field { .. } | ExprIR::Call { .. } | ExprIR::Exists { .. } => None,
-    }
-}
-
-#[derive(Debug, Clone)]
-enum LlvmMetricInstr {
-    PushConst(f64),
-    PushBool(bool),
-    PushMetricVar(String),
-    Unary(UnaryOpIR),
-    Binary(BinaryOpIR),
-}
-
-#[derive(Debug, Clone)]
-struct LlvmMetricProgram {
-    code: Vec<LlvmMetricInstr>,
-}
-
-impl LlvmMetricProgram {
-    fn eval(&self, ctx: &MetricContext) -> Result<f64, ExecError> {
-        let mut stack = Vec::with_capacity(self.code.len().max(1));
-        for instr in &self.code {
-            match instr {
-                LlvmMetricInstr::PushConst(value) => stack.push(*value),
-                LlvmMetricInstr::PushBool(value) => stack.push(if *value { 1.0 } else { 0.0 }),
-                LlvmMetricInstr::PushMetricVar(name) => {
-                    let value = ctx.metrics.get(name).copied().ok_or_else(|| {
-                        ExecError::ValidationError(format!("unknown metric variable '{}'", name))
-                    })?;
-                    stack.push(value);
-                }
-                LlvmMetricInstr::Unary(op) => {
-                    let value = stack.pop().ok_or_else(|| {
-                        ExecError::Internal("llvm candidate metric stack underflow".into())
-                    })?;
-                    stack.push(match op {
-                        UnaryOpIR::Neg => -value,
-                        UnaryOpIR::Not => {
-                            if value == 0.0 {
-                                1.0
-                            } else {
-                                0.0
-                            }
-                        }
-                    });
-                }
-                LlvmMetricInstr::Binary(op) => {
-                    let right = stack.pop().ok_or_else(|| {
-                        ExecError::Internal("llvm candidate metric stack underflow".into())
-                    })?;
-                    let left = stack.pop().ok_or_else(|| {
-                        ExecError::Internal("llvm candidate metric stack underflow".into())
-                    })?;
-                    stack.push(eval_compiled_metric_binary(*op, left, right)?);
-                }
-            }
-        }
-
-        if stack.len() != 1 {
-            return Err(ExecError::Internal(format!(
-                "llvm candidate metric stack depth invalid: {}",
-                stack.len()
-            )));
-        }
-        Ok(stack[0])
-    }
-}
-
-fn compile_metric_expr_llvm(expr: &ExprIR) -> Option<LlvmMetricProgram> {
-    let mut code = Vec::new();
-    emit_metric_llvm(expr, &mut code)?;
-    Some(LlvmMetricProgram { code })
-}
-
-fn emit_metric_llvm(expr: &ExprIR, code: &mut Vec<LlvmMetricInstr>) -> Option<()> {
-    match expr {
-        ExprIR::Number(value) => code.push(LlvmMetricInstr::PushConst(*value)),
-        ExprIR::Bool(value) => code.push(LlvmMetricInstr::PushBool(*value)),
-        ExprIR::Var(name) => code.push(LlvmMetricInstr::PushMetricVar(name.clone())),
-        ExprIR::Unary { op, expr } => {
-            emit_metric_llvm(expr, code)?;
-            code.push(LlvmMetricInstr::Unary(*op));
-        }
-        ExprIR::Binary { op, left, right } => {
-            emit_metric_llvm(left, code)?;
-            emit_metric_llvm(right, code)?;
-            code.push(LlvmMetricInstr::Binary(*op));
-        }
-        ExprIR::Field { .. } | ExprIR::Call { .. } | ExprIR::Exists { .. } => return None,
-    }
-    Some(())
-}
-
-#[derive(Debug, Clone)]
-enum LlvmPruneInstr {
-    PushConst(f64),
-    PushBool(bool),
-    PushProbEdge,
-    Unary(UnaryOpIR),
-    Binary(BinaryOpIR),
-}
-
-#[derive(Debug, Clone)]
-struct LlvmPruneProgram {
-    code: Vec<LlvmPruneInstr>,
-}
-
-impl LlvmPruneProgram {
-    fn eval(&self, graph: &BeliefGraph, edge: EdgeId) -> Result<f64, ExecError> {
-        let mut stack = Vec::with_capacity(self.code.len().max(1));
-        for instr in &self.code {
-            match instr {
-                LlvmPruneInstr::PushConst(value) => stack.push(*value),
-                LlvmPruneInstr::PushBool(value) => stack.push(if *value { 1.0 } else { 0.0 }),
-                LlvmPruneInstr::PushProbEdge => stack.push(graph.prob_mean(edge)?),
-                LlvmPruneInstr::Unary(op) => {
-                    let value = stack.pop().ok_or_else(|| {
-                        ExecError::Internal("llvm candidate prune stack underflow".into())
-                    })?;
-                    stack.push(eval_unary_op(op.to_ast(), value));
-                }
-                LlvmPruneInstr::Binary(op) => {
-                    let right = stack.pop().ok_or_else(|| {
-                        ExecError::Internal("llvm candidate prune stack underflow".into())
-                    })?;
-                    let left = stack.pop().ok_or_else(|| {
-                        ExecError::Internal("llvm candidate prune stack underflow".into())
-                    })?;
-                    stack.push(eval_binary_op(op.to_ast(), left, right)?);
-                }
-            }
-        }
-        if stack.len() != 1 {
-            return Err(ExecError::Internal(format!(
-                "llvm candidate prune stack depth invalid: {}",
-                stack.len()
-            )));
-        }
-        Ok(stack[0])
-    }
-}
-
-fn compile_prune_expr_llvm(expr: &ExprIR) -> Option<LlvmPruneProgram> {
-    let mut code = Vec::new();
-    emit_prune_llvm(expr, &mut code)?;
-    Some(LlvmPruneProgram { code })
-}
-
-fn emit_prune_llvm(expr: &ExprIR, code: &mut Vec<LlvmPruneInstr>) -> Option<()> {
-    match expr {
-        ExprIR::Number(value) => code.push(LlvmPruneInstr::PushConst(*value)),
-        ExprIR::Bool(value) => code.push(LlvmPruneInstr::PushBool(*value)),
-        ExprIR::Unary { op, expr } => {
-            emit_prune_llvm(expr, code)?;
-            code.push(LlvmPruneInstr::Unary(*op));
-        }
-        ExprIR::Binary { op, left, right } => {
-            emit_prune_llvm(left, code)?;
-            emit_prune_llvm(right, code)?;
-            code.push(LlvmPruneInstr::Binary(*op));
-        }
-        ExprIR::Call { name, args } if name == "prob" => {
-            if args.len() != 1 {
-                return None;
-            }
-            match &args[0] {
-                CallArgIR::Positional(ExprIR::Var(v)) if v == "edge" => {
-                    code.push(LlvmPruneInstr::PushProbEdge);
-                }
-                _ => return None,
-            }
-        }
-        ExprIR::Var(_) | ExprIR::Field { .. } | ExprIR::Call { .. } | ExprIR::Exists { .. } => {
-            return None
-        }
-    }
-    Some(())
 }
 
 #[derive(Debug, Clone)]
@@ -1255,7 +671,7 @@ impl CraneliftMetricCompiler {
     }
 }
 
-fn compile_metric_expr_cranelift(expr: &ExprIR) -> Option<CraneliftMetricProgram> {
+fn compile_metric_expr_jit(expr: &ExprIR) -> Option<CraneliftMetricProgram> {
     let mut compiler = CraneliftMetricCompiler::default();
     let result_reg = compiler.lower(expr)?;
     Some(CraneliftMetricProgram {
@@ -1391,7 +807,7 @@ impl CraneliftPruneCompiler {
     }
 }
 
-fn compile_prune_expr_cranelift(expr: &ExprIR) -> Option<CraneliftPruneProgram> {
+fn compile_prune_expr_jit(expr: &ExprIR) -> Option<CraneliftPruneProgram> {
     let mut compiler = CraneliftPruneCompiler::default();
     let result_reg = compiler.lower(expr)?;
     Some(CraneliftPruneProgram {
@@ -2654,14 +2070,15 @@ mod tests {
     }
 
     #[test]
-    fn prototype_jit_backend_compiles_hot_exprs_with_interpreter_parity() {
+    fn cranelift_jit_backend_compiles_hot_exprs_with_interpreter_parity() {
         let program = build_phase10_hot_expr_program();
         let mut prior = FlowResult::default();
         prior.exports.insert("seed".into(), build_simple_graph());
 
-        let expected = run_flow_ir(&program, "HotFlow", Some(&prior)).expect("interpreter run");
+        let expected =
+            run_flow_ir_interpreter(&program, "HotFlow", Some(&prior)).expect("interpreter run");
 
-        let backend = PrototypeJitExecutionBackend::new(PrototypeJitConfig {
+        let backend = CraneliftJitExecutionBackend::new(JitConfig {
             metric_compile_threshold: 1,
             prune_compile_threshold: 1,
         });
@@ -2682,24 +2099,13 @@ mod tests {
         assert!(profile.prune_cache_hits >= 1);
         assert!(profile.metric_fallback_count >= 2); // unsupported avg_degree call falls back
 
-        let llvm = LlvmCandidateExecutionBackend::new(PrototypeJitConfig {
-            metric_compile_threshold: 1,
-            prune_compile_threshold: 1,
-        });
-        let llvm_result = run_flow_ir_with_backend(&program, "HotFlow", Some(&prior), &llvm)
-            .expect("llvm candidate run");
-        assert_eq!(llvm_result.metric_exports, expected.metric_exports);
-        let llvm_profile = llvm.profile_snapshot().expect("llvm profile");
-        assert!(llvm_profile.metric_compile_count >= 1);
-        assert!(llvm_profile.prune_compile_count >= 1);
-
-        let cranelift = CraneliftCandidateExecutionBackend::new(PrototypeJitConfig {
+        let cranelift = CraneliftJitExecutionBackend::new(JitConfig {
             metric_compile_threshold: 1,
             prune_compile_threshold: 1,
         });
         let cranelift_result =
             run_flow_ir_with_backend(&program, "HotFlow", Some(&prior), &cranelift)
-                .expect("cranelift candidate run");
+                .expect("cranelift run");
         assert_eq!(cranelift_result.metric_exports, expected.metric_exports);
         let cranelift_profile = cranelift.profile_snapshot().expect("cranelift profile");
         assert!(cranelift_profile.metric_compile_count >= 1);
