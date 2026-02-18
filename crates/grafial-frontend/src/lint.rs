@@ -374,7 +374,7 @@ fn count_prob_calls(expr: &ExprAst) -> usize {
     let mut count = 0usize;
     walk_expr(expr, &mut |node| {
         if let ExprAst::Call { name, .. } = node {
-            if name == "prob" || name == "prob_correlated" {
+            if name == "prob" || name == "prob_correlated" || name == "credible" {
                 count += 1;
             }
         }
@@ -707,7 +707,7 @@ fn emit_rule_pattern_lints(
                     out,
                     LINT_STAT_MULTIPLE_TESTING,
                     format!(
-                        "Rule '{}' where clause performs {} probability checks (prob/prob_correlated); consider multiple-testing control",
+                        "Rule '{}' where clause performs {} probability checks (prob/prob_correlated/credible); consider multiple-testing control",
                         rule.name, prob_calls
                     ),
                     where_range,

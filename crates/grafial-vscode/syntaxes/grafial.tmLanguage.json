@@ -193,7 +193,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.grafial",
-          "match": "\\b(prob|prob_correlated|degree|winner|entropy|prob_vector|count_nodes|sum_nodes|fold_nodes|avg_degree)\\b"
+          "match": "\\b(prob|prob_correlated|credible|degree|winner|entropy|prob_vector|count_nodes|sum_nodes|fold_nodes|avg_degree)\\b"
         },
         {
           "name": "support.function.builtin.grafial",

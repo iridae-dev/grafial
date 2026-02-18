@@ -278,6 +278,7 @@ Supported:
 - `prob(edge_var)`
 - `prob(A.attr > B.attr)` (supports `< <= > >=` comparisons)
 - `prob_correlated(A.attr > B.attr, rho=...)` (correlation-aware comparison probability)
+- `credible(event, p=0.95, rho=0.0)` (returns true when posterior event probability is at least `p`)
 - `degree(A, min_prob=0.5)`
 - `winner(A, ROUTES_TO, epsilon=0.01)`
 - `entropy(A, ROUTES_TO)`
@@ -311,6 +312,9 @@ Inside metric filters/contrib/step expressions (`node` is the bound row variable
   - supported comparison form.
 - `prob_correlated(...)` in rule `where` must be:
   - a supported comparison form with optional `rho=...` argument (`rho` in `[-1, 1]`).
+- `credible(...)` in rule `where` must be:
+  - an edge variable event, or
+  - a supported comparison form, with optional `p` and `rho` named args.
 - `prune_edges ... where ...` predicates are restricted to `prob(edge)`-style checks.
 - Metric expressions reject `exists` subqueries.
 - Builder `order_by(...)` is only valid with `fold(...)`.

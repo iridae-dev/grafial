@@ -24,7 +24,7 @@
 //! - Comparisons: `<`, `<=`, `>`, `>=`, `==`, `!=`
 //! - Logical: `and`, `or`, `not`
 //! - Special functions: `prob(edge)`, `prob_correlated(A.attr > B.attr, rho=...)`,
-//!   `degree(node)`, `E[node.attr]`
+//!   `credible(event, p=...)`, `degree(node)`, `E[node.attr]`
 //!
 //! ## Performance
 //!
@@ -142,6 +142,7 @@ impl<'a> ExprContext for RuleExprContext<'a> {
             "E" => self.eval_expectation_function(pos_args, all_args, graph),
             "prob" => self.eval_prob_function(pos_args, all_args, graph),
             "prob_correlated" => self.eval_prob_correlated_function(pos_args, all_args, graph),
+            "credible" => self.eval_credible_function(pos_args, all_args, graph),
             "variance" => self.eval_variance_function(pos_args, all_args, graph),
             "stddev" => self.eval_stddev_function(pos_args, all_args, graph),
             "ci_lo" => self.eval_ci_function(pos_args, all_args, graph, true),
@@ -557,6 +558,76 @@ impl<'a> RuleExprContext<'a> {
                 fn_name, fn_name
             ))),
         }
+    }
+
+    /// Evaluates credible(event, p=..., rho=...) as a boolean (1.0/0.0).
+    ///
+    /// Semantics:
+    /// - Compute event probability:
+    ///   - edge variable: `P(edge exists)`
+    ///   - comparison: Gaussian comparison probability (with optional `rho`)
+    /// - Return 1.0 when `P(event) >= p`, else 0.0.
+    ///
+    /// Defaults: `p=0.95`, `rho=0.0`.
+    fn eval_credible_function(
+        &self,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        if pos_args.len() != 1 {
+            return Err(ExecError::ValidationError(
+                "credible(): expects one positional event argument".into(),
+            ));
+        }
+
+        let mut threshold = 0.95f64;
+        let mut rho = 0.0f64;
+        for arg in all_args {
+            match arg {
+                CallArg::Positional(_) => {}
+                CallArg::Named { name, value } if name == "p" => {
+                    threshold = eval_expr_core(value, graph, self)?;
+                }
+                CallArg::Named { name, value } if name == "rho" => {
+                    rho = eval_expr_core(value, graph, self)?;
+                }
+                CallArg::Named { name, .. } => {
+                    return Err(ExecError::ValidationError(format!(
+                        "credible(): unknown named argument '{}'; expected p or rho",
+                        name
+                    )))
+                }
+            }
+        }
+
+        if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+            return Err(ExecError::ValidationError(
+                "credible(): p must be finite and in [0, 1]".into(),
+            ));
+        }
+        if !rho.is_finite() || !(-1.0..=1.0).contains(&rho) {
+            return Err(ExecError::ValidationError(
+                "credible(): rho must be finite and in [-1, 1]".into(),
+            ));
+        }
+
+        let event_prob = match &pos_args[0] {
+            ExprAst::Var(var_name) => {
+                let eid = self.resolve_edge_var(var_name)?;
+                graph.prob_mean(eid)?
+            }
+            ExprAst::Binary { op, left, right } => {
+                self.eval_prob_comparison(*op, left, right, rho, "credible", graph)?
+            }
+            _ => {
+                return Err(ExecError::ValidationError(
+                    "credible(): event must be an edge variable or comparison".into(),
+                ))
+            }
+        };
+
+        Ok((event_prob >= threshold) as i32 as f64)
     }
 
     /// Helper: extract mean and variance for simple expressions: node.attr or number
@@ -1724,6 +1795,108 @@ mod tests {
 
         let err = eval_expr_core(&expr, &g, &ctx).expect_err("invalid rho should fail");
         assert!(err.to_string().contains("rho"));
+    }
+
+    #[test]
+    fn eval_credible_on_edge_and_comparison_events() {
+        let g = create_test_graph();
+        let mut bindings = MatchBindings::default();
+        bindings.node_vars.insert("A".into(), NodeId(1));
+        bindings.node_vars.insert("B".into(), NodeId(2));
+        bindings.edge_vars.insert("e".into(), EdgeId(1));
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
+        };
+
+        let edge_true = eval_expr_core(
+            &ExprAst::Call {
+                name: "credible".into(),
+                args: vec![
+                    CallArg::Positional(ExprAst::Var("e".into())),
+                    CallArg::Named {
+                        name: "p".into(),
+                        value: ExprAst::Number(0.4),
+                    },
+                ],
+            },
+            &g,
+            &ctx,
+        )
+        .expect("credible edge true");
+        assert_eq!(edge_true, 1.0);
+
+        let edge_false = eval_expr_core(
+            &ExprAst::Call {
+                name: "credible".into(),
+                args: vec![
+                    CallArg::Positional(ExprAst::Var("e".into())),
+                    CallArg::Named {
+                        name: "p".into(),
+                        value: ExprAst::Number(0.6),
+                    },
+                ],
+            },
+            &g,
+            &ctx,
+        )
+        .expect("credible edge false");
+        assert_eq!(edge_false, 0.0);
+
+        let cmp_true = eval_expr_core(
+            &ExprAst::Call {
+                name: "credible".into(),
+                args: vec![
+                    CallArg::Positional(ExprAst::Binary {
+                        op: BinaryOp::Gt,
+                        left: Box::new(ExprAst::Field {
+                            target: Box::new(ExprAst::Var("A".into())),
+                            field: "x".into(),
+                        }),
+                        right: Box::new(ExprAst::Field {
+                            target: Box::new(ExprAst::Var("B".into())),
+                            field: "x".into(),
+                        }),
+                    }),
+                    CallArg::Named {
+                        name: "p".into(),
+                        value: ExprAst::Number(0.95),
+                    },
+                ],
+            },
+            &g,
+            &ctx,
+        )
+        .expect("credible comparison true");
+        assert_eq!(cmp_true, 1.0);
+    }
+
+    #[test]
+    fn eval_credible_rejects_invalid_threshold() {
+        let g = create_test_graph();
+        let mut bindings = MatchBindings::default();
+        bindings.edge_vars.insert("e".into(), EdgeId(1));
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
+        };
+
+        let expr = ExprAst::Call {
+            name: "credible".into(),
+            args: vec![
+                CallArg::Positional(ExprAst::Var("e".into())),
+                CallArg::Named {
+                    name: "p".into(),
+                    value: ExprAst::Number(1.5),
+                },
+            ],
+        };
+        let err = eval_expr_core(&expr, &g, &ctx).expect_err("invalid p should fail");
+        assert!(err.to_string().contains("credible(): p"));
     }
 
     #[test]

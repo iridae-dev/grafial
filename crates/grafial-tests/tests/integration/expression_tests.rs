@@ -70,3 +70,18 @@ flow F on M { graph g = from_evidence X }
     let ast = parse_program(src).expect("parse");
     validate_program(&ast).expect("validation");
 }
+
+#[test]
+fn valid_credible_rule_where() {
+    let src = r#"
+schema S { node N { x: Real } edge E {} }
+belief_model M on S { }
+rule R on M {
+  pattern (A:N)-[e:E]->(B:N)
+  where credible(e, p=0.8) and credible(A.x > B.x, p=0.7, rho=0.2)
+}
+flow F on M { graph g = from_evidence X }
+"#;
+    let ast = parse_program(src).expect("parse");
+    validate_program(&ast).expect("validation");
+}

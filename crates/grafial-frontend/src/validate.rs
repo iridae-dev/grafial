@@ -16,6 +16,7 @@
 //!
 //! - `prob(var)` requires `var` to be an edge variable from pattern
 //! - `prob_correlated(lhs <op> rhs, rho=...)` requires node-attribute comparison operands
+//! - `credible(event, p=...)` supports edge-variable or comparison events
 //! - `E[node.attr]` requires `node` to be a node variable from pattern
 //! - `degree(node)` requires `node` to be a node variable
 //! - Metric functions require specific named arguments (label, contrib, etc.)
@@ -759,6 +760,54 @@ fn validate_rule_call(
                 )),
                 _ => Err(validation_error(
                     "prob_correlated(): argument must be a comparison expression",
+                    Some(context),
+                    range,
+                )),
+            }
+        }
+        "credible" => {
+            if pos.len() != 1 {
+                return Err(validation_error(
+                    "credible(): expected single positional event argument",
+                    Some(context),
+                    range,
+                ));
+            }
+            for arg_name in named.map.keys() {
+                if arg_name != "p" && arg_name != "rho" {
+                    return Err(validation_error(
+                        format!(
+                            "credible(): unknown named argument '{}'; expected p or rho",
+                            arg_name
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+            }
+            if let Some(p_expr) = named.get("p") {
+                validate_rule_expr(p_expr, scope, false, context, range)?;
+            }
+            if let Some(rho_expr) = named.get("rho") {
+                validate_rule_expr(rho_expr, scope, false, context, range)?;
+            }
+            match pos[0] {
+                ExprAst::Var(v) if scope.edge_vars.contains(v) => Ok(()),
+                ExprAst::Binary {
+                    op: BinaryOp::Gt | BinaryOp::Ge | BinaryOp::Lt | BinaryOp::Le,
+                    left,
+                    right,
+                } => {
+                    validate_prob_operand(left, scope, context, range)?;
+                    validate_prob_operand(right, scope, context, range)
+                }
+                ExprAst::Binary { .. } => Err(validation_error(
+                    "credible(): only supports comparisons like credible(A > B)",
+                    Some(context),
+                    range,
+                )),
+                _ => Err(validation_error(
+                    "credible(): argument must be an edge variable or comparison expression",
                     Some(context),
                     range,
                 )),
@@ -2012,6 +2061,133 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("comparison expression"));
+    }
+
+    #[test]
+    fn validate_rule_with_credible_on_edge_var() {
+        let rule = RuleDef {
+            name: "R".into(),
+            on_model: "M".into(),
+            mode: Some("for_each".into()),
+            patterns: vec![PatternItem {
+                src: NodePattern {
+                    var: "A".into(),
+                    label: "N".into(),
+                },
+                edge: EdgePattern {
+                    var: "e".into(),
+                    ty: "E".into(),
+                },
+                dst: NodePattern {
+                    var: "B".into(),
+                    label: "N".into(),
+                },
+            }],
+            where_expr: Some(ExprAst::Call {
+                name: "credible".into(),
+                args: vec![
+                    CallArg::Positional(ExprAst::Var("e".into())),
+                    CallArg::Named {
+                        name: "p".into(),
+                        value: ExprAst::Number(0.8),
+                    },
+                ],
+            }),
+            actions: vec![],
+        };
+
+        assert!(validate_rule(&rule).is_ok());
+    }
+
+    #[test]
+    fn validate_rule_with_credible_on_comparison_and_rho() {
+        let rule = RuleDef {
+            name: "R".into(),
+            on_model: "M".into(),
+            mode: Some("for_each".into()),
+            patterns: vec![PatternItem {
+                src: NodePattern {
+                    var: "A".into(),
+                    label: "N".into(),
+                },
+                edge: EdgePattern {
+                    var: "e".into(),
+                    ty: "E".into(),
+                },
+                dst: NodePattern {
+                    var: "B".into(),
+                    label: "N".into(),
+                },
+            }],
+            where_expr: Some(ExprAst::Call {
+                name: "credible".into(),
+                args: vec![
+                    CallArg::Positional(ExprAst::Binary {
+                        op: BinaryOp::Gt,
+                        left: Box::new(ExprAst::Field {
+                            target: Box::new(ExprAst::Var("A".into())),
+                            field: "x".into(),
+                        }),
+                        right: Box::new(ExprAst::Field {
+                            target: Box::new(ExprAst::Var("B".into())),
+                            field: "x".into(),
+                        }),
+                    }),
+                    CallArg::Named {
+                        name: "p".into(),
+                        value: ExprAst::Number(0.9),
+                    },
+                    CallArg::Named {
+                        name: "rho".into(),
+                        value: ExprAst::Number(0.2),
+                    },
+                ],
+            }),
+            actions: vec![],
+        };
+
+        assert!(validate_rule(&rule).is_ok());
+    }
+
+    #[test]
+    fn validate_rule_with_credible_unknown_named_arg_fails() {
+        let rule = RuleDef {
+            name: "R".into(),
+            on_model: "M".into(),
+            mode: Some("for_each".into()),
+            patterns: vec![PatternItem {
+                src: NodePattern {
+                    var: "A".into(),
+                    label: "N".into(),
+                },
+                edge: EdgePattern {
+                    var: "e".into(),
+                    ty: "E".into(),
+                },
+                dst: NodePattern {
+                    var: "B".into(),
+                    label: "N".into(),
+                },
+            }],
+            where_expr: Some(ExprAst::Call {
+                name: "credible".into(),
+                args: vec![
+                    CallArg::Positional(ExprAst::Var("e".into())),
+                    CallArg::Named {
+                        name: "threshold".into(),
+                        value: ExprAst::Number(0.8),
+                    },
+                ],
+            }),
+            actions: vec![],
+        };
+
+        let result = validate_rule(&rule);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("expected p or rho"));
     }
 
     #[test]

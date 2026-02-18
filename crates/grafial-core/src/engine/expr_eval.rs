@@ -20,6 +20,7 @@
 //! - `E[node.attr]` returns the posterior mean (expected value)
 //! - `prob(edge)` returns the mean probability of edge existence
 //! - `prob_correlated(A.attr > B.attr, rho=...)` evaluates correlated comparison probability
+//! - `credible(event, p=...)` thresholds event probability into a boolean gate
 
 use crate::engine::errors::ExecError;
 use crate::engine::graph::BeliefGraph;
