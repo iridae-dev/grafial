@@ -6,8 +6,8 @@
 //!   grafial <file> --flow <name> -o json  # Output results as JSON
 
 use clap::Parser;
-use grafial_core::parse_and_validate;
-use grafial_core::run_flow;
+use grafial_core::{parse_and_validate, run_flow};
+use grafial_frontend::{format_canonical_style, lint_canonical_style, CanonicalStyleLint};
 use std::collections::HashMap;
 use std::process;
 
@@ -32,19 +32,46 @@ struct Cli {
     /// List all flows in the program instead of executing
     #[arg(short, long)]
     list_flows: bool,
+
+    /// Report canonical-style compatibility forms
+    #[arg(long)]
+    lint_style: bool,
+
+    /// Rewrite source file to canonical style in-place
+    #[arg(long)]
+    fix_style: bool,
 }
 
 fn main() {
     let cli = Cli::parse();
 
     // Read and parse
-    let source = match std::fs::read_to_string(&cli.file) {
+    let mut source = match std::fs::read_to_string(&cli.file) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Error reading file '{}': {}", cli.file, e);
             process::exit(1);
         }
     };
+
+    if cli.fix_style {
+        let formatted = format_canonical_style(&source);
+        if formatted != source {
+            if let Err(e) = std::fs::write(&cli.file, &formatted) {
+                eprintln!("Error writing file '{}': {}", cli.file, e);
+                process::exit(1);
+            }
+            println!("✓ Applied canonical style fixes to '{}'", cli.file);
+            source = formatted;
+        } else {
+            println!("✓ Source already in canonical style");
+        }
+    }
+
+    if cli.lint_style {
+        let lints = lint_canonical_style(&source);
+        print_style_lints(&lints);
+    }
 
     let program = match parse_and_validate(&source) {
         Ok(p) => p,
@@ -81,7 +108,10 @@ fn main() {
                 "debug" => {
                     println!("{:#?}", result);
                 }
-                "summary" | _ => {
+                "summary" => {
+                    print_summary(flow_name, &result);
+                }
+                _ => {
                     print_summary(flow_name, &result);
                 }
             },
@@ -100,6 +130,21 @@ fn main() {
             }
             println!("\nRun with --flow <name> to execute a flow");
         }
+    }
+}
+
+fn print_style_lints(lints: &[CanonicalStyleLint]) {
+    if lints.is_empty() {
+        println!("✓ Canonical style: no compatibility forms found");
+        return;
+    }
+
+    println!("Canonical style warnings ({}):", lints.len());
+    for lint in lints {
+        println!(
+            "  {}:{} [{}] {}",
+            lint.range.start.line, lint.range.start.column, lint.code, lint.message
+        );
     }
 }
 

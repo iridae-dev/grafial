@@ -327,12 +327,40 @@ rule SecondRule on ExampleBeliefs {
 */
 
 // ✅ BEST PRACTICE: Make rules independent or use explicit sequencing
+rule SequenceStepOne on ExampleBeliefs {
+  pattern
+    (A:Item)-[ab:LINKS]->(B:Item)
+
+  where
+    E[A.value] > 0.0
+
+  action {
+    set_expectation A.score = 0.5
+  }
+
+  mode: for_each
+}
+
+rule SequenceStepTwo on ExampleBeliefs {
+  pattern
+    (A:Item)-[ab:LINKS]->(B:Item)
+
+  where
+    E[A.score] >= 0.5
+
+  action {
+    set_expectation A.value = 100.0
+  }
+
+  mode: for_each
+}
+
 flow ExplicitSequencing on ExampleBeliefs {
   graph g = from_evidence ExampleEvidence
 
   // Explicit sequencing via pipeline
-  graph step1 = g |> apply_rule FirstRule
-  graph step2 = step1 |> apply_rule SecondRule
+  graph step1 = g |> apply_rule SequenceStepOne
+  graph step2 = step1 |> apply_rule SequenceStepTwo
 
   export step2 as "output"
 }

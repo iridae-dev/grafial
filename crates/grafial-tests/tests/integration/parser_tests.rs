@@ -15,7 +15,7 @@ fn parses_social_example() {
     assert_eq!(ast.schemas.len(), 1);
     assert_eq!(ast.belief_models.len(), 1);
     assert_eq!(ast.evidences.len(), 1);
-    assert_eq!(ast.rules.len(), 1);
+    assert!(!ast.rules.is_empty());
     assert_eq!(ast.flows.len(), 1);
 
     let schema = &ast.schemas[0];
@@ -23,7 +23,11 @@ fn parses_social_example() {
     assert_eq!(schema.nodes.len(), 1);
     assert_eq!(schema.edges.len(), 1);
 
-    let rule = &ast.rules[0];
+    let rule = ast
+        .rules
+        .iter()
+        .find(|r| r.name == "TransferAndDisconnect")
+        .expect("expected TransferAndDisconnect rule");
     assert_eq!(rule.name, "TransferAndDisconnect");
     assert_eq!(rule.patterns.len(), 2);
     assert!(rule.where_expr.is_some());

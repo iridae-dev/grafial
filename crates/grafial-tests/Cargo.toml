@@ -26,6 +26,10 @@ name = "phase4_exit_criteria"
 path = "tests/phase4_exit_criteria.rs"
 
 [[test]]
+name = "phase6_release_gate"
+path = "tests/phase6_release_gate.rs"
+
+[[test]]
 name = "property_tests"
 path = "tests/property_tests.rs"
 

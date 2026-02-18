@@ -1,4 +1,6 @@
-use grafial_core::{parse_and_validate, run_flow, ExecError};
+use grafial_core::{
+    parse_and_validate, parse_validate_and_lower, run_flow, run_flow_ir, ExecError,
+};
 use std::fs;
 use std::path::PathBuf;
 
@@ -39,6 +41,40 @@ fn parse_all_examples() -> Result<(), ExecError> {
 }
 
 #[test]
+fn example_minimal_ir_entrypoint_matches_ast_wrapper() -> Result<(), ExecError> {
+    let src = read_example("minimal.grafial")?;
+
+    let ast_program = parse_and_validate(&src)?;
+    let ir_program = parse_validate_and_lower(&src)?;
+
+    let ast_result = run_flow(&ast_program, "MinimalFlow", None)?;
+    let ir_result = run_flow_ir(&ir_program, "MinimalFlow", None)?;
+
+    let ast_total = *ast_result
+        .metrics
+        .get("total")
+        .ok_or_else(|| ExecError::Internal("MinimalFlow: missing metric 'total'".into()))?;
+    let ir_total = *ir_result
+        .metrics
+        .get("total")
+        .ok_or_else(|| ExecError::Internal("MinimalFlow: missing metric 'total'".into()))?;
+
+    assert!(
+        (ast_total - ir_total).abs() < 1e-12,
+        "IR/AST metric mismatch: ast={}, ir={}",
+        ast_total,
+        ir_total
+    );
+
+    assert_eq!(ast_result.exports.len(), ir_result.exports.len());
+    assert!(
+        ir_result.exports.contains_key("output"),
+        "expected export 'output'"
+    );
+    Ok(())
+}
+
+#[test]
 fn example_minimal_behaves() -> Result<(), ExecError> {
     // Expect: parses, flow runs, metric ~ 1.0, export exists
     let src = read_example("minimal.grafial")?;
@@ -54,7 +90,10 @@ fn example_minimal_behaves() -> Result<(), ExecError> {
     assert!(total > 0.8 && total < 1.2, "unexpected total: {}", total);
 
     // Export exists
-    assert!(result.exports.contains_key("output"), "expected export 'output'");
+    assert!(
+        result.exports.contains_key("output"),
+        "expected export 'output'"
+    );
     Ok(())
 }
 
@@ -74,7 +113,10 @@ fn example_social_behaves() -> Result<(), ExecError> {
     // no edges count toward degree, so avg_degree should be 0.0
     assert!(avg_deg.abs() < 1e-9, "unexpected avg_degree: {}", avg_deg);
 
-    assert!(result.exports.contains_key("demo"), "expected export 'demo'");
+    assert!(
+        result.exports.contains_key("demo"),
+        "expected export 'demo'"
+    );
     Ok(())
 }
 
@@ -100,9 +142,16 @@ fn example_ab_testing_behaves() -> Result<(), ExecError> {
         .metrics
         .get("good_variants")
         .ok_or_else(|| ExecError::Internal("ABTestAnalysis: missing 'good_variants'".into()))?;
-    assert_eq!(good_variants, 0.0, "expected no good_variants, got {}", good_variants);
+    assert_eq!(
+        good_variants, 0.0,
+        "expected no good_variants, got {}",
+        good_variants
+    );
 
-    assert!(result.exports.contains_key("winner"), "expected export 'winner'");
+    assert!(
+        result.exports.contains_key("winner"),
+        "expected export 'winner'"
+    );
     Ok(())
 }
 
@@ -118,7 +167,11 @@ fn example_competing_choices_behaves() -> Result<(), ExecError> {
         .get("avg_entropy")
         .ok_or_else(|| ExecError::Internal("RoutingPipeline: missing 'avg_entropy'".into()))?;
     assert!(avg_entropy.is_finite());
-    assert!(avg_entropy >= 0.0, "entropy must be non-negative: {}", avg_entropy);
+    assert!(
+        avg_entropy >= 0.0,
+        "entropy must be non-negative: {}",
+        avg_entropy
+    );
 
     assert!(
         result.exports.contains_key("final_routing"),
@@ -134,17 +187,15 @@ fn example_transitive_closure_sanity() -> Result<(), ExecError> {
     let program = parse_and_validate(&src)?;
     let result = run_flow(&program, "ReachabilityAnalysis", None)?;
 
-    let avg_reachability = *result
-        .metrics
-        .get("avg_reachability")
-        .ok_or_else(|| ExecError::Internal("ReachabilityAnalysis: missing 'avg_reachability'".into()))?;
+    let avg_reachability = *result.metrics.get("avg_reachability").ok_or_else(|| {
+        ExecError::Internal("ReachabilityAnalysis: missing 'avg_reachability'".into())
+    })?;
     assert!(avg_reachability.is_finite());
     assert!(avg_reachability >= 0.0 && avg_reachability <= 1.0);
 
-    let reachable_count = *result
-        .metrics
-        .get("reachable_count")
-        .ok_or_else(|| ExecError::Internal("ReachabilityAnalysis: missing 'reachable_count'".into()))?;
+    let reachable_count = *result.metrics.get("reachable_count").ok_or_else(|| {
+        ExecError::Internal("ReachabilityAnalysis: missing 'reachable_count'".into())
+    })?;
     assert!(reachable_count >= 1.0);
 
     assert!(

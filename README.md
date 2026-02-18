@@ -36,6 +36,7 @@ baygraph/
 │   ├── grafial-python/        # Python bindings (PyO3)
 │   ├── grafial-tests/         # Integration and unit tests
 │   ├── grafial-benches/       # Performance benchmarks
+│   ├── grafial-lsp/           # Language Server Protocol (LSP) server
 │   ├── grafial-examples/      # Example .grafial programs (.grafial files only)
 │   └── grafial-vscode/        # VSCode extension
 ├── documentation/             # Project documentation
@@ -149,7 +150,7 @@ cargo bench -p grafial-benches
 
 ## 5. Examples
 
-The `grafial-examples` crate contains `.grafial` programs demonstrating various language features and use cases.
+The `crates/grafial-examples/` directory contains `.grafial` programs demonstrating various language features and use cases.
 
 ### Running Examples
 
@@ -157,13 +158,13 @@ Use the CLI to execute example `.grafial` files:
 
 ```bash
 # Run with the CLI
-cargo run -p grafial-cli -- crates/grafial-examples/minimal.grafial
+cargo run -p grafial-cli --bin grafial -- crates/grafial-examples/minimal.grafial
 
 # Run a specific flow
-cargo run -p grafial-cli -- crates/grafial-examples/social.grafial --flow Demo
+cargo run -p grafial-cli --bin grafial -- crates/grafial-examples/social.grafial --flow Demo
 
 # Get JSON output
-cargo run -p grafial-cli -- crates/grafial-examples/ab_testing.grafial --flow ABTest -o json
+cargo run -p grafial-cli --bin grafial -- crates/grafial-examples/ab_testing.grafial --flow ABTestAnalysis -o json
 ```
 
 ### Available Examples
@@ -185,19 +186,22 @@ The Grafial CLI allows you to validate and execute Grafial programs from the com
 cargo build -p grafial-cli --release
 
 # Validate a program
-cargo run --bin grafial -- crates/grafial-examples/minimal.grafial
+cargo run -p grafial-cli --bin grafial -- crates/grafial-examples/minimal.grafial
 
 # List available flows
-cargo run --bin grafial -- crates/grafial-examples/social.grafial --list-flows
+cargo run -p grafial-cli --bin grafial -- crates/grafial-examples/social.grafial --list-flows
 
 # Execute a flow
-cargo run --bin grafial -- crates/grafial-examples/social.grafial --flow Demo
+cargo run -p grafial-cli --bin grafial -- crates/grafial-examples/social.grafial --flow Demo
 
 # Get JSON output
-cargo run --bin grafial -- crates/grafial-examples/social.grafial --flow Demo -o json
+cargo run -p grafial-cli --bin grafial -- crates/grafial-examples/social.grafial --flow Demo -o json
 
 # Get debug output
-cargo run --bin grafial -- crates/grafial-examples/social.grafial --flow Demo -o debug
+cargo run -p grafial-cli --bin grafial -- crates/grafial-examples/social.grafial --flow Demo -o debug
+
+# Check canonical-style compatibility syntax
+cargo run -p grafial-cli --bin grafial -- crates/grafial-examples/social.grafial --lint-style
 ```
 
 After building, the binary is available at `target/release/grafial`:
@@ -239,8 +243,8 @@ import grafial
 with open("crates/grafial-examples/ab_testing.grafial", "r") as f:
     source = f.read()
 program = grafial.compile(source)
-ctx = grafial.run_flow(program, "ABTest")
-print(f"Results: {ctx.metrics}")
+ctx = grafial.run_flow(program, "ABTestAnalysis")
+print(f"Exported graphs: {list(ctx.graphs.keys())}")
 ```
 
 See **`crates/grafial-python/README.md`** for detailed usage and installation instructions.
@@ -270,7 +274,7 @@ See **`crates/grafial-vscode/README.md`** for details.
 - **`documentation/ENGINE_ARCHITECTURE.md`** - Runtime architecture and API
 - **`documentation/BUILDING.md`** - Build and development setup
 - **`crates/grafial-python/README.md`** - Python bindings documentation
-- **`documentation/ROADMAP.md`** - Project roadmap
+- **`documentation/ROADMAP.md`** - Canonical compiler roadmap and future phases
 
 ---
 
@@ -278,14 +282,14 @@ See **`crates/grafial-vscode/README.md`** for details.
 
 ### Workspace Structure
 
-This monorepo uses Cargo workspaces to manage multiple related crates:
+This monorepo uses a Cargo workspace for Rust crates, plus supporting directories:
 
 - **Core crates** (`grafial-core`, `grafial-frontend`, `grafial-ir`) - Library code
 - **Application crates** (`grafial-cli`) - Executables
+- **Tooling crates** (`grafial-tests`, `grafial-benches`, `grafial-lsp`) - Tests, benchmarks, language tooling
 - **Bindings** (`grafial-python`) - Language bindings
-- **Examples** (`grafial-examples`) - Example `.grafial` programs demonstrating features
-- **Tooling** (`grafial-tests`, `grafial-benches`) - Development tools
 - **Extensions** (`grafial-vscode`) - Editor support
+- **Examples directory** (`crates/grafial-examples/`) - `.grafial` example programs
 
 ### Adding a New Crate
 

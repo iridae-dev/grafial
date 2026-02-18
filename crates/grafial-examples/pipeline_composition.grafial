@@ -128,9 +128,14 @@ flow EnrichmentStage on PipelineBeliefs {
   graph enriched_snapshot = enriched |> snapshot "enriched_data"
 
   // Metrics that build on previous stage
-  metric avg_enriched = nodes(Record)
+  metric enriched_total = nodes(Record)
     |> where(E[node.enriched_value] != 0.0)
-    |> avg(by=E[node.enriched_value])
+    |> sum(by=E[node.enriched_value])
+  metric enriched_count = nodes(Record)
+    |> where(E[node.enriched_value] != 0.0)
+    |> count()
+  // Epsilon guard keeps this example executable when no records are enriched.
+  metric avg_enriched = enriched_total / (enriched_count + 0.0001)
 
   // Reference imported metric
   metric enrichment_rate = 1.0 - imported_cleaning_rate

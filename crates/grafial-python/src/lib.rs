@@ -75,7 +75,9 @@ pub fn compile(py: Python<'_>, source: &str) -> PyResult<PyProgram> {
 fn map_exec_error(err: ExecError) -> PyErr {
     match err {
         ExecError::ParseError(msg) => PyValueError::new_err(format!("Parse error: {}", msg)),
-        ExecError::ValidationError(msg) => PyValueError::new_err(format!("Validation error: {}", msg)),
+        ExecError::ValidationError(msg) => {
+            PyValueError::new_err(format!("Validation error: {}", msg))
+        }
         ExecError::Execution(msg) => PyRuntimeError::new_err(format!("Execution error: {}", msg)),
         ExecError::Numerical(msg) => PyRuntimeError::new_err(format!("Numerical error: {}", msg)),
         ExecError::Internal(msg) => PyRuntimeError::new_err(format!("Internal error: {}", msg)),
@@ -130,13 +132,21 @@ impl PyContext {
 }
 
 impl PyContext {
-    fn from_flow_result(py: Python<'_>, fr: grafial_core::engine::flow_exec::FlowResult) -> PyResult<Self> {
+    fn from_flow_result(
+        py: Python<'_>,
+        fr: grafial_core::engine::flow_exec::FlowResult,
+    ) -> PyResult<Self> {
         let mut graphs: HashMap<String, Py<PyBeliefGraph>> = HashMap::new();
         for (alias, g) in fr.exports.into_iter() {
             // Ensure no pending deltas remain for iteration/inspection
             let mut g2 = g;
             g2.ensure_owned(); // Apply any pending deltas before exposing to Python
-            let handle = Py::new(py, PyBeliefGraph { inner: Arc::new(g2) })?;
+            let handle = Py::new(
+                py,
+                PyBeliefGraph {
+                    inner: Arc::new(g2),
+                },
+            )?;
             graphs.insert(alias, handle);
         }
         let metrics = fr.metric_exports;
@@ -200,7 +210,8 @@ impl PyBeliefGraph {
                 }
             }
             let probs = group.posterior.mean_probabilities();
-            let categories: Vec<String> = group.categories.iter().map(|n| n.0.to_string()).collect();
+            let categories: Vec<String> =
+                group.categories.iter().map(|n| n.0.to_string()).collect();
             let entropy = group.posterior.entropy();
             out.push(PyCompetingGroup {
                 graph: self.inner.clone(),
@@ -267,7 +278,9 @@ impl PyBeliefGraph {
             // forced_state for independent edges
             let forced = match &e.exist {
                 grafial_core::engine::graph::EdgePosterior::Independent(beta) => {
-                    if (beta.alpha - FORCE_PRECISION).abs() < f64::EPSILON && (beta.beta - 1.0).abs() < f64::EPSILON {
+                    if (beta.alpha - FORCE_PRECISION).abs() < f64::EPSILON
+                        && (beta.beta - 1.0).abs() < f64::EPSILON
+                    {
                         Some("present")
                     } else if (beta.alpha - 1.0).abs() < f64::EPSILON
                         && (beta.beta - FORCE_PRECISION).abs() < f64::EPSILON
@@ -329,7 +342,9 @@ impl PyBeliefGraph {
             attrs.set_item("prob", prob)?;
             let forced = match &e.exist {
                 grafial_core::engine::graph::EdgePosterior::Independent(beta) => {
-                    if (beta.alpha - FORCE_PRECISION).abs() < f64::EPSILON && (beta.beta - 1.0).abs() < f64::EPSILON {
+                    if (beta.alpha - FORCE_PRECISION).abs() < f64::EPSILON
+                        && (beta.beta - 1.0).abs() < f64::EPSILON
+                    {
                         Some("present")
                     } else if (beta.alpha - 1.0).abs() < f64::EPSILON
                         && (beta.beta - FORCE_PRECISION).abs() < f64::EPSILON
@@ -419,17 +434,19 @@ pub struct PyEdgeView {
 #[pymethods]
 impl PyEdgeView {
     #[getter]
-    pub fn src(&self) -> String { self.src.to_string() }
+    pub fn src(&self) -> String {
+        self.src.to_string()
+    }
 
     #[getter]
-    pub fn dst(&self) -> String { self.dst.to_string() }
+    pub fn dst(&self) -> String {
+        self.dst.to_string()
+    }
 
     #[getter]
     pub fn prob(&self) -> PyResult<f64> {
         let eid = grafial_core::engine::graph::EdgeId(self.edge_id);
-        self.graph
-            .prob_mean(eid)
-            .map_err(|e| map_exec_error(e))
+        self.graph.prob_mean(eid).map_err(|e| map_exec_error(e))
     }
 
     #[getter]
@@ -439,7 +456,9 @@ impl PyEdgeView {
             match &e.exist {
                 grafial_core::engine::graph::EdgePosterior::Independent(beta) => {
                     // Heuristic: detect forced params
-                    if (beta.alpha - FORCE_PRECISION).abs() < f64::EPSILON && (beta.beta - 1.0).abs() < f64::EPSILON {
+                    if (beta.alpha - FORCE_PRECISION).abs() < f64::EPSILON
+                        && (beta.beta - 1.0).abs() < f64::EPSILON
+                    {
                         Some("present".to_string())
                     } else if (beta.alpha - 1.0).abs() < f64::EPSILON
                         && (beta.beta - FORCE_PRECISION).abs() < f64::EPSILON
@@ -458,25 +477,40 @@ impl PyEdgeView {
 
     pub fn is_competing(&self) -> bool {
         let eid = grafial_core::engine::graph::EdgeId(self.edge_id);
-        self.graph.edge(eid).map(|e| matches!(
-            e.exist,
-            grafial_core::engine::graph::EdgePosterior::Competing { .. }
-        )).unwrap_or(false)
+        self.graph
+            .edge(eid)
+            .map(|e| {
+                matches!(
+                    e.exist,
+                    grafial_core::engine::graph::EdgePosterior::Competing { .. }
+                )
+            })
+            .unwrap_or(false)
     }
 
     pub fn is_independent(&self) -> bool {
         let eid = grafial_core::engine::graph::EdgeId(self.edge_id);
-        self.graph.edge(eid).map(|e| matches!(
-            e.exist,
-            grafial_core::engine::graph::EdgePosterior::Independent(_)
-        )).unwrap_or(false)
+        self.graph
+            .edge(eid)
+            .map(|e| {
+                matches!(
+                    e.exist,
+                    grafial_core::engine::graph::EdgePosterior::Independent(_)
+                )
+            })
+            .unwrap_or(false)
     }
 
     #[getter]
-    pub fn r#type(&self) -> String { self.ty.clone() }
+    pub fn r#type(&self) -> String {
+        self.ty.clone()
+    }
 
     fn __repr__(&self) -> String {
-        format!("EdgeView(id={}, src={}, dst={}, type={})", self.edge_id, self.src, self.dst, self.ty)
+        format!(
+            "EdgeView(id={}, src={}, dst={}, type={})",
+            self.edge_id, self.src, self.dst, self.ty
+        )
     }
 }
 
@@ -559,12 +593,13 @@ impl PyEvidence {
         } else {
             grafial_frontend::ast::EvidenceMode::Absent
         };
-        self.observations.push(grafial_frontend::ast::ObserveStmt::Edge {
-            edge_type: edge_type.to_string(),
-            src: (node_type.to_string(), src_id.to_string()),
-            dst: (dst_type.to_string(), dst_id.to_string()),
-            mode,
-        });
+        self.observations
+            .push(grafial_frontend::ast::ObserveStmt::Edge {
+                edge_type: edge_type.to_string(),
+                src: (node_type.to_string(), src_id.to_string()),
+                dst: (dst_type.to_string(), dst_id.to_string()),
+                mode,
+            });
     }
 
     /// Observe a chosen competing edge category
@@ -576,12 +611,13 @@ impl PyEvidence {
         dst_type: &str,
         dst_id: &str,
     ) {
-        self.observations.push(grafial_frontend::ast::ObserveStmt::Edge {
-            edge_type: edge_type.to_string(),
-            src: (node_type.to_string(), src_id.to_string()),
-            dst: (dst_type.to_string(), dst_id.to_string()),
-            mode: grafial_frontend::ast::EvidenceMode::Chosen,
-        });
+        self.observations
+            .push(grafial_frontend::ast::ObserveStmt::Edge {
+                edge_type: edge_type.to_string(),
+                src: (node_type.to_string(), src_id.to_string()),
+                dst: (dst_type.to_string(), dst_id.to_string()),
+                mode: grafial_frontend::ast::EvidenceMode::Chosen,
+            });
     }
 
     /// Observe an unchosen competing edge category
@@ -593,12 +629,13 @@ impl PyEvidence {
         dst_type: &str,
         dst_id: &str,
     ) {
-        self.observations.push(grafial_frontend::ast::ObserveStmt::Edge {
-            edge_type: edge_type.to_string(),
-            src: (node_type.to_string(), src_id.to_string()),
-            dst: (dst_type.to_string(), dst_id.to_string()),
-            mode: grafial_frontend::ast::EvidenceMode::Unchosen,
-        });
+        self.observations
+            .push(grafial_frontend::ast::ObserveStmt::Edge {
+                edge_type: edge_type.to_string(),
+                src: (node_type.to_string(), src_id.to_string()),
+                dst: (dst_type.to_string(), dst_id.to_string()),
+                mode: grafial_frontend::ast::EvidenceMode::Unchosen,
+            });
     }
 
     /// Force a deterministic competing edge choice
@@ -610,12 +647,13 @@ impl PyEvidence {
         dst_type: &str,
         dst_id: &str,
     ) {
-        self.observations.push(grafial_frontend::ast::ObserveStmt::Edge {
-            edge_type: edge_type.to_string(),
-            src: (node_type.to_string(), src_id.to_string()),
-            dst: (dst_type.to_string(), dst_id.to_string()),
-            mode: grafial_frontend::ast::EvidenceMode::ForcedChoice,
-        });
+        self.observations
+            .push(grafial_frontend::ast::ObserveStmt::Edge {
+                edge_type: edge_type.to_string(),
+                src: (node_type.to_string(), src_id.to_string()),
+                dst: (dst_type.to_string(), dst_id.to_string()),
+                mode: grafial_frontend::ast::EvidenceMode::ForcedChoice,
+            });
     }
 
     /// Observe a numeric node attribute value
@@ -669,7 +707,8 @@ pub fn run_flow_with_context(
         prior.exports.insert(alias.clone(), g);
     }
 
-    let result = py.allow_threads(|| grafial_core::run_flow(&program.inner, flow_name, Some(&prior)));
+    let result =
+        py.allow_threads(|| grafial_core::run_flow(&program.inner, flow_name, Some(&prior)));
     match result {
         Ok(fr) => PyContext::from_flow_result(py, fr),
         Err(err) => Err(map_exec_error(err)),

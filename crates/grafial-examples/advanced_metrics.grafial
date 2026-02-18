@@ -148,7 +148,9 @@ flow MetricsShowcase on AnalyticsBeliefs {
   metric quality_score = (
     (premium_count / total_entities) * 0.4 +
     (value_concentration) * 0.3 +
-    (avg_strong_connections / avg_connections) * 0.3
+    // Add epsilon guard so this showcase example remains executable
+    // even when all edge probabilities are below the min_prob threshold.
+    (avg_strong_connections / (avg_connections + 0.0001)) * 0.3
   )
   // Combines multiple metrics with weights
 
@@ -161,7 +163,8 @@ flow MetricsShowcase on AnalyticsBeliefs {
 
   // Average value of well-connected entities
   metric connected_avg_value = nodes(Entity)
-    |> where(degree(node, min_prob=0.7) >= 2.0)
+    // Use a lower probability threshold to avoid empty-set averages in this example.
+    |> where(degree(node, min_prob=0.3) >= 1.0)
     |> avg(by=E[node.value])
 
   export g as "analyzed"

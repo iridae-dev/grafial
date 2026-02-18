@@ -4,15 +4,19 @@
 //! Graphs are immutable between transforms (each transform produces a new graph), enabling
 //! safe parallel execution and snapshotting.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::engine::errors::ExecError;
-use crate::engine::evidence::build_graph_from_evidence;
+use crate::engine::evidence::build_graph_from_evidence_ir;
 use crate::engine::expr_eval::{eval_expr_core, ExprContext};
 use crate::engine::graph::{BeliefGraph, EdgeId};
 use crate::engine::rule_exec::run_rule_for_each_with_globals;
 use crate::metrics::{eval_metric_expr, MetricContext, MetricRegistry};
-use grafial_frontend::{CallArg, ExprAst, GraphExpr, ProgramAst, Transform};
+use grafial_frontend::ast::RuleDef;
+use grafial_frontend::{CallArg, ExprAst, ProgramAst};
+use grafial_ir::{
+    EvidenceIR, ExprIR, FlowIR, GraphExprIR, MetricImportDefIR, ProgramIR, RuleIR, TransformIR,
+};
 
 /// Graph builder trait for abstracting evidence-to-graph construction.
 ///
@@ -21,8 +25,8 @@ use grafial_frontend::{CallArg, ExprAst, GraphExpr, ProgramAst, Transform};
 trait GraphBuilder {
     fn build_graph(
         &self,
-        evidence: &grafial_frontend::ast::EvidenceDef,
-        program: &ProgramAst,
+        evidence: &EvidenceIR,
+        program: &ProgramIR,
     ) -> Result<BeliefGraph, ExecError>;
 }
 
@@ -32,10 +36,10 @@ struct StandardGraphBuilder;
 impl GraphBuilder for StandardGraphBuilder {
     fn build_graph(
         &self,
-        evidence: &grafial_frontend::ast::EvidenceDef,
-        program: &ProgramAst,
+        evidence: &EvidenceIR,
+        program: &ProgramIR,
     ) -> Result<BeliefGraph, ExecError> {
-        build_graph_from_evidence(evidence, program)
+        build_graph_from_evidence_ir(evidence, program)
     }
 }
 
@@ -48,15 +52,16 @@ struct CustomGraphBuilder<'a> {
 impl<'a> GraphBuilder for CustomGraphBuilder<'a> {
     fn build_graph(
         &self,
-        evidence: &grafial_frontend::ast::EvidenceDef,
-        _program: &ProgramAst,
+        evidence: &EvidenceIR,
+        _program: &ProgramIR,
     ) -> Result<BeliefGraph, ExecError> {
-        (self.builder)(evidence)
+        let evidence_ast = evidence.to_ast();
+        (self.builder)(&evidence_ast)
     }
 }
 
 /// The result of running a flow: named graphs and exported aliases.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FlowResult {
     /// All graphs defined in the flow by variable name
     pub graphs: HashMap<String, BeliefGraph>,
@@ -70,18 +75,6 @@ pub struct FlowResult {
     pub snapshots: HashMap<String, BeliefGraph>,
 }
 
-impl Default for FlowResult {
-    fn default() -> Self {
-        Self {
-            graphs: HashMap::new(),
-            exports: HashMap::new(),
-            metrics: HashMap::new(),
-            metric_exports: HashMap::new(),
-            snapshots: HashMap::new(),
-        }
-    }
-}
-
 /// Runs a named flow from a parsed and validated program.
 ///
 /// Each transform produces a new graph (immutability), enabling safe snapshotting and
@@ -91,8 +84,19 @@ pub fn run_flow(
     flow_name: &str,
     prior: Option<&FlowResult>,
 ) -> Result<FlowResult, ExecError> {
+    let lowered = ProgramIR::from(program);
+    run_flow_ir(&lowered, flow_name, prior)
+}
+
+/// Runs a named flow from lowered IR.
+pub fn run_flow_ir(
+    program: &ProgramIR,
+    flow_name: &str,
+    prior: Option<&FlowResult>,
+) -> Result<FlowResult, ExecError> {
+    let optimized_program = program.optimized();
     let builder = StandardGraphBuilder;
-    run_flow_internal(program, flow_name, prior, &builder)
+    run_flow_internal(&optimized_program, flow_name, prior, &builder)
 }
 
 /// Test-only helper that allows custom evidence builders for testing.
@@ -106,57 +110,64 @@ pub fn run_flow_with_builder<'a>(
              + 'a),
     prior: Option<&FlowResult>,
 ) -> Result<FlowResult, ExecError> {
+    let lowered = ProgramIR::from(program).optimized();
     let builder = CustomGraphBuilder {
         builder: evidence_builder,
     };
-    run_flow_internal(program, flow_name, prior, &builder)
+    run_flow_internal(&lowered, flow_name, prior, &builder)
 }
 
 /// Internal flow execution logic shared between `run_flow` and `run_flow_with_builder`.
 fn run_flow_internal<B: GraphBuilder>(
-    program: &ProgramAst,
+    program: &ProgramIR,
     flow_name: &str,
     prior: Option<&FlowResult>,
     graph_builder: &B,
 ) -> Result<FlowResult, ExecError> {
     let flow = find_flow(program, flow_name)?;
+    let graph_plan = build_graph_execution_plan(flow)?;
 
     let evidence_by_name = build_evidence_index(&program.evidences);
-    let rules_by_name = build_rules_index(&program.rules);
+    let rule_defs_by_name = build_rule_defs_index(&program.rules, flow);
 
     let mut result = initialize_flow_result(prior);
-    let rule_globals = build_rule_globals(flow, prior)?;
+    let rule_globals = build_rule_globals(flow, prior);
 
-    // Evaluate graph definitions in order
-    for g in &flow.graphs {
-        match &g.expr {
-            GraphExpr::Pipeline { .. } => {
-                // Pipelines are handled after all initial graphs are created
-                // Skip for now - will process in next loop
+    // Evaluate graph definitions according to a deterministic dependency plan.
+    for graph_idx in graph_plan {
+        let graph_def = &flow.graphs[graph_idx];
+        let graph = match &graph_def.expr {
+            GraphExprIR::Pipeline {
+                start_graph,
+                transforms,
+            } => {
+                let mut current = result
+                    .graphs
+                    .get(start_graph)
+                    .ok_or_else(|| {
+                        ExecError::Internal(format!("unknown start graph '{}'", start_graph))
+                    })?
+                    .clone();
+                for transform in transforms {
+                    current = apply_transform(
+                        transform,
+                        &current,
+                        &rule_defs_by_name,
+                        &rule_globals,
+                        &mut result,
+                    )?;
+                }
+                current
             }
-            _ => {
-                let graph =
-                    eval_graph_expr(&g.expr, &evidence_by_name, prior, graph_builder, program)?;
-                result.graphs.insert(g.name.clone(), graph);
-            }
-        }
-    }
-
-    // Execute pipelines (which may create additional graphs)
-    for g in &flow.graphs {
-        if let GraphExpr::Pipeline { start, transforms } = &g.expr {
-            let mut current = result
-                .graphs
-                .get(start)
-                .ok_or_else(|| ExecError::Internal(format!("unknown start graph '{}'", start)))?
-                .clone();
-
-            for t in transforms {
-                current = apply_transform(t, &current, &rules_by_name, &rule_globals, &mut result)?;
-            }
-
-            result.graphs.insert(g.name.clone(), current);
-        }
+            _ => eval_graph_expr(
+                &graph_def.expr,
+                &evidence_by_name,
+                prior,
+                graph_builder,
+                program,
+            )?,
+        };
+        result.graphs.insert(graph_def.name.clone(), graph);
     }
 
     evaluate_metrics(flow, prior, &mut result)?;
@@ -166,10 +177,7 @@ fn run_flow_internal<B: GraphBuilder>(
 }
 
 /// Find a flow by name in the program
-fn find_flow<'a>(
-    program: &'a ProgramAst,
-    flow_name: &str,
-) -> Result<&'a grafial_frontend::ast::FlowDef, ExecError> {
+fn find_flow<'a>(program: &'a ProgramIR, flow_name: &str) -> Result<&'a FlowIR, ExecError> {
     program
         .flows
         .iter()
@@ -178,17 +186,116 @@ fn find_flow<'a>(
 }
 
 /// Build an index of evidences by name for O(1) lookup
-fn build_evidence_index(
-    evidences: &[grafial_frontend::ast::EvidenceDef],
-) -> HashMap<&str, &grafial_frontend::ast::EvidenceDef> {
+fn build_evidence_index(evidences: &[EvidenceIR]) -> HashMap<&str, &EvidenceIR> {
     evidences.iter().map(|e| (e.name.as_str(), e)).collect()
 }
 
-/// Build an index of rules by name for O(1) lookup
-fn build_rules_index(
-    rules: &[grafial_frontend::ast::RuleDef],
-) -> HashMap<&str, &grafial_frontend::ast::RuleDef> {
-    rules.iter().map(|r| (r.name.as_str(), r)).collect()
+/// Build an index of AST rule definitions referenced by this flow.
+///
+/// This acts as safe dead-rule elimination at execution time: unreferenced rules are not
+/// converted or indexed.
+fn build_rule_defs_index(rules: &[RuleIR], flow: &FlowIR) -> HashMap<String, RuleDef> {
+    let referenced_rules = collect_referenced_rules(flow);
+    if referenced_rules.is_empty() {
+        return HashMap::new();
+    }
+
+    let rule_by_name: HashMap<&str, &RuleIR> = rules
+        .iter()
+        .map(|rule| (rule.name.as_str(), rule))
+        .collect();
+    let mut referenced: Vec<_> = referenced_rules.into_iter().collect();
+    referenced.sort_unstable();
+
+    let mut out = HashMap::with_capacity(referenced.len());
+    for rule_name in referenced {
+        if let Some(rule) = rule_by_name.get(rule_name.as_str()) {
+            out.insert(rule_name, rule.to_ast());
+        }
+    }
+    out
+}
+
+fn collect_referenced_rules(flow: &FlowIR) -> HashSet<String> {
+    let mut referenced = HashSet::new();
+    for graph in &flow.graphs {
+        if let GraphExprIR::Pipeline { transforms, .. } = &graph.expr {
+            for transform in transforms {
+                match transform {
+                    TransformIR::ApplyRule { rule, .. } => {
+                        referenced.insert(rule.clone());
+                    }
+                    TransformIR::ApplyRuleset { rules } => {
+                        referenced.extend(rules.iter().cloned());
+                    }
+                    TransformIR::Snapshot { .. } | TransformIR::PruneEdges { .. } => {}
+                }
+            }
+        }
+    }
+    referenced
+}
+
+/// Build a deterministic graph execution plan for a flow.
+///
+/// The plan is dependency-driven:
+/// - non-pipeline graphs are always ready
+/// - pipeline graphs are ready when their start graph has already been produced
+///
+/// If no progress can be made, the flow has unresolved or cyclic dependencies.
+fn build_graph_execution_plan(flow: &FlowIR) -> Result<Vec<usize>, ExecError> {
+    let mut seen_names = HashSet::new();
+    for graph in &flow.graphs {
+        if !seen_names.insert(graph.name.as_str()) {
+            return Err(ExecError::Internal(format!(
+                "duplicate graph name '{}' in flow '{}'",
+                graph.name, flow.name
+            )));
+        }
+    }
+
+    let mut pending: Vec<usize> = (0..flow.graphs.len()).collect();
+    let mut produced = HashSet::new();
+    let mut plan = Vec::with_capacity(flow.graphs.len());
+
+    while !pending.is_empty() {
+        let mut progressed = false;
+        let mut next_pending = Vec::new();
+
+        for graph_idx in pending {
+            let graph = &flow.graphs[graph_idx];
+            let ready = match &graph.expr {
+                GraphExprIR::Pipeline { start_graph, .. } => {
+                    produced.contains(start_graph.as_str())
+                }
+                GraphExprIR::FromEvidence(_) | GraphExprIR::FromGraph(_) => true,
+            };
+
+            if ready {
+                plan.push(graph_idx);
+                produced.insert(graph.name.as_str());
+                progressed = true;
+            } else {
+                next_pending.push(graph_idx);
+            }
+        }
+
+        if !progressed {
+            let mut unresolved: Vec<_> = next_pending
+                .iter()
+                .map(|idx| flow.graphs[*idx].name.clone())
+                .collect();
+            unresolved.sort_unstable();
+            return Err(ExecError::Internal(format!(
+                "unable to resolve graph execution order in flow '{}'; unresolved: {}",
+                flow.name,
+                unresolved.join(", ")
+            )));
+        }
+        pending = next_pending;
+    }
+
+    Ok(plan)
 }
 
 /// Initialize flow result with prior metrics if available
@@ -201,38 +308,27 @@ fn initialize_flow_result(prior: Option<&FlowResult>) -> FlowResult {
 }
 
 /// Build rule globals from imported metrics.
-fn build_rule_globals(
-    flow: &grafial_frontend::ast::FlowDef,
-    prior: Option<&FlowResult>,
-) -> Result<HashMap<String, f64>, ExecError> {
-    let mut rule_globals = HashMap::new();
-    if let Some(p) = prior {
-        for imp in &flow.metric_imports {
-            if let Some(v) = p.metric_exports.get(&imp.source_alias) {
-                rule_globals.insert(imp.local_name.clone(), *v);
-            }
-        }
-    }
-    Ok(rule_globals)
+fn build_rule_globals(flow: &FlowIR, prior: Option<&FlowResult>) -> HashMap<String, f64> {
+    import_metric_bindings(&flow.metric_imports, prior)
 }
 
 /// Evaluate a graph expression to produce a BeliefGraph.
 fn eval_graph_expr<B: GraphBuilder>(
-    expr: &GraphExpr,
-    evidence_by_name: &HashMap<&str, &grafial_frontend::ast::EvidenceDef>,
+    expr: &GraphExprIR,
+    evidence_by_name: &HashMap<&str, &EvidenceIR>,
     prior: Option<&FlowResult>,
     graph_builder: &B,
-    program: &ProgramAst,
+    program: &ProgramIR,
 ) -> Result<BeliefGraph, ExecError> {
     match expr {
-        GraphExpr::FromEvidence { evidence } => {
+        GraphExprIR::FromEvidence(evidence) => {
             let ev = evidence_by_name
                 .get(evidence.as_str())
                 .ok_or_else(|| ExecError::Internal(format!("unknown evidence '{}'", evidence)))?;
             graph_builder.build_graph(ev, program)
         }
-        GraphExpr::FromGraph { alias } => lookup_graph_from_prior(alias, prior),
-        GraphExpr::Pipeline { .. } => {
+        GraphExprIR::FromGraph(alias) => lookup_graph_from_prior(alias, prior),
+        GraphExprIR::Pipeline { .. } => {
             // Pipelines require the start graph to already exist, so they're handled
             // separately in run_flow_internal after initial graphs are created
             Err(ExecError::Internal(
@@ -263,41 +359,44 @@ fn lookup_graph_from_prior(
 
 /// Applies a single transform to a graph, returning a new graph.
 fn apply_transform(
-    transform: &Transform,
+    transform: &TransformIR,
     graph: &BeliefGraph,
-    rules_by_name: &HashMap<&str, &grafial_frontend::ast::RuleDef>,
+    rules_by_name: &HashMap<String, RuleDef>,
     rule_globals: &HashMap<String, f64>,
     result: &mut FlowResult,
 ) -> Result<BeliefGraph, ExecError> {
     match transform {
-        Transform::ApplyRule { rule } => {
+        TransformIR::ApplyRule { rule, .. } => {
             let r = rules_by_name
-                .get(rule.as_str())
+                .get(rule)
                 .ok_or_else(|| ExecError::Internal(format!("unknown rule '{}'", rule)))?;
             run_rule_for_each_with_globals(graph, r, rule_globals)
         }
-        Transform::ApplyRuleset { rules } => {
+        TransformIR::ApplyRuleset { rules } => {
             // Sequential application: each rule receives the previous rule's output
             let mut current = graph.clone();
             for rule_name in rules {
-                let r = rules_by_name.get(rule_name.as_str()).ok_or_else(|| {
+                let r = rules_by_name.get(rule_name).ok_or_else(|| {
                     ExecError::Internal(format!("unknown rule '{}' in ruleset", rule_name))
                 })?;
                 current = run_rule_for_each_with_globals(&current, r, rule_globals)?;
             }
             Ok(current)
         }
-        Transform::Snapshot { name } => {
+        TransformIR::Snapshot { name } => {
             // Ensure deltas are applied before snapshotting
             let mut snapshot_graph = graph.clone();
             snapshot_graph.ensure_owned();
             result.snapshots.insert(name.clone(), snapshot_graph);
             Ok(graph.clone())
         }
-        Transform::PruneEdges {
+        TransformIR::PruneEdges {
             edge_type,
             predicate,
-        } => prune_edges(graph, edge_type, predicate),
+        } => {
+            let predicate_ast = predicate.to_ast();
+            prune_edges(graph, edge_type, &predicate_ast)
+        }
     }
 }
 
@@ -306,7 +405,7 @@ fn apply_transform(
 /// Metrics are evaluated in dependency order (earlier metrics are available to later ones).
 /// Imported metrics from prior flows are available to all metric expressions.
 fn evaluate_metrics(
-    flow: &grafial_frontend::ast::FlowDef,
+    flow: &FlowIR,
     prior: Option<&FlowResult>,
     result: &mut FlowResult,
 ) -> Result<(), ExecError> {
@@ -327,26 +426,29 @@ fn evaluate_metrics(
 
     let registry = MetricRegistry::with_builtins();
     let mut ctx = MetricContext {
-        metrics: HashMap::new(),
+        metrics: import_metric_bindings(&flow.metric_imports, prior),
     };
-
-    // Imported metrics from prior flows are available to all expressions
-    if let Some(p) = prior {
-        for imp in &flow.metric_imports {
-            if let Some(v) = p.metric_exports.get(&imp.source_alias) {
-                ctx.metrics.insert(imp.local_name.clone(), *v);
-            }
-        }
-    }
 
     // Earlier metrics in this flow are available to later ones
     for (k, v) in &result.metrics {
         ctx.metrics.insert(k.clone(), *v);
     }
 
+    let live_metrics = compute_live_metrics(flow);
+
     // Evaluate each metric in order
     for m in &flow.metrics {
-        let v = eval_metric_expr(&m.expr, target_graph, &registry, &ctx)?;
+        if !live_metrics.contains(&m.name) {
+            if let Some(v) = constant_metric_value(&m.expr) {
+                // Safe dead-metric elimination: dead constants need no runtime evaluation.
+                result.metrics.insert(m.name.clone(), v);
+                ctx.metrics.insert(m.name.clone(), v);
+                continue;
+            }
+        }
+
+        let metric_expr = m.expr.to_ast();
+        let v = eval_metric_expr(&metric_expr, target_graph, &registry, &ctx)?;
         result.metrics.insert(m.name.clone(), v);
         ctx.metrics.insert(m.name.clone(), v);
     }
@@ -362,11 +464,104 @@ fn evaluate_metrics(
     Ok(())
 }
 
+/// Computes metrics required for observable flow outputs (`export_metric`) plus dependencies.
+fn compute_live_metrics(flow: &FlowIR) -> HashSet<String> {
+    let metric_names: HashSet<String> = flow
+        .metrics
+        .iter()
+        .map(|metric| metric.name.clone())
+        .collect();
+    let mut live: HashSet<String> = flow
+        .metric_exports
+        .iter()
+        .filter_map(|metric_export| {
+            if metric_names.contains(&metric_export.metric) {
+                Some(metric_export.metric.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Metric variables are validated to reference earlier metrics only, so a reverse scan
+    // is sufficient for transitive dependency closure.
+    for metric in flow.metrics.iter().rev() {
+        if live.contains(&metric.name) {
+            collect_metric_dependencies(&metric.expr, &metric_names, &mut live);
+        }
+    }
+
+    live
+}
+
+fn collect_metric_dependencies(
+    expr: &ExprIR,
+    metric_names: &HashSet<String>,
+    live: &mut HashSet<String>,
+) {
+    match expr {
+        ExprIR::Var(name) => {
+            if metric_names.contains(name) {
+                live.insert(name.clone());
+            }
+        }
+        ExprIR::Field { target, .. } => {
+            collect_metric_dependencies(target, metric_names, live);
+        }
+        ExprIR::Call { args, .. } => {
+            for arg in args {
+                match arg {
+                    grafial_ir::CallArgIR::Positional(expr) => {
+                        collect_metric_dependencies(expr, metric_names, live);
+                    }
+                    grafial_ir::CallArgIR::Named { value, .. } => {
+                        collect_metric_dependencies(value, metric_names, live);
+                    }
+                }
+            }
+        }
+        ExprIR::Unary { expr, .. } => {
+            collect_metric_dependencies(expr, metric_names, live);
+        }
+        ExprIR::Binary { left, right, .. } => {
+            collect_metric_dependencies(left, metric_names, live);
+            collect_metric_dependencies(right, metric_names, live);
+        }
+        ExprIR::Exists { where_expr, .. } => {
+            if let Some(expr) = where_expr {
+                collect_metric_dependencies(expr, metric_names, live);
+            }
+        }
+        ExprIR::Number(_) | ExprIR::Bool(_) => {}
+    }
+}
+
+fn constant_metric_value(expr: &ExprIR) -> Option<f64> {
+    match expr {
+        ExprIR::Number(v) => Some(*v),
+        ExprIR::Bool(value) => Some(if *value { 1.0 } else { 0.0 }),
+        _ => None,
+    }
+}
+
+/// Collect imported metric bindings from prior flow exports.
+fn import_metric_bindings(
+    imports: &[MetricImportDefIR],
+    prior: Option<&FlowResult>,
+) -> HashMap<String, f64> {
+    let mut bindings = HashMap::new();
+    if let Some(p) = prior {
+        for imp in imports {
+            if let Some(v) = p.metric_exports.get(&imp.source_alias) {
+                bindings.insert(imp.local_name.clone(), *v);
+            }
+        }
+    }
+    bindings
+}
+
 /// Handle graph exports by alias.
-fn handle_exports(
-    flow: &grafial_frontend::ast::FlowDef,
-    result: &mut FlowResult,
-) -> Result<(), ExecError> {
+fn handle_exports(flow: &FlowIR, result: &mut FlowResult) -> Result<(), ExecError> {
     for ex in &flow.exports {
         let g = result
             .graphs
@@ -592,6 +787,12 @@ mod tests {
         g
     }
 
+    fn simple_evidence_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        let mut graph = build_simple_graph();
+        graph.ensure_owned();
+        Ok(graph)
+    }
+
     #[test]
     fn eval_prune_predicate_number_literal() {
         let g = build_simple_graph();
@@ -739,5 +940,133 @@ mod tests {
         let predicate = ExprAst::Bool(true);
         let result = prune_edges(&g, "REL", &predicate).unwrap();
         assert_eq!(result.edges().len(), 0);
+    }
+
+    #[test]
+    fn graph_execution_plan_handles_out_of_order_pipeline_dependencies() {
+        let flow = FlowIR {
+            name: "F".into(),
+            on_model: "M".into(),
+            graphs: vec![
+                grafial_ir::GraphDefIR {
+                    name: "g3".into(),
+                    expr: GraphExprIR::Pipeline {
+                        start_graph: "g2".into(),
+                        transforms: vec![],
+                    },
+                },
+                grafial_ir::GraphDefIR {
+                    name: "g2".into(),
+                    expr: GraphExprIR::Pipeline {
+                        start_graph: "g1".into(),
+                        transforms: vec![],
+                    },
+                },
+                grafial_ir::GraphDefIR {
+                    name: "g1".into(),
+                    expr: GraphExprIR::FromEvidence("Ev".into()),
+                },
+            ],
+            metrics: vec![],
+            exports: vec![],
+            metric_exports: vec![],
+            metric_imports: vec![],
+        };
+
+        let plan = build_graph_execution_plan(&flow).expect("plan");
+        assert_eq!(plan, vec![2, 1, 0]);
+    }
+
+    #[test]
+    fn run_flow_supports_out_of_order_pipeline_chains() {
+        let program = ProgramAst {
+            schemas: vec![],
+            belief_models: vec![],
+            evidences: vec![EvidenceDef {
+                name: "Ev".into(),
+                on_model: "M".into(),
+                observations: vec![],
+                body_src: "".into(),
+            }],
+            rules: vec![],
+            flows: vec![FlowDef {
+                name: "Demo".into(),
+                on_model: "M".into(),
+                graphs: vec![
+                    GraphDef {
+                        name: "g3".into(),
+                        expr: GraphExpr::Pipeline {
+                            start: "g2".into(),
+                            transforms: vec![],
+                        },
+                    },
+                    GraphDef {
+                        name: "g2".into(),
+                        expr: GraphExpr::Pipeline {
+                            start: "g1".into(),
+                            transforms: vec![],
+                        },
+                    },
+                    GraphDef {
+                        name: "g1".into(),
+                        expr: GraphExpr::FromEvidence {
+                            evidence: "Ev".into(),
+                        },
+                    },
+                ],
+                metrics: vec![],
+                exports: vec![],
+                metric_exports: vec![],
+                metric_imports: vec![],
+            }],
+        };
+
+        let result =
+            run_flow_with_builder(&program, "Demo", &simple_evidence_builder, None).expect("flow");
+        assert!(result.graphs.contains_key("g1"));
+        assert!(result.graphs.contains_key("g2"));
+        assert!(result.graphs.contains_key("g3"));
+        assert_eq!(
+            result.graphs.get("g1").unwrap().edges().len(),
+            result.graphs.get("g3").unwrap().edges().len()
+        );
+    }
+
+    #[test]
+    fn compute_live_metrics_tracks_export_dependencies() {
+        let flow = FlowIR {
+            name: "F".into(),
+            on_model: "M".into(),
+            graphs: vec![],
+            metrics: vec![
+                grafial_ir::MetricDefIR {
+                    name: "m1".into(),
+                    expr: ExprIR::Number(1.0),
+                },
+                grafial_ir::MetricDefIR {
+                    name: "m2".into(),
+                    expr: ExprIR::Binary {
+                        op: grafial_ir::BinaryOpIR::Add,
+                        left: Box::new(ExprIR::Var("m1".into())),
+                        right: Box::new(ExprIR::Number(1.0)),
+                    },
+                },
+                grafial_ir::MetricDefIR {
+                    name: "m3".into(),
+                    expr: ExprIR::Number(999.0),
+                },
+            ],
+            exports: vec![],
+            metric_exports: vec![grafial_ir::MetricExportDefIR {
+                metric: "m2".into(),
+                alias: "out".into(),
+            }],
+            metric_imports: vec![],
+        };
+
+        let live = compute_live_metrics(&flow);
+        assert!(live.contains("m1"));
+        assert!(live.contains("m2"));
+        assert!(!live.contains("m3"));
     }
 }

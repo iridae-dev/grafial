@@ -21,6 +21,21 @@ use grafial_frontend::ast::{
     BeliefModel, CategoricalPrior, EdgeBeliefDecl, EvidenceDef, EvidenceMode, ObserveStmt,
     PosteriorType, Schema,
 };
+use grafial_ir::{EvidenceIR, ProgramIR};
+
+struct EvidenceBuildContext<'a> {
+    model: &'a BeliefModel,
+    schema: &'a Schema,
+}
+
+struct EdgeBuildInput {
+    src: NodeId,
+    dst: NodeId,
+    edge_type: String,
+}
+
+type AttrObservation = (f64, f64);
+type AttrObservationGroup = ((NodeId, String), Vec<AttrObservation>);
 
 /// Builds a BeliefGraph from an evidence definition.
 ///
@@ -31,21 +46,49 @@ pub fn build_graph_from_evidence(
     evidence: &EvidenceDef,
     program: &grafial_frontend::ast::ProgramAst,
 ) -> Result<BeliefGraph, ExecError> {
-    // Find the belief model this evidence applies to
-    let model = program
-        .belief_models
+    let context = resolve_evidence_context(
+        &evidence.name,
+        &evidence.on_model,
+        &program.belief_models,
+        &program.schemas,
+    )?;
+    build_graph_from_evidence_with_context(evidence, context)
+}
+
+/// Builds a BeliefGraph from an IR evidence definition.
+///
+/// This adapter keeps evidence construction logic centralized in one implementation.
+pub fn build_graph_from_evidence_ir(
+    evidence: &EvidenceIR,
+    program: &ProgramIR,
+) -> Result<BeliefGraph, ExecError> {
+    let evidence_ast = evidence.to_ast();
+    let context = resolve_evidence_context(
+        &evidence_ast.name,
+        &evidence_ast.on_model,
+        &program.belief_models,
+        &program.schemas,
+    )?;
+    build_graph_from_evidence_with_context(&evidence_ast, context)
+}
+
+fn resolve_evidence_context<'a>(
+    evidence_name: &str,
+    on_model: &str,
+    belief_models: &'a [BeliefModel],
+    schemas: &'a [Schema],
+) -> Result<EvidenceBuildContext<'a>, ExecError> {
+    let model = belief_models
         .iter()
-        .find(|m| m.name == evidence.on_model)
+        .find(|m| m.name == on_model)
         .ok_or_else(|| {
             ExecError::ValidationError(format!(
                 "Evidence '{}' references unknown belief model '{}'",
-                evidence.name, evidence.on_model
+                evidence_name, on_model
             ))
         })?;
 
-    // Find the schema this model operates on
-    let schema = program
-        .schemas
+    let schema = schemas
         .iter()
         .find(|s| s.name == model.on_schema)
         .ok_or_else(|| {
@@ -55,6 +98,15 @@ pub fn build_graph_from_evidence(
             ))
         })?;
 
+    Ok(EvidenceBuildContext { model, schema })
+}
+
+fn build_graph_from_evidence_with_context(
+    evidence: &EvidenceDef,
+    context: EvidenceBuildContext<'_>,
+) -> Result<BeliefGraph, ExecError> {
+    let model = context.model;
+    let schema = context.schema;
     let mut graph = BeliefGraph::default();
 
     // Index maps for efficient node/edge/group lookup during construction
@@ -85,14 +137,8 @@ pub fn build_graph_from_evidence(
 
     // Create all nodes first
     for (node_type, label) in nodes_to_create {
-        let node_id = create_node_if_needed(
-            &mut graph,
-            &mut node_map,
-            &schema,
-            &model,
-            &node_type,
-            &label,
-        )?;
+        let node_id =
+            create_node_if_needed(&mut graph, &mut node_map, schema, model, &node_type, &label)?;
         // Ensure node_id is in map (should already be, but be safe)
         node_map.insert((node_type, label), node_id);
     }
@@ -149,18 +195,25 @@ pub fn build_graph_from_evidence(
                             &mut edge_map,
                             &mut competing_group_map,
                             &mut next_group_id,
-                            *src_id,
-                            *dst_id,
-                            edge_type.clone(),
+                            EdgeBuildInput {
+                                src: *src_id,
+                                dst: *dst_id,
+                                edge_type: edge_type.clone(),
+                            },
                             edge_decl,
-                            &schema,
+                            schema,
                         )?
                     };
 
                 // Collect observation for parallel processing
                 edge_observations.push((edge_id, mode.clone()));
             }
-            ObserveStmt::Attribute { node, attr, value, precision } => {
+            ObserveStmt::Attribute {
+                node,
+                attr,
+                value,
+                precision,
+            } => {
                 let node_id = node_map
                     .get(&(node.0.clone(), node.1.clone()))
                     .ok_or_else(|| {
@@ -195,15 +248,16 @@ pub fn build_graph_from_evidence(
                     *p
                 } else {
                     match posterior_type {
-                    PosteriorType::Gaussian { params } => {
-                        params
-                            .iter()
-                            .find(|(name, _)| name == "observation_precision")
-                            .map(|(_, v)| *v)
-                            .unwrap_or(1.0) // Default observation precision
+                        PosteriorType::Gaussian { params } => {
+                            params
+                                .iter()
+                                .find(|(name, _)| name == "observation_precision")
+                                .map(|(_, v)| *v)
+                                .unwrap_or(1.0) // Default observation precision
+                        }
+                        _ => 1.0,
                     }
-                    _ => 1.0,
-                }};
+                };
 
                 // Collect observation for parallel processing
                 attr_observations.push((*node_id, attr.clone(), *value, tau_obs));
@@ -314,12 +368,16 @@ fn create_edge_with_posterior(
     edge_map: &mut HashMap<(NodeId, NodeId, String), EdgeId>,
     competing_group_map: &mut HashMap<(NodeId, String), CompetingGroupId>,
     next_group_id: &mut u32,
-    src: NodeId,
-    dst: NodeId,
-    edge_type: String,
+    edge: EdgeBuildInput,
     edge_decl: &EdgeBeliefDecl,
     schema: &Schema,
 ) -> Result<EdgeId, ExecError> {
+    let EdgeBuildInput {
+        src,
+        dst,
+        edge_type,
+    } = edge;
+
     // Check if edge already exists
     if let Some(&edge_id) = edge_map.get(&(src, dst, edge_type.clone())) {
         return Ok(edge_id);
@@ -483,19 +541,16 @@ fn apply_observations_parallel(
     // Multiple observations on the same edge must be applied sequentially
     let mut edge_groups: HashMap<EdgeId, Vec<EvidenceMode>> = HashMap::new();
     for (edge_id, mode) in edge_observations {
-        edge_groups
-            .entry(edge_id)
-            .or_insert_with(Vec::new)
-            .push(mode);
+        edge_groups.entry(edge_id).or_default().push(mode);
     }
 
     // Group attribute observations by (NodeId, attr) for deterministic ordering
     // Multiple observations on the same attribute must be applied sequentially
-    let mut attr_groups: HashMap<(NodeId, String), Vec<(f64, f64)>> = HashMap::new();
+    let mut attr_groups: HashMap<(NodeId, String), Vec<AttrObservation>> = HashMap::new();
     for (node_id, attr, value, tau_obs) in attr_observations {
         attr_groups
             .entry((node_id, attr))
-            .or_insert_with(Vec::new)
+            .or_default()
             .push((value, tau_obs));
     }
 
@@ -503,8 +558,7 @@ fn apply_observations_parallel(
     let mut edge_groups_vec: Vec<(EdgeId, Vec<EvidenceMode>)> = edge_groups.into_iter().collect();
     edge_groups_vec.sort_by_key(|(edge_id, _)| *edge_id);
 
-    let mut attr_groups_vec: Vec<((NodeId, String), Vec<(f64, f64)>)> =
-        attr_groups.into_iter().collect();
+    let mut attr_groups_vec: Vec<AttrObservationGroup> = attr_groups.into_iter().collect();
     attr_groups_vec.sort_by_key(|((node_id, attr), _)| (*node_id, attr.clone()));
 
     // Apply observations: sequential within groups (order matters for Bayesian updates),
@@ -525,7 +579,7 @@ fn apply_observations_parallel(
                 // Apply all observations for this edge sequentially in a single lock
                 let mut graph_guard = graph_mutex.lock().unwrap();
                 for mode in modes {
-                    apply_edge_observation_single(&mut *graph_guard, *edge_id, mode.clone())?;
+                    apply_edge_observation_single(&mut graph_guard, *edge_id, mode.clone())?;
                 }
                 Ok(())
             })?;

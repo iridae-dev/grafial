@@ -38,7 +38,7 @@ categorical_param = {
     (ident ~ "=" ~ categorical_param_value)
 }
 categorical_param_value = {
-    string | prior_array | "uniform" | number | categorical_categories_array
+    string | prior_array | "uniform" | ident | number | categorical_categories_array
 }
 categorical_categories_array = { "[" ~ string ~ ("," ~ string)* ~ "]" }
 prior_array = { "[" ~ number ~ ("," ~ number)* ~ "]" }
@@ -97,11 +97,11 @@ pattern_item = {
     "(" ~ ident ~ ":" ~ label ~ ")" ~ "-" ~ "[" ~ ident ~ ":" ~ ident ~ "]" ~ "->" ~ "(" ~ ident ~ ":" ~ label ~ ")"
 }
 
-where_clause = { KW_where ~ expr }
+where_clause = { KW_where ~ expr ~ ("=>" ~ action_block)? }
 
 action_clause = { KW_action ~ action_block }
 action_block = { "{" ~ (COMMENT | action_stmt)* ~ "}" }
-action_stmt = _{ let_stmt | set_expectation_stmt | force_absent_stmt | nbnudge_stmt | soft_update_stmt | delete_stmt | suppress_stmt }
+action_stmt = { let_stmt | set_expectation_stmt | force_absent_stmt | nbnudge_stmt | soft_update_stmt | delete_stmt | suppress_stmt }
 let_stmt = { KW_let ~ ident ~ "=" ~ expr ~ ";"? }
 set_expectation_stmt = { KW_set_expectation ~ node_attr ~ "=" ~ expr ~ ";"? }
 force_absent_stmt = { KW_force_absent ~ ident ~ ";"? }
@@ -110,11 +110,15 @@ nbnudge_stmt = { KW_non_bayesian_nudge ~ node_attr ~ KW_to ~ expr ~ variance_cla
 variance_clause = { KW_variance ~ "=" ~ ( KW_preserve | increase_clause | decrease_clause ) }
 increase_clause = { KW_increase ~ ( "(" ~ "factor" ~ "=" ~ number ~ ")" )? }
 decrease_clause = { KW_decrease ~ ( "(" ~ "factor" ~ "=" ~ number ~ ")" )? }
-soft_update_stmt = { node_attr ~ "~=" ~ expr ~ soft_args? ~ ";"? }
+soft_update_stmt = { node_attr ~ "~=" ~ expr ~ (soft_args | soft_arg)* ~ ";"? }
 soft_args = { "(" ~ soft_arg ~ ( "," ~ soft_arg )* ~ ")" }
 soft_arg = { ( "precision" ~ "=" ~ number ) | ( "count" ~ "=" ~ number ) }
-delete_stmt = { KW_delete ~ ident ~ ( "(" ~ "confidence" ~ "=" ~ ident ~ ")" )? ~ ";"? }
-suppress_stmt = { KW_suppress ~ ident ~ ( "(" ~ "weight" ~ "=" ~ number ~ ")" )? ~ ";"? }
+delete_stmt = { KW_delete ~ ident ~ (delete_args | delete_arg)? ~ ";"? }
+delete_args = { "(" ~ delete_arg ~ ")" }
+delete_arg = { "confidence" ~ "=" ~ ident }
+suppress_stmt = { KW_suppress ~ ident ~ (suppress_args | suppress_arg)? ~ ";"? }
+suppress_args = { "(" ~ suppress_arg ~ ")" }
+suppress_arg = { "weight" ~ "=" ~ number }
 mode_clause = { KW_mode ~ ":" ~ ident }
 
 // --- flow ---
@@ -154,23 +158,26 @@ metric_import_stmt = { KW_import_metric ~ ident ~ KW_as ~ ident }
 
 // --- expressions ---
 expr = { or_expr }
-or_expr = { and_expr ~ (KW_or ~ and_expr)* }
-and_expr = { cmp_expr ~ (KW_and ~ cmp_expr)* }
+or_expr = { and_expr ~ (op_or ~ and_expr)* }
+op_or = { kw_or_tok }
+and_expr = { cmp_expr ~ (op_and ~ cmp_expr)* }
+op_and = { kw_and_tok }
 cmp_expr = { add_expr ~ (op_cmp ~ add_expr)? }
 op_cmp = { "==" | "!=" | "<=" | ">=" | "<" | ">" }
 add_expr = { mul_expr ~ ((op_add) ~ mul_expr)* }
-op_add = _{ "+" | "-" }
+op_add = { "+" | "-" }
 mul_expr = { unary_expr ~ ((op_mul) ~ unary_expr)* }
-op_mul = _{ "*" | "/" }
+op_mul = { "*" | "/" }
 unary_expr = { (op_unary ~ unary_expr) | postfix }
-op_unary = _{ "-" | KW_not }
-postfix = { primary ~ ( field_access | call_suffix )* }
+op_unary = { "-" | kw_not_tok }
+call_primary = _{ e_bracket | paren_expr | exists_expr | not_exists_expr | metric_builder_expr | ident }
+postfix = { ((number | boolean) ~ field_access*) | (call_primary ~ ( field_access | call_suffix )*) }
 field_access = { "." ~ ident }
 call_suffix = { "(" ~ (arg ~ ("," ~ arg)*)? ~ ")" }
 arg = _{ named_arg | expr }
 named_arg = { ident ~ "=" ~ expr }
 // Put exists/not exists before ident so keywords aren't captured as identifiers
-primary = { number | boolean | e_bracket | paren_expr | exists_expr | not_exists_expr | ident }
+primary = { number | boolean | e_bracket | paren_expr | exists_expr | not_exists_expr | metric_builder_expr | ident }
 paren_expr = { "(" ~ expr ~ ")" }
 e_bracket = { "E" ~ "[" ~ (ident ~ "." ~ ident) ~ "]" }
 exists_expr = { KW_exists ~ pattern_item ~ (KW_where ~ expr)? }

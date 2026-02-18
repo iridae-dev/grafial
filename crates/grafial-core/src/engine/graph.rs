@@ -713,6 +713,12 @@ pub struct AdjacencyIndex {
     edge_ids: Vec<EdgeId>,
 }
 
+impl Default for AdjacencyIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AdjacencyIndex {
     /// Creates a new empty adjacency index.
     pub fn new() -> Self {
@@ -898,6 +904,8 @@ mod serde_helpers {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    type AdjacencyRanges = HashMap<(NodeId, Arc<str>), (usize, usize)>;
+
     pub mod serde_arc {
         use super::*;
 
@@ -932,12 +940,12 @@ mod serde_helpers {
         where
             D: Deserializer<'de>,
         {
-            String::deserialize(deserializer).map(|s| Arc::from(s))
+            String::deserialize(deserializer).map(Arc::from)
         }
     }
 
     pub fn serialize_adjacency_ranges<S>(
-        ranges: &HashMap<(NodeId, Arc<str>), (usize, usize)>,
+        ranges: &AdjacencyRanges,
         serializer: S,
     ) -> Result<S::Ok, S::Error>
     where
@@ -954,7 +962,7 @@ mod serde_helpers {
 
     pub fn deserialize_adjacency_ranges<'de, D>(
         deserializer: D,
-    ) -> Result<HashMap<(NodeId, Arc<str>), (usize, usize)>, D::Error>
+    ) -> Result<AdjacencyRanges, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -980,7 +988,7 @@ mod serde_helpers {
         D: Deserializer<'de>,
         GraphDelta: Deserialize<'de>,
     {
-        Vec::<GraphDelta>::deserialize(deserializer).map(|v| SmallVec::from_vec(v))
+        Vec::<GraphDelta>::deserialize(deserializer).map(SmallVec::from_vec)
     }
 }
 
@@ -1185,13 +1193,11 @@ impl BeliefGraph {
         let attr_changes: Vec<&GraphDelta> = self
             .delta
             .iter()
-            .filter_map(|change| {
-                if let GraphDelta::NodeAttributeChange { node: delta_id, .. } = change {
-                    if *delta_id == id {
-                        return Some(change);
-                    }
-                }
-                None
+            .filter(|change| {
+                matches!(
+                    change,
+                    GraphDelta::NodeAttributeChange { node: delta_id, .. } if *delta_id == id
+                )
             })
             .collect();
 
@@ -1747,11 +1753,7 @@ impl BeliefGraph {
 
     /// Delete an independent edge with optional confidence mapping.
     /// Defaults to near-zero mean with very large β.
-    pub fn delete_edge(
-        &mut self,
-        edge: EdgeId,
-        confidence: Option<&str>,
-    ) -> Result<(), ExecError> {
+    pub fn delete_edge(&mut self, edge: EdgeId, confidence: Option<&str>) -> Result<(), ExecError> {
         self.ensure_ready_for_delta();
         let current = self
             .get_edge_posterior_with_deltas(edge)
@@ -1949,12 +1951,12 @@ impl BeliefGraph {
         }
     }
 
-        // Gets the competing edge group for a node and edge type.
-        ///
-        /// Returns the group if it exists, None if the edges are independent or no edges exist.
-        ///
-        /// # Arguments
-        ///
+    // Gets the competing edge group for a node and edge type.
+    ///
+    /// Returns the group if it exists, None if the edges are independent or no edges exist.
+    ///
+    /// # Arguments
+    ///
     /// * `node` - The source node ID
     /// * `edge_type` - The edge type name
     ///
@@ -3525,8 +3527,13 @@ mod tests {
         let nid = g.add_node("N".to_string(), attrs);
 
         // preserve
-        g.non_bayesian_nudge(nid, "x", 10.0, &grafial_frontend::ast::VarianceSpec::Preserve)
-            .unwrap();
+        g.non_bayesian_nudge(
+            nid,
+            "x",
+            10.0,
+            &grafial_frontend::ast::VarianceSpec::Preserve,
+        )
+        .unwrap();
         assert_eq!(g.expectation(nid, "x").unwrap(), 10.0);
         assert!((g.precision(nid, "x").unwrap() - 2.0).abs() < 1e-12);
 
@@ -3577,14 +3584,17 @@ mod tests {
     #[test]
     fn delete_and_suppress_edge_and_undelete_math() {
         let mut g = BeliefGraph::default();
-        let mut attrs = HashMap::new();
+        let attrs = HashMap::new();
         let a = g.add_node("N".to_string(), attrs.clone());
         let b = g.add_node("N".to_string(), attrs);
         let e = g.add_edge(
             a,
             b,
             "E".to_string(),
-            BetaPosterior { alpha: 1.0, beta: 1.0 },
+            BetaPosterior {
+                alpha: 1.0,
+                beta: 1.0,
+            },
         );
 
         // Suppress -> Beta(1,10) by default

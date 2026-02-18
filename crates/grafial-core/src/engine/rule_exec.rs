@@ -40,11 +40,11 @@ use std::collections::HashMap;
 
 use crate::engine::errors::ExecError;
 use crate::engine::expr_eval::{eval_binary_op, eval_expr_core, eval_unary_op, ExprContext};
-use crate::engine::expr_utils::split_args as split_call_args;
 use crate::engine::expr_utils::inv_norm_cdf;
 use crate::engine::graph::{BeliefGraph, EdgeId, NodeId};
 use crate::engine::query_plan::QueryPlanCache;
 use grafial_frontend::ast::{ActionStmt, CallArg, ExprAst, PatternItem, RuleDef};
+use grafial_ir::RuleIR;
 
 // Phase 7: Fixpoint iteration configuration
 /// Maximum iterations for fixpoint rules to prevent infinite loops.
@@ -62,21 +62,12 @@ const FIXPOINT_TOLERANCE: f64 = 1e-6;
 /// Maps pattern variables (from rule patterns) to concrete graph elements.
 /// For example, pattern `(A:Person)-[e:KNOWS]->(B:Person)` creates bindings
 /// for variables A, B (nodes) and e (edge).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MatchBindings {
     /// Maps node variable names to node IDs
     pub node_vars: HashMap<String, NodeId>,
     /// Maps edge variable names to edge IDs
     pub edge_vars: HashMap<String, EdgeId>,
-}
-
-impl Default for MatchBindings {
-    fn default() -> Self {
-        Self {
-            node_vars: HashMap::new(),
-            edge_vars: HashMap::new(),
-        }
-    }
 }
 
 impl MatchBindings {
@@ -161,8 +152,6 @@ impl<'a> ExprContext for RuleExprContext<'a> {
             other => Err(ExecError::Internal(format!("unknown function '{}'", other))),
         }
     }
-
-    /// Evaluates quantile(NodeVar.attr, p) assuming Normal posterior
 
     fn eval_field(
         &self,
@@ -285,9 +274,7 @@ impl<'a> RuleExprContext<'a> {
                     let nid = self.resolve_node_var(var_name)?;
                     graph.stddev(nid, field)
                 }
-                _ => Err(ExecError::Internal(
-                    "stddev() requires NodeVar.attr".into(),
-                )),
+                _ => Err(ExecError::Internal("stddev() requires NodeVar.attr".into())),
             },
             _ => Err(ExecError::Internal(
                 "stddev() requires a field expression".into(),
@@ -500,7 +487,11 @@ impl<'a> RuleExprContext<'a> {
     }
 
     /// Helper: extract mean and variance for simple expressions: node.attr or number
-    fn extract_mean_var(&self, expr: &ExprAst, graph: &BeliefGraph) -> Result<(f64, f64), ExecError> {
+    fn extract_mean_var(
+        &self,
+        expr: &ExprAst,
+        graph: &BeliefGraph,
+    ) -> Result<(f64, f64), ExecError> {
         match expr {
             ExprAst::Number(x) => Ok((*x, 0.0)),
             ExprAst::Field { target, field } => match &**target {
@@ -759,7 +750,7 @@ fn eval_where_with_exists(
     graph: &BeliefGraph,
     ctx: &RuleExprContext,
 ) -> Result<f64, ExecError> {
-    let result = match expr {
+    match expr {
         ExprAst::Exists {
             pattern,
             where_expr,
@@ -778,8 +769,7 @@ fn eval_where_with_exists(
             // For all other expression types, use the standard evaluator
             eval_expr_core(expr, graph, ctx)
         }
-    };
-    result
+    }
 }
 
 /// Executes action statements against a belief graph.
@@ -835,7 +825,9 @@ pub fn execute_actions(
             } => {
                 let nid = ctx.resolve_node_var(node_var)?;
                 let value = eval_expr_core(expr, graph, &ctx)?;
-                let variance = variance.as_ref().unwrap_or(&grafial_frontend::ast::VarianceSpec::Preserve);
+                let variance = variance
+                    .as_ref()
+                    .unwrap_or(&grafial_frontend::ast::VarianceSpec::Preserve);
                 graph.non_bayesian_nudge(nid, attr, value, variance)?;
             }
             ActionStmt::SoftUpdate {
@@ -851,7 +843,10 @@ pub fn execute_actions(
                 let c = count.unwrap_or(1.0);
                 graph.soft_update(nid, attr, value, tau, c)?;
             }
-            ActionStmt::DeleteEdge { edge_var, confidence } => {
+            ActionStmt::DeleteEdge {
+                edge_var,
+                confidence,
+            } => {
                 let eid = ctx.resolve_edge_var(edge_var)?;
                 graph.delete_edge(eid, confidence.as_deref())?;
             }
@@ -1062,10 +1057,9 @@ pub fn run_rule_for_each_with_globals(
     // Debug logging removed for clean output
 
     let mut filtered_matches = Vec::new();
-    for (_idx, bindings) in matches.iter().enumerate() {
+    for bindings in &matches {
         if evaluate_where_clause(&rule.where_expr, bindings, globals, input)? {
             filtered_matches.push(bindings.clone());
-        } else {
         }
     }
 
@@ -1081,7 +1075,7 @@ pub fn run_rule_for_each_with_globals(
     work.ensure_owned();
 
     // Apply actions to working copy
-    for (_idx, bindings) in filtered_matches.iter().enumerate() {
+    for bindings in &filtered_matches {
         execute_actions(&mut work, &rule.actions, bindings, globals)?;
     }
 
@@ -1278,6 +1272,26 @@ pub fn run_rule(
             other
         ))),
     }
+}
+
+/// Executes an IR rule in "for_each" mode with global scalar bindings.
+pub fn run_rule_ir_for_each_with_globals(
+    input: &BeliefGraph,
+    rule: &RuleIR,
+    globals: &HashMap<String, f64>,
+) -> Result<BeliefGraph, ExecError> {
+    let ast_rule = rule.to_ast();
+    run_rule_for_each_with_globals(input, &ast_rule, globals)
+}
+
+/// Executes an IR rule using its configured mode with global scalar bindings.
+pub fn run_rule_ir(
+    input: &BeliefGraph,
+    rule: &RuleIR,
+    globals: &HashMap<String, f64>,
+) -> Result<BeliefGraph, ExecError> {
+    let ast_rule = rule.to_ast();
+    run_rule(input, &ast_rule, globals)
 }
 
 #[cfg(test)]

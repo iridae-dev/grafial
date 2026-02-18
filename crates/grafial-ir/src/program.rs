@@ -1,34 +1,52 @@
-//! Program IR for Grafial
+//! Program IR for Grafial.
 //!
-//! Aggregates all IR types into a complete program representation.
+//! Aggregates all lowered IR components into a complete program representation.
 
+use crate::evidence::EvidenceIR;
 use crate::flow::FlowIR;
+use crate::optimize::optimize_program;
 use crate::rule::RuleIR;
+use grafial_frontend::ast::ProgramAst;
 
 /// A lowered program in IR form.
-///
-/// This is the stable interface between frontend and engine.
-/// The engine should depend on ProgramIR, not ProgramAst.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProgramIR {
-    /// Schema definitions (unchanged from AST - no need to lower)
+    /// Schema definitions are copied directly from frontend AST.
     pub schemas: Vec<grafial_frontend::ast::Schema>,
-    /// Belief models (unchanged from AST - no need to lower)
+    /// Belief models are copied directly from frontend AST.
     pub belief_models: Vec<grafial_frontend::ast::BeliefModel>,
-    /// Evidence definitions (unchanged from AST - no need to lower)
-    pub evidences: Vec<grafial_frontend::ast::EvidenceDef>,
-    /// Lowered rules
+    /// Lowered evidence definitions.
+    pub evidences: Vec<EvidenceIR>,
+    /// Lowered rules.
     pub rules: Vec<RuleIR>,
-    /// Lowered flows
+    /// Lowered flows.
     pub flows: Vec<FlowIR>,
 }
 
-impl From<&grafial_frontend::ast::ProgramAst> for ProgramIR {
-    fn from(ast: &grafial_frontend::ast::ProgramAst) -> Self {
+impl ProgramIR {
+    /// Convert this IR program back to frontend AST.
+    pub fn to_ast(&self) -> ProgramAst {
+        ProgramAst {
+            schemas: self.schemas.clone(),
+            belief_models: self.belief_models.clone(),
+            evidences: self.evidences.iter().map(EvidenceIR::to_ast).collect(),
+            rules: self.rules.iter().map(RuleIR::to_ast).collect(),
+            flows: self.flows.iter().map(FlowIR::to_ast).collect(),
+        }
+    }
+
+    /// Returns an optimized copy of this program IR.
+    pub fn optimized(&self) -> Self {
+        optimize_program(self)
+    }
+}
+
+impl From<&ProgramAst> for ProgramIR {
+    fn from(ast: &ProgramAst) -> Self {
         Self {
             schemas: ast.schemas.clone(),
             belief_models: ast.belief_models.clone(),
-            evidences: ast.evidences.clone(),
+            evidences: ast.evidences.iter().map(EvidenceIR::from).collect(),
             rules: ast.rules.iter().map(RuleIR::from).collect(),
             flows: ast.flows.iter().map(FlowIR::from).collect(),
         }
@@ -106,5 +124,47 @@ mod tests {
         assert_eq!(ir.belief_models[0].name, "Model1");
         assert_eq!(ir.evidences.len(), 1);
         assert_eq!(ir.evidences[0].name, "Ev1");
+    }
+
+    #[test]
+    fn program_ir_roundtrips_to_ast() {
+        let ast = ProgramAst {
+            schemas: vec![],
+            belief_models: vec![],
+            evidences: vec![EvidenceDef {
+                name: "Ev".into(),
+                on_model: "M".into(),
+                observations: vec![ObserveStmt::Attribute {
+                    node: ("N".into(), "x".into()),
+                    attr: "a".into(),
+                    value: 1.0,
+                    precision: None,
+                }],
+                body_src: "raw".into(),
+            }],
+            rules: vec![RuleDef {
+                name: "R".into(),
+                on_model: "M".into(),
+                patterns: vec![],
+                where_expr: Some(ExprAst::Bool(true)),
+                actions: vec![ActionStmt::ForceAbsent {
+                    edge_var: "e".into(),
+                }],
+                mode: Some("for_each".into()),
+            }],
+            flows: vec![FlowDef {
+                name: "F".into(),
+                on_model: "M".into(),
+                graphs: vec![],
+                metrics: vec![],
+                exports: vec![],
+                metric_exports: vec![],
+                metric_imports: vec![],
+            }],
+        };
+
+        let ir = ProgramIR::from(&ast);
+        let back = ir.to_ast();
+        assert_eq!(ast, back);
     }
 }

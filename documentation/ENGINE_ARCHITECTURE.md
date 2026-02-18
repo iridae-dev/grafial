@@ -43,19 +43,23 @@ baygraph/
 **Public API:**
 - `parse_program(source: &str) -> Result<ProgramAst, FrontendError>`
 - `validate_program(ast: &ProgramAst) -> Result<(), FrontendError>`
+- `validate_program_with_source(ast: &ProgramAst, source: &str) -> Result<(), FrontendError>`
 
 ### grafial-ir
 
 **Location:** `crates/grafial-ir/`
 
 **Modules:**
+- **ExprIR** (`src/expr.rs`): Lowered expression tree shared across IR surfaces
+- **EvidenceIR** (`src/evidence.rs`): Lowered evidence observations and modes
 - **RuleIR** (`src/rule.rs`): Lowered rule representation
 - **FlowIR** (`src/flow.rs`): Lowered flow representation
 - **ProgramIR** (`src/program.rs`): Complete program IR
+- **Optimizer** (`src/optimize.rs`): IR constant folding/canonicalization/dead-code passes
 
 **Purpose:** Canonical lowered representation designed to decouple frontend from engine.
 
-**Status:** Infrastructure exists with lowering functions, but engine currently uses AST directly. See ROADMAP.md for migration plans.
+**Status:** IR lowering and IR-native execution paths are implemented, with compatibility wrappers preserved for AST-facing entrypoints. See `ROADMAP.md` for roadmap status and future compiler/runtime work.
 
 ### grafial-core
 
@@ -82,7 +86,9 @@ baygraph/
 
 **Public API:**
 - `parse_and_validate(source: &str) -> Result<ProgramAst, ExecError>`
-- `run_flow(program: &ProgramAst, flow_name: &str, evidence: &EvidenceDef) -> Result<FlowResult, ExecError>`
+- `parse_validate_and_lower(source: &str) -> Result<ProgramIR, ExecError>`
+- `run_flow(program: &ProgramAst, flow_name: &str, prior: Option<&FlowResult>) -> Result<FlowResult, ExecError>`
+- `run_flow_ir(program: &ProgramIR, flow_name: &str, prior: Option<&FlowResult>) -> Result<FlowResult, ExecError>`
 
 ---
 
@@ -149,14 +155,17 @@ pub struct BeliefGraph {
 ```rust
 pub enum EdgePosterior {
     Independent(BetaPosterior),
-    Competing(CompetingEdgeRef),  // Reference to shared group
+    Competing {
+        group_id: CompetingGroupId,
+        category_index: usize,
+    },
 }
 ```
 
 **Competing edges:**
-- Shared `DirichletPosterior` groups indexed by `(source_node, edge_type)`
-- Edges reference group via `CompetingEdgeRef { group_id, category_index }`
-- Groups stored in `BeliefGraphInner.competing_groups: FxHashMap<...>`
+- Shared `DirichletPosterior` groups stored in `BeliefGraphInner.competing_groups: FxHashMap<CompetingGroupId, CompetingEdgeGroup>`
+- Each competing group carries `(source node, edge type, categories)`
+- Edges reference their group's category via `{ group_id, category_index }`
 
 ---
 
@@ -204,6 +213,7 @@ pub enum EdgePosterior {
 pub enum FrontendError {
     ParseError(String),
     ValidationError(String),
+    ValidationDiagnostic(ValidationDiagnostic),
 }
 ```
 
@@ -250,9 +260,9 @@ pub enum ExecError {
 
 ### Where Clauses
 
-- **Short-circuiting**: Evaluate conditions with early exit
-- **Hoisting**: Lift invariant expressions out of inner loops
-- **Context**: Evaluate against input graph (consistent state)
+- **Unified expression evaluation**: Reuses the core expression evaluator with rule bindings, locals, and imported globals
+- **Exists support**: `exists` / `not exists` subqueries are handled through dedicated rule-side matching logic
+- **Context**: Evaluates predicates against the input graph state for deterministic filtering
 
 ---
 
@@ -264,7 +274,7 @@ pub enum ExecError {
 |------|---------------------|
 | **Graph transforms** | Register new `Transform` in engine (Rust) |
 | **Metrics / aggregates** | Implement `MetricFn` trait and register |
-| **Built-in functions** | Extend intrinsic function table in `expr_eval` |
+| **Built-in functions** | Extend context-specific function handlers (`rule_exec` / `flow_exec` prune context) |
 | **Python interop** | Call `run_flow` / inspect graphs / metrics |
 | **UI parity** | Structured editor over AST; text ⇄ AST round-trip |
 
@@ -308,8 +318,8 @@ pub trait MetricFn: Send + Sync + 'static {
 ```
 
 **Registry design:**
-- Immutable `Arc<HashMap<String, Arc<dyn MetricFn>>>`
-- Constructed at engine initialization
+- `MetricRegistry` owns a `HashMap<String, Arc<dyn MetricFn>>`
+- Built-ins are created via `MetricRegistry::with_builtins()`
 - Passed through execution contexts (no globals)
 - Enables testing and determinism
 
@@ -356,7 +366,7 @@ pub trait MetricFn: Send + Sync + 'static {
 - Copy-on-write semantics (reduce cloning)
 - Iterator optimizations (unstable sort, pre-allocated capacity)
 
-**Future:** See `ROADMAP.md` for planned optimizations including parallelization, algorithmic improvements, and memory layout optimizations.
+**Future:** See `ROADMAP.md` for planned optimizations including parallelization, algorithmic improvements, memory/indexing improvements, and backend acceleration.
 
 ---
 
@@ -388,6 +398,6 @@ pub trait MetricFn: Send + Sync + 'static {
 ## References
 
 - **Language Guide**: `LANGUAGE_GUIDE.md` - User-facing language documentation
-- **Roadmap**: `ROADMAP.md` - Future work and performance improvements
+- **Roadmap**: `ROADMAP.md` - Canonical roadmap and future work
 - **Python Bindings**: `crates/grafial-python/README.md` - Python bindings documentation
 - **Building**: `BUILDING.md` - Build and development setup

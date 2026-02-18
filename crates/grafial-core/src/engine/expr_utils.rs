@@ -15,7 +15,7 @@ use grafial_frontend::ast::{CallArg, ExprAst};
 /// A tuple of:
 /// - `Vec<&ExprAst>`: Positional arguments in order
 /// - `Vec<(&str, &ExprAst)>`: Named arguments as (name, value) pairs
-pub fn split_args<'a>(args: &'a [CallArg]) -> (Vec<&'a ExprAst>, Vec<(&'a str, &'a ExprAst)>) {
+pub fn split_args(args: &[CallArg]) -> (Vec<&ExprAst>, Vec<(&str, &ExprAst)>) {
     let mut pos = Vec::new();
     let mut named = Vec::new();
     for a in args {
@@ -37,7 +37,7 @@ pub fn inv_norm_cdf(p: f64) -> f64 {
         -3.969683028665376e+01,
         2.209460984245205e+02,
         -2.759285104469687e+02,
-        1.383577518672690e+02,
+        1.383_577_518_672_69e+02,
         -3.066479806614716e+01,
         2.506628277459239e+00,
     ];
@@ -78,8 +78,7 @@ pub fn inv_norm_cdf(p: f64) -> f64 {
         // Rational approximation for lower tail
         let q = (-2.0 * p.ln()).sqrt();
         ((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5]
-            - (((D[0] * q + D[1]) * q + D[2]) * q + D[3])
-                .recip()
+            - (((D[0] * q + D[1]) * q + D[2]) * q + D[3]).recip()
     } else if p <= P_HIGH {
         // Rational approximation for central region
         let q = p - 0.5;
@@ -90,8 +89,7 @@ pub fn inv_norm_cdf(p: f64) -> f64 {
         // Rational approximation for upper tail
         let q = (-2.0 * (1.0 - p).ln()).sqrt();
         -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5]
-            - (((D[0] * q + D[1]) * q + D[2]) * q + D[3])
-                .recip())
+            - (((D[0] * q + D[1]) * q + D[2]) * q + D[3]).recip())
     }
 }
 
@@ -104,14 +102,17 @@ pub fn norm_cdf(z: f64) -> f64 {
     let x = z;
     let abs_x = x.abs();
     let t = 1.0 / (1.0 + 0.231_641_9 * abs_x);
-    let poly = (((((1.330_274_429 * t - 1.821_255_978) * t) + 1.781_477_937) * t
-        - 0.356_563_782)
+    let poly = (((((1.330_274_429 * t - 1.821_255_978) * t) + 1.781_477_937) * t - 0.356_563_782)
         * t
         + 0.319_381_530)
         * t;
     let phi = (-(abs_x * abs_x) / 2.0).exp() / (2.0 * std::f64::consts::PI).sqrt();
     let cdf_approx = 1.0 - phi * poly;
-    if x >= 0.0 { cdf_approx } else { 1.0 - cdf_approx }
+    if x >= 0.0 {
+        cdf_approx
+    } else {
+        1.0 - cdf_approx
+    }
 }
 
 #[cfg(test)]

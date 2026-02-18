@@ -1,0 +1,23 @@
+name: Phase 6 Release Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo builds
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Phase 6 release gate
+        run: ./scripts/phase6_release_gate.sh

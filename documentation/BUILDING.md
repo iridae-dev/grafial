@@ -81,11 +81,17 @@ grafial crates/grafial-examples/social.grafial --list-flows
 # Execute a specific flow
 grafial crates/grafial-examples/social.grafial --flow Demo
 
-# Output results as JSON (requires serde feature)
+# Output results as JSON
 grafial crates/grafial-examples/social.grafial --flow Demo -o json
 
 # Get detailed debug output
 grafial crates/grafial-examples/social.grafial --flow Demo -o debug
+
+# Report canonical-style compatibility forms
+grafial crates/grafial-examples/social.grafial --lint-style
+
+# Rewrite file in-place to canonical style
+grafial crates/grafial-examples/social.grafial --fix-style
 ```
 
 ### Command-Line Options
@@ -94,6 +100,8 @@ grafial crates/grafial-examples/social.grafial --flow Demo -o debug
 - `-f, --flow <NAME>`: Flow name to execute (optional - just validates if not provided)
 - `-o, --output <FORMAT>`: Output format: `summary` (default), `json`, or `debug`
 - `-l, --list-flows`: List all flows in the program instead of executing
+- `--lint-style`: Report compatibility syntax that should be modernized to canonical style
+- `--fix-style`: Rewrite compatibility syntax in-place to canonical style
 - `-h, --help`: Print help information
 - `-V, --version`: Print version information
 
@@ -130,6 +138,14 @@ Run a specific test:
 cargo test -p grafial-tests --test integration_tests -- parses_social_example
 ```
 
+### Phase 6 Release Gate
+
+Run the same hardening checks used by CI:
+
+```bash
+./scripts/phase6_release_gate.sh
+```
+
 ## Benchmarks
 
 Run performance benchmarks:
@@ -161,9 +177,9 @@ Ensure you have:
 
 ## Features
 
-Grafial supports optional features that can be enabled during build:
+`grafial-core` supports optional features:
 
-- `serde`: Enable serialization support (required for JSON output in CLI)
+- `serde`: Enable serialization support in `grafial-core`
 - `tracing`: Enable structured logging
 - `rayon`: Enable parallel execution (experimental)
 - `bincode`: Enable binary serialization
@@ -171,32 +187,11 @@ Grafial supports optional features that can be enabled during build:
 Build with features:
 
 ```bash
-# Build CLI with serde support
-cargo build -p grafial-cli --release --features serde
-
 # Build core with all features
-cargo build -p grafial-core --release --features serde,tracing,rayon
+cargo build -p grafial-core --release --features serde,tracing,rayon,bincode
 ```
 
-## Python Bindings
-
-Build Python bindings:
-
-```bash
-cd crates/grafial-python
-maturin develop --release
-```
-
-Or using `uv`:
-
-```bash
-cd crates/grafial-python
-uv venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-uv pip install -e .
-```
-
-See `crates/grafial-python/README.md` for detailed Python bindings documentation.
+`grafial-cli` already depends on `grafial-core` with `serde` enabled, so normal CLI builds include JSON output support by default.
 
 ## Troubleshooting
 
@@ -212,12 +207,7 @@ Add this to your shell configuration file (`.bashrc`, `.zshrc`, etc.) to make it
 
 ### JSON output not working
 
-JSON output requires the `serde` feature. Build with:
-
-```bash
-cargo build -p grafial-cli --release --features serde
-cargo install --path crates/grafial-cli --features serde
-```
+Workspace builds of `grafial-cli` include JSON support by default. If you are building custom binaries, ensure `grafial-core` is compiled with `serde`.
 
 ### Build errors
 
@@ -304,6 +294,6 @@ See `crates/grafial-python/README.md` for detailed documentation.
 
 - See `LANGUAGE_GUIDE.md` for Grafial syntax and semantics
 - See `ENGINE_ARCHITECTURE.md` for engine internals
-- See `ROADMAP.md` for future development plans
+- See `ROADMAP.md` for roadmap status and future phases
 - See `crates/grafial-python/README.md` for Python bindings documentation
 - Check `crates/grafial-examples/` for sample Grafial programs

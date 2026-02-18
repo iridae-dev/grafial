@@ -103,9 +103,9 @@ pub fn eval_metric_expr(
     match expr {
         ExprAst::Exists { .. } => {
             // Exists subqueries are not supported in metric expressions
-            return Err(ExecError::ValidationError(
+            Err(ExecError::ValidationError(
                 "exists subqueries not supported in metric expressions".into(),
-            ));
+            ))
         }
         ExprAst::Number(v) => Ok(*v),
         ExprAst::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
@@ -506,7 +506,7 @@ fn parse_label(args: &MetricArgs<'_>) -> Result<String, ExecError> {
         .named
         .get("label")
         .copied()
-        .or_else(|| args.pos.get(0).copied())
+        .or_else(|| args.pos.first().copied())
         .ok_or_else(|| ExecError::ValidationError("missing 'label' argument".into()))?;
     parse_ident_like(e)
 }

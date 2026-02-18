@@ -1,6 +1,6 @@
 # grafial-lsp
 
-Rust Language Server (LSP) for the Grafial DSL. Implements Phase 1 of the roadmap: real-time diagnostics for syntax and validation errors.
+Rust Language Server (LSP) for the Grafial DSL.
 
 ## Build
 
@@ -22,7 +22,11 @@ The server speaks stdio LSP. It is started by the VS Code extension, but you can
 - Text synchronization (full)
 - Diagnostics:
   - Parse errors with line/column mapping from Pest → LSP
-  - Validation errors (no spans yet) at document start
+  - Validation errors with semantic source ranges
+  - Canonical-style modernization warnings for compatibility syntax
+- Code actions (quick fixes):
+  - Rewrite compatibility forms to canonical inline arguments
+  - Wrap bare uncertain field accesses with `E[...]` when validation requests explicit wrappers
 
 ## VS Code Integration
 

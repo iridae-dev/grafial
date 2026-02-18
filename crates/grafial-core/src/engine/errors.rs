@@ -9,6 +9,9 @@ impl From<grafial_frontend::FrontendError> for ExecError {
             grafial_frontend::FrontendError::ValidationError(msg) => {
                 ExecError::ValidationError(msg)
             }
+            grafial_frontend::FrontendError::ValidationDiagnostic(diag) => {
+                ExecError::ValidationError(diag.to_string())
+            }
             _ => ExecError::Internal(format!("unexpected frontend error: {:?}", err)),
         }
     }

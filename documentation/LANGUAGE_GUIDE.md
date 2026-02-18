@@ -1,970 +1,410 @@
 # Grafial Language Guide
 
-**A practical guide to the Grafial probabilistic graph language.**
+This guide documents the Grafial language as currently implemented.
 
-This guide documents the language as actually implemented. Every feature described here has been validated against the codebase.
+## 1. Program Structure
 
----
+A program contains these declaration kinds:
 
-## Table of Contents
+- `schema`
+- `belief_model`
+- `evidence`
+- `rule`
+- `flow`
 
-1. [Quick Start](#quick-start)
-2. [Schema Definitions](#schema-definitions)
-3. [Belief Models](#belief-models)
-   - [Prior Selection Guide](#prior-selection-guide)
-4. [Evidence](#evidence)
-5. [Rules](#rules)
-6. [Flows](#flows)
-7. [Metrics](#metrics)
-8. [Expressions](#expressions)
-9. [Built-in Functions](#built-in-functions)
-
----
-
-## Quick Start
-
-A minimal Grafial program:
+Example:
 
 ```grafial
 schema Social {
-  node Person {
-    score: Real
-  }
+  node Person { score: Real }
   edge REL { }
 }
 
 belief_model SocialBeliefs on Social {
-  node Person {
-    score ~ Gaussian(mean=0.0, precision=0.01)
-  }
-  edge REL {
-    exist ~ Bernoulli(prior=0.1, weight=2.0)
-  }
+  node Person { score ~ Gaussian(mean=0.0, precision=0.1) }
+  edge REL { exist ~ Bernoulli(prior=0.5, weight=2.0) }
 }
 
 evidence SocialEvidence on SocialBeliefs {
-  Person { "Alice" { score: 10.0 } }
+  Person { "Alice" { score: 1.0 }, "Bob" { score: 2.0 } }
   REL(Person -> Person) { "Alice" -> "Bob" }
 }
 
 flow Demo on SocialBeliefs {
   graph base = from_evidence SocialEvidence
-  metric total_score = nodes(Person) |> sum(by=E[node.score])
+  metric avg_score = nodes(Person) |> avg(by=E[node.score])
   export base as "demo"
 }
 ```
 
----
+## 2. Syntax Basics
 
-## Schema Definitions
+- Blocks use `{ ... }`.
+- Statement separators are optional (`;` is accepted in many places).
+- Comments: `// ...` and `/* ... */`.
+- Strings: double-quoted only.
+- Booleans: `true`, `false`.
+- Logical operators: `and`, `or`, `not`.
 
-Schemas define the structure of your graph: what node types and edge types exist, and what attributes they have.
+## 3. Schemas
 
-### Syntax
+Schemas define node/edge types and node attributes.
 
-```bayscript
-schema SchemaName {
-  node NodeType {
-    attribute_name: Real
-    another_attr: Real
+```grafial
+schema MySchema {
+  node Entity {
+    value: Real
+    weight: Real
   }
-  
-  edge EdgeType { }
+
+  edge CONNECTS { }
 }
 ```
 
-### Node Types
+Notes:
 
-Node types define entities in your graph. Each node type can have zero or more attributes:
+- Edge attributes are not supported.
+- Priors are not declared in `schema`; they are declared in `belief_model`.
 
-```bayscript
-node Person {
-  age: Real
-  salary: Real
-}
-```
+## 4. Belief Models
 
-**Attribute types:**
-- `Real` - Floating-point numeric values (f64)
+Belief models assign posterior families to schema fields.
 
-### Edge Types
-
-Edge types define relationships. Edges themselves don't have attributes (only existence probabilities):
-
-```bayscript
-edge KNOWS { }
-edge WORKS_FOR { }
-```
-
-**Note:** Edge attributes are not currently supported. If you need edge attributes, model them as nodes with relationships.
-
----
-
-## Belief Models
-
-Belief models define the probabilistic inference models for each schema element. They specify which posterior distribution family to use for each attribute and edge.
-
-### Syntax
-
-```bayscript
-belief_model ModelName on SchemaName {
-  node NodeType {
-    attribute_name ~ PosteriorType(...)
+```grafial
+belief_model MyBeliefs on MySchema {
+  node Entity {
+    value ~ Gaussian(mean=0.0, precision=0.01)
+    weight ~ GaussianPosterior(prior_mean=1.0, prior_precision=1.0)
   }
-  
-  edge EdgeType {
-    exist ~ PosteriorType(...)
+
+  edge CONNECTS {
+    exist ~ Bernoulli(prior=0.3, weight=2.0)
   }
 }
 ```
 
-### Posterior Types
+Supported posterior names:
 
-#### Gaussian (Normal-Normal)
+- `Gaussian` or `GaussianPosterior`
+- `Bernoulli` or `BernoulliPosterior`
+- `Categorical` or `CategoricalPosterior`
 
-For continuous numeric attributes. Assumes observations come from a Normal distribution with known precision.
+Parameter aliases accepted by parser:
 
-```grafial
-node Person {
-  age ~ Gaussian(
-    mean = 35.0,
-    precision = 0.01,
-    observation_precision = 1.0
-  )
-}
-```
+- Gaussian: `mean` -> `prior_mean`, `precision` -> `prior_precision`
+- Bernoulli: `weight` -> `pseudo_count`
 
-**Parameters:**
-- `prior_mean` (default: 0.0) - Prior expected value
-- `prior_precision` (default: 0.01) - Prior precision (τ = 1/σ²)
-- `observation_precision` (default: 1.0) - Likelihood precision for evidence
-
-**When to use:** Continuous measurements (age, salary, temperature, etc.)
-
-#### Bernoulli (Beta-Bernoulli)
-
-For independent edge existence probabilities. Each edge exists or doesn't exist independently.
+### 4.1 Categorical Edges
 
 ```grafial
-edge KNOWS {
-  exist ~ Bernoulli(
-    prior = 0.1,
-    weight = 2.0
-  )
-}
-```
-
-**Parameters:**
-- `prior` (required) - Prior probability in [0, 1]
-- `pseudo_count` (required) - Strength of prior (α = prior × pseudo_count, β = (1-prior) × pseudo_count)
-
-**When to use:** Independent relationships (friendship, follows, etc.)
-
-#### Categorical (Dirichlet-Categorical)
-
-For competing edges where exactly one destination is chosen per source. Probabilities sum to 1 within each group.
-
-```grafial
-edge ROUTES_TO {
-  exist ~ Categorical(
-    group_by = source,
-    prior = uniform,
-    pseudo_count = 1.0
-  )
-}
-```
-
-**Parameters:**
-- `group_by` (required) - Must be `"source"` or `"destination"`
-- `prior` - Either `uniform` or an array `[0.2, 0.3, 0.5]` (must sum to 1)
-- `pseudo_count` (required) - Strength of prior
-- `categories` (optional) - Explicit list of category strings (for explicit priors only)
-
-**When to use:** Mutually exclusive choices (routing, classification, single assignment)
-
-**When NOT to use:** Independent relationships (use `BernoulliPosterior` instead)
-
-**Example with explicit prior:**
-```bayscript
-edge ROUTES_TO {
-  exist ~ CategoricalPosterior(
-    group_by = "source",
-    prior = [0.5, 0.3, 0.2],
-    pseudo_count = 10.0,
-    categories = ["Server1", "Server2", "Server3"]
-  )
-}
-```
-
-**Dynamic category discovery:** For uniform priors, new categories are automatically discovered when evidence is observed. For explicit priors, categories must be declared upfront.
-
-### Prior Selection Guide
-
-**Prior choice significantly impacts small-sample inference.** The prior distribution encodes your beliefs before seeing any data, and it influences posterior results especially when you have few observations.
-
-#### Recommended Prior Strategies
-
-**Weakly informative priors** (default for most cases):
-
-These priors are wide enough to be reasonable across many scenarios, but still provide some regularization:
-
-```bayscript
-node Person {
-  age ~ GaussianPosterior(
-    prior_mean = 35.0,           // reasonable center
-    prior_precision = 0.01        // SD = 10, weakly informative
-  )
-}
-```
-
-**When to use:** When you have some domain knowledge about the typical range, but don't want to be too specific. The wide variance (SD = 10 in this example) allows the data to dominate after a few observations.
-
-**Informative priors** (strong domain knowledge):
-
-Use when you have good prior information about the likely values:
-
-```bayscript
-node Person {
-  height_cm ~ GaussianPosterior(
-    prior_mean = 170.0,
-    prior_precision = 0.1         // SD = 3.16, stronger belief
-  )
-}
-```
-
-**When to use:** When you have reliable prior information (e.g., from previous studies, domain expertise, or similar populations). The higher precision means more observations are needed to significantly shift the posterior away from the prior.
-
-**Skeptical priors** (high evidence threshold):
-
-Use for rare events or when you want to require strong evidence before updating beliefs:
-
-```bayscript
-edge FRAUD {
-  exist ~ BernoulliPosterior(
-    prior = 0.01,                // rare event
-    pseudo_count = 100           // requires strong evidence to shift
-  )
-}
-```
-
-**When to use:** 
-- Rare events (fraud, disease, failure modes)
-- When false positives are costly
-- When you want to require many observations before changing beliefs
-
-The large `pseudo_count` (100 in this example) means the prior is "strong" - it will take many observations to significantly shift the posterior probability away from 0.01.
-
-#### Choosing Prior Parameters
-
-**GaussianPosterior:**
-- `prior_mean`: Choose a reasonable center based on domain knowledge or previous data
-- `prior_precision`: Lower values = wider prior (more uncertain). 
-  - `0.01` → SD = 10 (weakly informative)
-  - `0.1` → SD = 3.16 (moderately informative)
-  - `1.0` → SD = 1.0 (strongly informative)
-
-**BernoulliPosterior:**
-- `prior`: The initial probability you expect (0.0 to 1.0)
-- `pseudo_count`: How "strong" your prior is (higher = more observations needed to change it)
-  - `2.0` → weak prior (easily updated)
-  - `10.0` → moderate prior
-  - `100.0` → strong prior (skeptical)
-
-**CategoricalPosterior:**
-- `prior`: Either `uniform` (all categories equally likely) or an explicit array
-- `pseudo_count`: Strength of the prior (higher = more evidence needed)
-  - For uniform: `pseudo_count = 1.0` is typical
-  - For explicit: `pseudo_count = 10.0` or higher if you have strong prior beliefs
-
-#### General Guidelines
-
-1. **Start weakly informative** if you're unsure - you can always make priors stronger later
-2. **Match the scale** - `prior_mean` should be in the same units and scale as your observations
-3. **Consider the data volume** - If you'll have many observations, the prior matters less
-4. **Be conservative for rare events** - Use skeptical priors to avoid false positives
-5. **Validate with domain experts** - Prior choice should reflect real-world knowledge
-
----
-
-## Evidence
-
-Evidence updates belief states from observations. It's how you inject data into your Bayesian graph.
-
-### Syntax
-
-```bayscript
-evidence EvidenceName on BeliefModelName {
-  observe Person["Alice"].score = 10.0
-  observe edge REL(Person["Alice"], Person["Bob"]) present
-}
-```
-
-### Attribute Observations
-
-Update node attribute values:
-
-```bayscript
-observe Person["Alice"].age = 30.0
-observe Person["Bob"].salary = 75000.0
-```
-
-These update the Gaussian posterior for the attribute using Bayesian inference.
-
-### Edge Observations
-
-#### Independent Edges (BernoulliPosterior)
-
-```bayscript
-observe edge KNOWS(Person["Alice"], Person["Bob"]) present
-observe edge KNOWS(Person["Alice"], Person["Carol"]) absent
-```
-
-**Modes:**
-- `present` - Edge exists (α += 1)
-- `absent` - Edge doesn't exist (β += 1)
-
-#### Competing Edges (CategoricalPosterior)
-
-```bayscript
-observe edge ROUTES_TO(Server["S1"], Server["S2"]) chosen
-observe edge ROUTES_TO(Server["S3"], Server["S5"]) chosen
-observe edge ROUTES_TO(Server["S7"], Server["S8"]) unchosen
-observe edge ROUTES_TO(Server["S9"], Server["S10"]) forced_choice
-```
-
-**Modes:**
-- `chosen` - Source chose this destination (α_k += 1)
-- `unchosen` - Source didn't choose this destination (α_j += 1/(K-1) for j≠k)
-- `forced_choice` - Deterministic choice (α_k = 1e6, others = 1.0)
-
-**Note:** Evidence mode must match the edge posterior type. You can't use `chosen` on a `BernoulliPosterior` edge.
-
----
-
-## Rules
-
-Rules define pattern-based graph transformations. They match patterns, filter with conditions, and execute actions.
-
-### Syntax
-
-```bayscript
-rule RuleName on BeliefModelName {
-  pattern
-    (A:Person)-[ab:REL]->(B:Person),
-    (B:Person)-[bc:REL]->(C:Person)
-  
-  where
-    prob(ab) >= 0.9 and prob(bc) >= 0.9
-  
-  action {
-    let v = E[A.score] / 2
-    set_expectation A.score = E[A.score] - v
-    set_expectation B.score = E[B.score] + v
-    force_absent bc
-  }
-  
-  mode: for_each
-}
-```
-
-### Patterns
-
-Patterns bind variables to graph elements:
-
-```bayscript
-pattern
-  (A:Person)-[ab:REL]->(B:Person)
-```
-
-- `(A:Person)` - Node variable `A` of type `Person`
-- `[ab:REL]` - Edge variable `ab` of type `REL`
-- `(B:Person)` - Node variable `B` of type `Person`
-
-Multiple patterns create joins:
-
-```bayscript
-pattern
-  (A:Person)-[ab:REL]->(B:Person),
-  (B:Person)-[bc:REL]->(C:Person)
-```
-
-This finds all paths of length 2 where intermediate node `B` is shared.
-
-### Node-only Iteration Sugar
-
-When you want to iterate over nodes of a given label without binding an edge, use the sugar form:
-
-```grafial
-// for (Var:Label) [where ...] => { actions }
-rule BoostLowScores on SocialBeliefs {
-  for (P:Person) where E[P.score] < 50.0 => {
-    // Add weak evidence nudging low scores upward
-    P.score ~= 55.0 precision=0.1
+belief_model RoutingBeliefs on Routing {
+  edge ROUTES_TO {
+    exist ~ Categorical(group_by=source, prior=uniform, pseudo_count=1.0)
   }
 }
 ```
 
-This desugars to an internal pattern and executes deterministically over all nodes of the label.
+Notes:
 
-### Where Clauses
+- Parser accepts `group_by=source` or `group_by="source"`.
+- Validation accepts `group_by="source"` and `group_by="destination"`.
+- Runtime currently supports only `group_by=source` (quoted or unquoted forms both parse to the same value).
+- Dynamic category discovery is supported for `prior=uniform`.
+- Dynamic category discovery is not supported for explicit `prior=[...]`.
 
-Filter matches using boolean expressions:
+## 5. Evidence
 
-```bayscript
-where
-  prob(ab) >= 0.9
-  and degree(B, min_prob=0.8) > 2
-  and exists (A)-[ax:REL]->(X) where prob(ax) >= 0.9 and X != B
-```
+Evidence applies observations against a belief model.
 
-**Available operators:**
-- Arithmetic: `+`, `-`, `*`, `/`
-- Comparison: `<`, `<=`, `>`, `>=`, `==`, `!=`
-- Logical: `and`, `or`, `not`
-
-See [Built-in Functions](#built-in-functions) for available functions.
-
-Examples with explicit uncertainty and probability comparisons:
+### 5.1 Grouped Evidence (recommended)
 
 ```grafial
-// Compare Gaussian attributes (independence assumption for prob())
-where prob(E[A.score] > E[B.score]) > 0.9
+evidence Ev on MyBeliefs {
+  Entity {
+    "A" { value: 1.0 (precision=10.0), weight: 2.0 }
+    "B" { value: 0.2 }
+  }
 
-// Equivalent shorthand (the engine interprets node.attr as Gaussian)
-where prob(A.score > B.score) > 0.9
-```
-
-### Actions
-
-Actions apply interventions and updates to the belief graph:
-
-```grafial
-action {
-  let v = E[A.score] * 0.1
-  // Non‑Bayesian intervention: set mean with explicit variance policy
-  non_bayesian_nudge B.score to (E[B.score] + v) variance=preserve
-
-  // Bayesian soft update (Normal–Normal): add weak evidence
-  A.score ~= 50.0 precision=0.2  // optionally: count=3
-
-  // Edge operations
-  delete ab confidence=high      // very strong prior against existence
-  suppress bc weight=10          // moderate prior against existence
+  CONNECTS(Entity -> Entity) {
+    "A" -> "B";
+    "B" -/> "A"
+  }
 }
 ```
 
-**Available actions (canonical):**
-- `let var = expr` — Define local scalar
-- `non_bayesian_nudge node.attr to expr variance=preserve|increase(f)|decrease(f)` — Set posterior mean; control precision (τ) policy explicitly
-- `node.attr ~= value precision=τ [count=n]` — Bayesian soft update toward `value` (Normal–Normal)
-- `delete edge_var [confidence=low|high]` — Set a near‑zero Beta prior (confidence presets map to large β)
-- `suppress edge_var [weight=k]` — Set a moderate Beta prior against existence
+For multi-edge grouped blocks, separate entries with `;` or `,`.
 
-Legacy alias:
-- `set_expectation node.attr = expr` — Equivalent to `non_bayesian_nudge ... variance=preserve`. Prefer the canonical form for clarity.
-
-Full example combining soft update and edge operations:
+### 5.2 Explicit Observe Syntax
 
 ```grafial
-rule ReviewEdges on SocialBeliefs {
+evidence Ev2 on MyBeliefs {
+  observe Entity["A"].value = 1.0
+  observe Entity("B").value = 0.5 (precision=5.0)
+
+  observe edge CONNECTS(Entity["A"], Entity["B"]) present
+  observe edge CONNECTS(Entity["B"], Entity["A"]) absent
+}
+```
+
+Supported edge modes:
+
+- `present`
+- `absent`
+- `chosen`
+- `unchosen`
+- `forced_choice`
+
+### 5.3 Categorical Choice Verbs
+
+```grafial
+evidence RoutingEv on RoutingBeliefs {
+  choose edge ROUTES_TO(Router["R1"], Router["R2"])
+  unchoose edge ROUTES_TO(Router["R1"], Router["R3"])
+}
+```
+
+## 6. Rules
+
+Rules match graph patterns, optionally filter in `where`, then run actions.
+
+### 6.1 Full Form
+
+```grafial
+rule Transfer on SocialBeliefs {
   pattern
     (A:Person)-[ab:REL]->(B:Person)
 
-  where prob(ab) < 0.2 or (prob(ab) < 0.5 and E[B.score] < 40.0) => {
-    // Apply a Bayesian soft update to B's score (weak evidence)
-    B.score ~= 45.0 precision=0.05
-
-    // If the edge is very unlikely, strongly bias against it
-    delete ab confidence=high
-
-    // Or moderately suppress it (alternative to delete)
-    // suppress ab weight=10
-  }
-}
-```
-
-### Rule Modes
-
-- `mode: for_each` - Execute action for each matching pattern (default)
-- `mode: fixpoint` - Execute until convergence (not yet implemented)
-
----
-
-## Flows
-
-Flows define pipelines of graph transformations. Each step produces a new immutable graph.
-
-### Syntax
-
-```bayscript
-flow FlowName on BeliefModelName {
-  graph base = from_evidence EvidenceName
-  graph cleaned = base |> apply_rule RuleName |> prune_edges REL where prob(edge) < 0.1
-  metric avg_deg = avg_degree(Person, REL, min_prob=0.8)
-  export cleaned as "output"
-}
-```
-
-### Graph Sources
-
-#### From Evidence
-
-```bayscript
-graph base = from_evidence EvidenceName
-```
-
-Builds a graph from evidence observations.
-
-#### From Graph (Cross-Flow)
-
-```bayscript
-graph base = from_graph "export_name"
-```
-
-Loads a graph exported from a previous flow.
-
-### Transforms
-
-Transforms are chained with `|>`:
-
-```bayscript
-graph result = 
-  base
-    |> apply_rule RuleName
-    |> apply_ruleset { Rule1, Rule2, Rule3 }
-    |> prune_edges REL where prob(edge) < 0.1
-    |> snapshot "checkpoint"
-```
-
-**Available transforms:**
-- `apply_rule RuleName` - Apply a single rule
-- `apply_ruleset { Rule1, Rule2, ... }` - Apply multiple rules in order
-- `prune_edges EdgeType where expr` - Remove edges matching condition
-- `snapshot "name"` - Save graph checkpoint (for debugging or cross-flow access)
-
-### Metrics
-
-Metrics compute scalar values over graphs:
-
-```bayscript
-metric total_score = sum_nodes(label=Person, contrib=E[node.score])
-metric avg_deg = avg_degree(Person, REL, min_prob=0.8)
-```
-
-See [Metrics](#metrics) section for details.
-
-### Exports
-
-```bayscript
-export graph_name as "export_name"
-export_metric metric_name as "export_name"
-```
-
-Export graphs and metrics for use in other flows or external systems.
-
-### Imports
-
-```bayscript
-import_metric exported_name as local_name
-```
-
-Import metrics from previous flows.
-
----
-
-## Metrics
-
-Metrics are scalar expressions evaluated over graphs. They're the canonical way to compute global values.
-
-### Built-in Metric Functions
-
-#### count_nodes
-
-Count nodes matching criteria:
-
-```bayscript
-metric active_count = count_nodes(label=Person, where=E[node.active] > 0.5)
-```
-
-**Parameters:**
-- `label` (required) - Node type to count
-- `where` (optional) - Filter expression
-
-#### sum_nodes
-
-Sum contributions from nodes:
-
-```bayscript
-metric total_risk = sum_nodes(
-  label=Person,
-  where=prob(node.active) > 0.7,
-  contrib=E[node.risk_score]
-)
-```
-
-**Parameters:**
-- `label` (required) - Node type
-- `where` (optional) - Filter expression
-- `contrib` (required) - Expression to sum
-
-#### fold_nodes
-
-Sequential aggregation with ordering:
-
-```bayscript
-metric final_budget = fold_nodes(
-  label=Person,
-  where=E[node.active] > 0.5,
-  order_by=E[node.stage] ASC,
-  init=1000.0,
-  step=value * E[node.multiplier]
-)
-```
-
-**Parameters:**
-- `label` (required) - Node type
-- `where` (optional) - Filter expression
-- `order_by` (optional) - Ordering expression (`ASC` or `DESC`)
-- `init` (required) - Initial accumulator value
-- `step` (required) - Step expression (use `value` variable for accumulator)
-
-**Note:** `value` is a special variable available only in `fold_nodes` step expressions.
-
-#### avg_degree
-
-Average degree of nodes:
-
-```bayscript
-metric avg_connections = avg_degree(Person, REL, min_prob=0.8)
-```
-
-**Parameters:**
-- First positional: Node type label
-- Second positional: Edge type name
-- `min_prob` (optional, default: 0.0) - Minimum edge probability threshold
-
-### Metric Cross-References
-
-Metrics can reference other metrics:
-
-```bayscript
-metric base_budget = 1000.0
-metric final_budget = fold_nodes(
-  label=Person,
-  init=base_budget,
-  step=value * E[node.multiplier]
-)
-```
-
----
-
-## Expressions
-
-Expressions are used in `where` clauses, actions, and metrics.
-
-### Literals
-
-```bayscript
-10.0
-3.14
-true
-false
-```
-
-### Variables
-
-Pattern variables are available in where clauses and actions:
-
-```bayscript
-where prob(ab) >= 0.9 and E[A.score] > 50.0
-```
-
-In metric contexts, `node` refers to the current node being processed:
-
-```bayscript
-sum_nodes(label=Person, contrib=E[node.score])
-```
-
-### Arithmetic
-
-```bayscript
-E[A.score] + 10.0
-E[A.score] * 2.0
-E[A.score] / 2.0
-E[A.score] - 5.0
-```
-
-### Comparisons
-
-```bayscript
-prob(ab) >= 0.9
-E[A.score] < 100.0
-degree(B) == 2
-```
-
-### Logical
-
-```bayscript
-prob(ab) >= 0.9 and prob(bc) >= 0.9
-prob(ab) < 0.1 or prob(ab) > 0.9
-not exists (A)-[ax:REL]->(X) where prob(ax) >= 0.5
-```
-
-### Field Access
-
-Access node attributes:
-
-```bayscript
-E[A.score]
-E[node.age]
-```
-
-The `E[]` operator extracts the expected value (mean) from a Gaussian posterior.
-
-### Exists Subqueries
-
-Check if a pattern exists:
-
-```bayscript
-exists (A)-[ax:REL]->(X) where prob(ax) >= 0.9 and X != B
-```
-
-`not exists` negates the check.
-
-**Note:** Exists subqueries are not supported in metric expressions.
-
----
-
-## Built-in Functions
-
-### prob(edge)
-
-Returns the posterior mean probability of an edge existing.
-
-```bayscript
-prob(ab)  // Returns E[p] = α / (α + β) for BernoulliPosterior
-          // Returns E[π_k] = α_k / Σ_j α_j for CategoricalPosterior
-```
-
-**Arguments:**
-- `edge` - Edge variable from pattern
-
-### degree(node, min_prob=0.0)
-
-Counts outgoing edges with probability >= threshold.
-
-```bayscript
-degree(B, min_prob=0.8)
-```
-
-**Arguments:**
-- `node` - Node variable from pattern
-- `min_prob` (optional) - Minimum probability threshold
-
-**Returns:** Number of edges (f64 for use in expressions)
-
-### prob(comparison)
-
-Probability that a comparison holds, for Gaussian attributes under an independence assumption.
-
-```grafial
-// In where: explicit E[] wrappers are recommended for clarity
-where prob(E[A.score] > E[B.score]) > 0.95
-
-// Shorthand also works: prob(A.score > B.score)
-```
-
-Supported comparisons: `>`, `>=`, `<`, `<=` with operands `node.attr` or numbers.
-
-Note: Assumes independent Normal posteriors for the operands; correlation is not yet modeled.
-
-### winner(node, edge_type, epsilon=0.01)
-
-For competing edges, returns the destination node with maximum probability, or null if tied.
-
-```bayscript
-where winner(A, ROUTES_TO, epsilon=0.01) == B
-```
-
-**Arguments:**
-- `node` - Node variable from pattern
-- `edge_type` - Edge type identifier
-- `epsilon` (optional) - Tolerance for tie detection
-
-**Returns:** Node ID as f64 (or -1.0 if None/null)
-
-**Note:** Only valid for competing edges (CategoricalPosterior).
-
-### entropy(node, edge_type)
-
-Computes Shannon entropy of competing edge probabilities.
-
-```bayscript
-where entropy(A, ROUTES_TO) > 1.5
-```
-
-**Arguments:**
-- `node` - Node variable from pattern
-- `edge_type` - Edge type identifier
-
-**Returns:** Entropy in nats (range: [0, log(K)] where K = number of categories)
-
-**Note:** Only valid for competing edges (CategoricalPosterior).
-
-### prob_vector(node, edge_type)
-
-Returns the full probability vector for competing edges.
-
-```bayscript
-// Returns [E[π_1], E[π_2], ..., E[π_K]]
-```
-
-**Note:** Primarily for metrics and export, not pattern matching.
-
-### E[node.attr]
-
-Extracts the expected value (mean) from a Gaussian posterior attribute.
-
-```bayscript
-E[A.score]
-E[node.age]
-```
-
-**Arguments:**
-- `node` - Node variable or `node` in metric contexts
-- `attr` - Attribute name
-
-**Returns:** Posterior mean (f64)
-
-### variance(node.attr)
-
-Posterior variance σ² of a Gaussian attribute.
-
-```bayscript
-where variance(A.score) < 4.0
-```
-
-### stddev(node.attr)
-
-Posterior standard deviation σ of a Gaussian attribute.
-
-```bayscript
-metric avg_uncertainty = Person.avg(stddev(node.score))
-```
-
-### quantile(node.attr, p)
-
-Quantile of the Gaussian posterior (e.g., p=0.95).
-
-```bayscript
-where quantile(A.score, 0.05) > 40.0
-```
-
-### ci_lo(node.attr, p) / ci_hi(node.attr, p)
-
-Credible interval bounds for symmetric Normal CI with central mass `p`.
-
-```bayscript
-where ci_lo(A.score, 0.95) > 40.0 and ci_hi(A.score, 0.95) < 60.0
-```
-
-### effective_n(node.attr)
-
-Effective precision τ for a Gaussian attribute (in units of observation precision).
-
-```bayscript
-where effective_n(A.score) > 10.0
-```
-
-Use to gauge how strongly the posterior is concentrated relative to the default observation precision.
-
----
-
-## Statistical Guardrails
-
-- Explicit uncertainty in `where`:
-  - Always wrap uncertain quantities: use `E[...]` for node attributes and `prob(edge)` for edges.
-  - Mixed implicit/explicit comparisons are rejected by validation.
-- Non-Bayesian vs Bayesian updates:
-  - `non_bayesian_nudge` changes the mean without adding evidence; specify variance policy to avoid accidental overconfidence.
-  - Prefer `~=` for evidential updates; it increases precision using conjugate math.
-- Probability of comparisons:
-  - `prob(A > B)` assumes independent Gaussians; correlation support is a planned extension.
-- Edge deletion/suppression semantics:
-  - `delete` maps to a very strong Beta prior against existence; use `confidence` to tune strength.
-  - The number of present observations required to return to ~0.5 probability grows with β − α (undelete analysis surfaces this in tooling).
-- Determinism:
-  - Iteration and accumulation order is stable; rule execution and metrics are deterministic.
-
----
-
-## Complete Example
-
-```bayscript
-schema Network {
-  node Server {
-    load: Real
-  }
-  edge ROUTES_TO { }
-}
-
-belief_model NetworkBeliefs on Network {
-  node Server {
-    load ~ GaussianPosterior(prior_mean=0.5, prior_precision=1.0)
-  }
-  edge ROUTES_TO {
-    exist ~ CategoricalPosterior(
-      group_by="source",
-      prior=uniform,
-      pseudo_count=1.0
-    )
-  }
-}
-
-evidence NetworkEvidence on NetworkBeliefs {
-  observe Server["S1"].load = 0.8
-  observe Server["S2"].load = 0.3
-  observe edge ROUTES_TO(Server["S1"], Server["S2"]) chosen
-  observe edge ROUTES_TO(Server["S1"], Server["S3"]) chosen
-}
-
-rule BalanceLoad on NetworkBeliefs {
-  pattern
-    (A:Server)-[ab:ROUTES_TO]->(B:Server)
-  
   where
-    E[A.load] > 0.7
-    and winner(A, ROUTES_TO) == B
-    and entropy(A, ROUTES_TO) < 0.5
-  
+    prob(ab) >= 0.8 and E[A.score] > E[B.score]
+
   action {
-    set_expectation B.load = E[B.load] + 0.1
+    let delta = (E[A.score] - E[B.score]) * 0.1
+    B.score ~= (E[B.score] + delta) precision=0.2 count=2
   }
-  
+
   mode: for_each
 }
+```
 
-flow Pipeline on NetworkBeliefs {
-  graph base = from_evidence NetworkEvidence
-  graph balanced = base |> apply_rule BalanceLoad
-  metric avg_load = sum_nodes(label=Server, contrib=E[node.load]) / count_nodes(label=Server)
-  export balanced as "final"
+### 6.2 Sugar Forms
+
+Pattern -> action:
+
+```grafial
+rule FastTransfer on SocialBeliefs {
+  (A:Person)-[ab:REL]->(B:Person)
+  where prob(ab) >= 0.8 => {
+    non_bayesian_nudge B.score to (E[B.score] + 0.1) variance=preserve
+  }
 }
 ```
 
----
+Node-only form:
 
-## Validation Notes
+```grafial
+rule BoostLow on SocialBeliefs {
+  for (P:Person) where E[P.score] < 0.0 => {
+    P.score ~= 0.0 precision=0.1
+  }
+}
+```
 
-All features described in this guide have been validated against the implementation:
+### 6.3 Rule Modes (Current Runtime Behavior)
 
-- ✅ Schema definitions (nodes, edges, attributes)
-- ✅ Belief models (GaussianPosterior, BernoulliPosterior, CategoricalPosterior)
-- ✅ Evidence modes (present, absent, chosen, unchosen, forced_choice)
-- ✅ Rules (patterns, where clauses, actions, modes)
-- ✅ Flow transforms (from_evidence, from_graph, apply_rule, apply_ruleset, snapshot, prune_edges)
-- ✅ Metrics (count_nodes, sum_nodes, fold_nodes, avg_degree)
-- ✅ Expression functions (prob, degree, winner, entropy, E[])
-- ✅ Exists/not exists subqueries
+- Parser accepts `mode: <ident>` on rules.
+- The standalone rule runner supports `for_each` (default) and `fixpoint`.
+- Flow transforms (`apply_rule`, `apply_ruleset`) currently execute rules with `for_each` semantics regardless of `mode:`.
 
-For implementation details, see `Grafial_design.md`. For performance considerations, see `performance_ideas.md`.
+## 7. Actions
+
+Supported action statements:
+
+- `let x = expr`
+- `set_expectation A.attr = expr` (legacy-compatible)
+- `force_absent e` (legacy-compatible)
+- `non_bayesian_nudge A.attr to expr variance=...`
+- `A.attr ~= expr precision=... count=...`
+- `delete e confidence=low|high`
+- `suppress e weight=...`
+
+Soft-update and edge-action argument forms:
+
+- Canonical inline args:
+  - `A.x ~= 1.0 precision=0.2 count=3`
+  - `delete e confidence=high`
+  - `suppress e weight=10`
+- Compatibility args (accepted):
+  - `A.x ~= 1.0 (precision=0.2, count=3)`
+  - `delete e (confidence=high)`
+  - `suppress e (weight=10)`
+
+Semantics summary:
+
+- `set_expectation`: set mean only; preserve precision.
+- `non_bayesian_nudge`:
+  - `preserve`: keep precision
+  - `increase(f)`: multiply precision by `f` (default `0.5`)
+  - `decrease(f)`: multiply precision by `f` (default `2.0`)
+- `~=`: Normal-Normal soft update with optional `count` multiplier.
+- `delete`: independent edges only; near-zero prior with confidence scaling.
+- `suppress`: independent edges only; moderate prior against existence.
+
+## 8. Expressions
+
+Expression forms:
+
+- Numbers, booleans, vars
+- Arithmetic: `+ - * /`
+- Comparison: `== != < <= > >=`
+- Logical: `and or not`
+- Field access: `A.score`
+- Function calls: `name(...)`
+- Expectation bracket form: `E[A.score]`
+- Exists subqueries:
+  - `exists (A:Person)-[ab:REL]->(B:Person) where prob(ab) > 0.5`
+  - `not exists ...`
+
+## 9. Built-in Functions
+
+### 9.1 Rule/Where Context
+
+Supported:
+
+- `E[A.attr]`
+- `prob(edge_var)`
+- `prob(A.attr > B.attr)` (supports `< <= > >=` comparisons)
+- `degree(A, min_prob=0.5)`
+- `winner(A, ROUTES_TO, epsilon=0.01)`
+- `entropy(A, ROUTES_TO)`
+- `variance(A.attr)`
+- `stddev(A.attr)`
+- `ci_lo(A.attr, p)`
+- `ci_hi(A.attr, p)`
+- `effective_n(A.attr)`
+- `quantile(A.attr, p)`
+
+### 9.2 Metric Node-Expression Context
+
+Inside metric filters/contrib/step expressions (`node` is the bound row variable), supported:
+
+- `E[node.attr]`
+- `degree(node, min_prob=...)`
+- `entropy(node, EDGE_TYPE)`
+- `variance(node.attr)`
+- `stddev(node.attr)`
+- `ci_lo(node.attr, p)`
+- `ci_hi(node.attr, p)`
+- `effective_n(node.attr)`
+- `quantile(node.attr, p)`
+
+## 10. Validation Rules You Should Expect
+
+- Bare field access is rejected in rule and metric contexts.
+  - Use `E[Node.attr]` or `prob(...)`.
+- `prob(...)` in rule `where` must be either:
+  - edge variable, or
+  - supported comparison form.
+- `prune_edges ... where ...` predicates are restricted to `prob(edge)`-style checks.
+- Metric expressions reject `exists` subqueries.
+- Builder `order_by(...)` is only valid with `fold(...)`.
+
+## 11. Flows
+
+Flows define graph pipelines and metric/export surfaces.
+
+```grafial
+flow Analysis on SocialBeliefs {
+  graph base = from_evidence SocialEvidence
+
+  graph cleaned = base
+    |> apply_rule Transfer
+    |> prune_edges REL where prob(edge) < 0.1
+    |> snapshot "after_clean"
+
+  metric avg_score = nodes(Person) |> avg(by=E[node.score])
+  export cleaned as "output"
+  export_metric avg_score as "avg_output"
+}
+```
+
+Graph expression forms:
+
+- `from_evidence EvidenceName`
+- `from_graph "alias"`
+- `existing_graph |> transform |> transform ...`
+
+Transforms:
+
+- `apply_rule RuleName`
+- `apply_ruleset { RuleA, RuleB, ... }`
+- `snapshot "name"`
+- `prune_edges EdgeType where expr`
+
+Metric sharing between flows:
+
+```grafial
+flow F1 on M {
+  graph g = from_evidence Ev
+  metric m = nodes(N) |> count()
+  export_metric m as "saved_m"
+}
+
+flow F2 on M {
+  import_metric saved_m as budget
+  graph g = from_evidence Ev
+  metric out = fold_nodes(label=N, init=budget, step=value)
+}
+```
+
+## 12. Metrics
+
+Core metric functions:
+
+- `count_nodes(label=..., where=...)`
+- `sum_nodes(label=..., where=..., contrib=...)`
+- `fold_nodes(label=..., where=..., order_by=..., init=..., step=...)`
+- `avg_degree(label=..., edge_type=..., min_prob=...)`
+
+Metric builder pipeline (desugars to core functions):
+
+- `nodes(Label) |> where(expr) |> count()`
+- `nodes(Label) |> where(expr) |> sum(by=expr)`
+- `nodes(Label) |> where(expr) |> avg(by=expr)`
+- `nodes(Label) |> where(expr) |> order_by(expr) |> fold(init=expr, step=expr)`
+
+Notes:
+
+- In `fold(...)`, `value` is the accumulator variable.
+- Metrics can reference previously computed metrics and imported metrics by name.
+
+## 13. Determinism and Execution Model
+
+- Graph transforms produce immutable snapshots (copy-on-write under the hood).
+- Flow planning and execution order are deterministic.
+- Rule matching and metric evaluation are deterministic by stable ID order.
+
+## 14. Current Non-Goals / Not Implemented in Syntax
+
+These are not part of the current parser/runtime surface:
+
+- Inline priors directly in `schema` declarations.
+- Fluent metric syntax like `Person.where(...).sum(...)`.
+- Direct flow terminal syntax like bare `from_evidence ... |> ... |> export ...` without `graph` statements.
+- `note "..."` flow annotations.
+- Single-quoted strings.
+- Numeric literals with `_` separators.
+
+## 15. Tooling for Canonical Style
+
+CLI style tooling:
+
+```bash
+grafial file.grafial --lint-style
+grafial file.grafial --fix-style
+```
+
+Current canonical-style rewrites target compatibility argument forms for:
+
+- soft updates (`~=`)
+- `delete`
+- `suppress`
