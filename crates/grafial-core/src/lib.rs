@@ -8,7 +8,10 @@ pub mod storage;
 
 // Re-export commonly used types
 pub use engine::errors::ExecError;
-pub use engine::flow_exec::{run_flow, run_flow_ir};
+pub use engine::flow_exec::{
+    run_flow, run_flow_ir, run_flow_ir_with_backend, InterpreterExecutionBackend,
+    IrExecutionBackend,
+};
 pub use engine::graph::BeliefGraph;
 pub use grafial_ir::ProgramIR;
 

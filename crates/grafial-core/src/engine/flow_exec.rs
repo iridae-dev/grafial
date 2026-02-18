@@ -96,6 +96,42 @@ pub struct InterventionAuditEvent {
     pub actions_executed: usize,
 }
 
+/// IR execution backend boundary.
+///
+/// Phase 10 introduces this trait so runtime execution can swap interpreter/JIT
+/// backends without changing frontend or IR lowering entrypoints.
+pub trait IrExecutionBackend {
+    /// Stable backend identifier for diagnostics/logging.
+    fn backend_name(&self) -> &'static str;
+
+    /// Execute a flow from IR.
+    fn run_flow_ir(
+        &self,
+        program: &ProgramIR,
+        flow_name: &str,
+        prior: Option<&FlowResult>,
+    ) -> Result<FlowResult, ExecError>;
+}
+
+/// Default interpreter backend (current production behavior).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InterpreterExecutionBackend;
+
+impl IrExecutionBackend for InterpreterExecutionBackend {
+    fn backend_name(&self) -> &'static str {
+        "interpreter"
+    }
+
+    fn run_flow_ir(
+        &self,
+        program: &ProgramIR,
+        flow_name: &str,
+        prior: Option<&FlowResult>,
+    ) -> Result<FlowResult, ExecError> {
+        run_flow_ir_interpreter(program, flow_name, prior)
+    }
+}
+
 /// Runs a named flow from a parsed and validated program.
 ///
 /// Each transform produces a new graph (immutability), enabling safe snapshotting and
@@ -111,6 +147,25 @@ pub fn run_flow(
 
 /// Runs a named flow from lowered IR.
 pub fn run_flow_ir(
+    program: &ProgramIR,
+    flow_name: &str,
+    prior: Option<&FlowResult>,
+) -> Result<FlowResult, ExecError> {
+    let backend = InterpreterExecutionBackend;
+    run_flow_ir_with_backend(program, flow_name, prior, &backend)
+}
+
+/// Runs a named flow from IR using an explicit execution backend.
+pub fn run_flow_ir_with_backend(
+    program: &ProgramIR,
+    flow_name: &str,
+    prior: Option<&FlowResult>,
+    backend: &dyn IrExecutionBackend,
+) -> Result<FlowResult, ExecError> {
+    backend.run_flow_ir(program, flow_name, prior)
+}
+
+fn run_flow_ir_interpreter(
     program: &ProgramIR,
     flow_name: &str,
     prior: Option<&FlowResult>,
@@ -1116,5 +1171,43 @@ mod tests {
         assert!(live.contains("m1"));
         assert!(live.contains("m2"));
         assert!(!live.contains("m3"));
+    }
+
+    #[derive(Debug, Clone, Copy, Default)]
+    struct StubBackend;
+
+    impl IrExecutionBackend for StubBackend {
+        fn backend_name(&self) -> &'static str {
+            "stub"
+        }
+
+        fn run_flow_ir(
+            &self,
+            _program: &ProgramIR,
+            flow_name: &str,
+            _prior: Option<&FlowResult>,
+        ) -> Result<FlowResult, ExecError> {
+            let mut result = FlowResult::default();
+            result
+                .metrics
+                .insert("backend_marker".into(), flow_name.len() as f64);
+            Ok(result)
+        }
+    }
+
+    #[test]
+    fn run_flow_ir_with_backend_dispatches_to_backend() {
+        let program = ProgramIR {
+            schemas: vec![],
+            belief_models: vec![],
+            evidences: vec![],
+            rules: vec![],
+            flows: vec![],
+        };
+        let backend = StubBackend;
+        let result =
+            run_flow_ir_with_backend(&program, "Demo", None, &backend).expect("backend run");
+        assert_eq!(backend.backend_name(), "stub");
+        assert_eq!(result.metrics.get("backend_marker"), Some(&4.0));
     }
 }

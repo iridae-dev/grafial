@@ -89,6 +89,8 @@ baygraph/
 - `parse_validate_and_lower(source: &str) -> Result<ProgramIR, ExecError>`
 - `run_flow(program: &ProgramAst, flow_name: &str, prior: Option<&FlowResult>) -> Result<FlowResult, ExecError>`
 - `run_flow_ir(program: &ProgramIR, flow_name: &str, prior: Option<&FlowResult>) -> Result<FlowResult, ExecError>`
+- `run_flow_ir_with_backend(program: &ProgramIR, flow_name: &str, prior: Option<&FlowResult>, backend: &dyn IrExecutionBackend) -> Result<FlowResult, ExecError>`
+- `IrExecutionBackend` + `InterpreterExecutionBackend` define the IR execution backend boundary (interpreter default; JIT-pluggable path for future phases)
 
 ---
 

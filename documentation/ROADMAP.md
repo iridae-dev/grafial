@@ -259,6 +259,14 @@ Completion notes (this change):
 - Add hot-path thresholds and profiling hooks so JIT only triggers when execution count amortizes compile cost.
 - Run backend spike comparison (LLVM vs Cranelift) and select default backend based on compile latency, runtime speed, complexity, and maintenance cost.
 
+Progress notes (this change):
+- Added an IR execution backend boundary in `flow_exec`:
+  - `IrExecutionBackend` trait
+  - `InterpreterExecutionBackend` default implementation
+  - `run_flow_ir_with_backend(...)` explicit backend entrypoint
+- `run_flow_ir(...)` now dispatches through the interpreter backend boundary (no behavior change).
+- Added core unit coverage validating explicit backend dispatch.
+
 ## Phase 11 - AOT + Vectorized Runtime
 
 - Lower selected rule predicates/actions from IR to native kernels while keeping dynamic graph traversal in the runtime planner.
