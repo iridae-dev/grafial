@@ -19,6 +19,7 @@
 //! - `set_expectation` rule action updates attribute mean without changing precision
 //! - `E[node.attr]` returns the posterior mean (expected value)
 //! - `prob(edge)` returns the mean probability of edge existence
+//! - `prob_correlated(A.attr > B.attr, rho=...)` evaluates correlated comparison probability
 
 use crate::engine::errors::ExecError;
 use crate::engine::graph::BeliefGraph;

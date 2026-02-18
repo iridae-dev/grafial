@@ -3,6 +3,7 @@
 //! This module performs semantic validation on the parsed AST, checking:
 //!
 //! - **Rule validation**: Ensures `prob()` is only used on edge variables,
+//!   `prob_correlated()` is used on supported comparison forms,
 //!   `E[]` is used on node attributes, and expressions are well-formed
 //!
 //! - **Metric validation**: Validates metric functions like `sum_nodes`,
@@ -14,6 +15,7 @@
 //! ## Validation Rules
 //!
 //! - `prob(var)` requires `var` to be an edge variable from pattern
+//! - `prob_correlated(lhs <op> rhs, rho=...)` requires node-attribute comparison operands
 //! - `E[node.attr]` requires `node` to be a node variable from pattern
 //! - `degree(node)` requires `node` to be a node variable
 //! - Metric functions require specific named arguments (label, contrib, etc.)
@@ -713,6 +715,50 @@ fn validate_rule_call(
                 )),
                 _ => Err(validation_error(
                     "prob(): argument must be an edge variable",
+                    Some(context),
+                    range,
+                )),
+            }
+        }
+        "prob_correlated" => {
+            if pos.len() != 1 {
+                return Err(validation_error(
+                    "prob_correlated(): expected single positional comparison argument",
+                    Some(context),
+                    range,
+                ));
+            }
+            for arg_name in named.map.keys() {
+                if arg_name != "rho" {
+                    return Err(validation_error(
+                        format!(
+                            "prob_correlated(): unknown named argument '{}'; expected rho",
+                            arg_name
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+            }
+            if let Some(rho_expr) = named.get("rho") {
+                validate_rule_expr(rho_expr, scope, false, context, range)?;
+            }
+            match pos[0] {
+                ExprAst::Binary {
+                    op: BinaryOp::Gt | BinaryOp::Ge | BinaryOp::Lt | BinaryOp::Le,
+                    left,
+                    right,
+                } => {
+                    validate_prob_operand(left, scope, context, range)?;
+                    validate_prob_operand(right, scope, context, range)
+                }
+                ExprAst::Binary { .. } => Err(validation_error(
+                    "prob_correlated(): only supports comparisons like prob_correlated(A > B)",
+                    Some(context),
+                    range,
+                )),
+                _ => Err(validation_error(
+                    "prob_correlated(): argument must be a comparison expression",
                     Some(context),
                     range,
                 )),
@@ -1881,6 +1927,91 @@ mod tests {
         let result = validate_rule(&rule);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("edge variable"));
+    }
+
+    #[test]
+    fn validate_rule_with_prob_correlated_on_comparison() {
+        let rule = RuleDef {
+            name: "R".into(),
+            on_model: "M".into(),
+            mode: Some("for_each".into()),
+            patterns: vec![PatternItem {
+                src: NodePattern {
+                    var: "A".into(),
+                    label: "N".into(),
+                },
+                edge: EdgePattern {
+                    var: "e".into(),
+                    ty: "E".into(),
+                },
+                dst: NodePattern {
+                    var: "B".into(),
+                    label: "N".into(),
+                },
+            }],
+            where_expr: Some(ExprAst::Binary {
+                op: BinaryOp::Ge,
+                left: Box::new(ExprAst::Call {
+                    name: "prob_correlated".into(),
+                    args: vec![
+                        CallArg::Positional(ExprAst::Binary {
+                            op: BinaryOp::Gt,
+                            left: Box::new(ExprAst::Field {
+                                target: Box::new(ExprAst::Var("A".into())),
+                                field: "x".into(),
+                            }),
+                            right: Box::new(ExprAst::Field {
+                                target: Box::new(ExprAst::Var("B".into())),
+                                field: "x".into(),
+                            }),
+                        }),
+                        CallArg::Named {
+                            name: "rho".into(),
+                            value: ExprAst::Number(0.3),
+                        },
+                    ],
+                }),
+                right: Box::new(ExprAst::Number(0.5)),
+            }),
+            actions: vec![],
+        };
+
+        assert!(validate_rule(&rule).is_ok());
+    }
+
+    #[test]
+    fn validate_rule_with_prob_correlated_on_edge_var_fails() {
+        let rule = RuleDef {
+            name: "R".into(),
+            on_model: "M".into(),
+            mode: Some("for_each".into()),
+            patterns: vec![PatternItem {
+                src: NodePattern {
+                    var: "A".into(),
+                    label: "N".into(),
+                },
+                edge: EdgePattern {
+                    var: "e".into(),
+                    ty: "E".into(),
+                },
+                dst: NodePattern {
+                    var: "B".into(),
+                    label: "N".into(),
+                },
+            }],
+            where_expr: Some(ExprAst::Call {
+                name: "prob_correlated".into(),
+                args: vec![CallArg::Positional(ExprAst::Var("e".into()))],
+            }),
+            actions: vec![],
+        };
+
+        let result = validate_rule(&rule);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("comparison expression"));
     }
 
     #[test]

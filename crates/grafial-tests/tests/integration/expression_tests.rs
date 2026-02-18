@@ -55,3 +55,18 @@ fn valid_avg_degree_metric_and_rule_where() {
     let ast = parse_program(src).expect("parse");
     validate_program(&ast).expect("validation");
 }
+
+#[test]
+fn valid_prob_correlated_rule_where() {
+    let src = r#"
+schema S { node N { x: Real } edge E {} }
+belief_model M on S { }
+rule R on M {
+  pattern (A:N)-[e:E]->(B:N)
+  where prob_correlated(A.x > B.x, rho=0.3) >= 0.5
+}
+flow F on M { graph g = from_evidence X }
+"#;
+    let ast = parse_program(src).expect("parse");
+    validate_program(&ast).expect("validation");
+}

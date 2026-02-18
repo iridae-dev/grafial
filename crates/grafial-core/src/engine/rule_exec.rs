@@ -23,7 +23,8 @@
 //! - Arithmetic: `+`, `-`, `*`, `/`
 //! - Comparisons: `<`, `<=`, `>`, `>=`, `==`, `!=`
 //! - Logical: `and`, `or`, `not`
-//! - Special functions: `prob(edge)`, `degree(node)`, `E[node.attr]`
+//! - Special functions: `prob(edge)`, `prob_correlated(A.attr > B.attr, rho=...)`,
+//!   `degree(node)`, `E[node.attr]`
 //!
 //! ## Performance
 //!
@@ -140,6 +141,7 @@ impl<'a> ExprContext for RuleExprContext<'a> {
         match name {
             "E" => self.eval_expectation_function(pos_args, all_args, graph),
             "prob" => self.eval_prob_function(pos_args, all_args, graph),
+            "prob_correlated" => self.eval_prob_correlated_function(pos_args, all_args, graph),
             "variance" => self.eval_variance_function(pos_args, all_args, graph),
             "stddev" => self.eval_stddev_function(pos_args, all_args, graph),
             "ci_lo" => self.eval_ci_function(pos_args, all_args, graph, true),
@@ -427,7 +429,9 @@ impl<'a> RuleExprContext<'a> {
         }
     }
 
-    /// Evaluates prob(edge) - returns posterior mean probability for an edge
+    /// Evaluates prob(edge) or prob(lhs > rhs).
+    ///
+    /// Comparison forms assume independence between operands.
     fn eval_prob_function(
         &self,
         pos_args: &[ExprAst],
@@ -449,40 +453,109 @@ impl<'a> RuleExprContext<'a> {
                 Ok(result)
             }
             ExprAst::Binary { op, left, right } => {
-                use grafial_frontend::ast::BinaryOp::*;
-                // Support prob(lhs > rhs | < | <= | >=) for Gaussian attributes assuming independence
-                match op {
-                    Gt | Ge | Lt | Le => {
-                        let (m_l, v_l) = self.extract_mean_var(left, graph)?;
-                        let (m_r, v_r) = self.extract_mean_var(right, graph)?;
-                        let m = m_l - m_r;
-                        let s2 = v_l + v_r;
-                        if s2 <= 1e-18 {
-                            // Deterministic fallback
-                            let val = match op {
-                                Gt | Ge => (m > 0.0) as i32 as f64,
-                                Lt | Le => (m < 0.0) as i32 as f64,
-                                _ => unreachable!(),
-                            };
-                            return Ok(val);
-                        }
-                        let z = m / s2.sqrt();
-                        let p_gt = crate::engine::expr_utils::norm_cdf(z);
-                        let p = match op {
-                            Gt | Ge => p_gt,
-                            Lt | Le => 1.0 - p_gt,
-                            _ => unreachable!(),
-                        };
-                        Ok(p)
-                    }
-                    _ => Err(ExecError::ValidationError(
-                        "prob(): only supports comparisons like prob(A > B)".into(),
-                    )),
-                }
+                self.eval_prob_comparison(*op, left, right, 0.0, "prob", graph)
             }
             _ => Err(ExecError::Internal(
                 "prob(): argument must be an edge variable or comparison".into(),
             )),
+        }
+    }
+
+    /// Evaluates prob_correlated(lhs > rhs, rho=...) for Gaussian comparison probabilities.
+    ///
+    /// `prob(...)` remains the independence form; use this for explicit non-zero correlation.
+    fn eval_prob_correlated_function(
+        &self,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        if pos_args.len() != 1 {
+            return Err(ExecError::Internal(
+                "prob_correlated() expects one positional comparison argument".into(),
+            ));
+        }
+
+        let mut rho = 0.0f64;
+        for arg in all_args {
+            match arg {
+                CallArg::Positional(_) => {}
+                CallArg::Named { name, value } if name == "rho" => {
+                    rho = eval_expr_core(value, graph, self)?;
+                }
+                CallArg::Named { name, .. } => {
+                    return Err(ExecError::ValidationError(format!(
+                        "prob_correlated(): unknown named argument '{}'; expected rho",
+                        name
+                    )))
+                }
+            }
+        }
+
+        if !rho.is_finite() || !(-1.0..=1.0).contains(&rho) {
+            return Err(ExecError::ValidationError(
+                "prob_correlated(): rho must be finite and in [-1, 1]".into(),
+            ));
+        }
+
+        match &pos_args[0] {
+            ExprAst::Binary { op, left, right } => {
+                self.eval_prob_comparison(*op, left, right, rho, "prob_correlated", graph)
+            }
+            _ => Err(ExecError::ValidationError(
+                "prob_correlated(): argument must be a comparison like A.x > B.x".into(),
+            )),
+        }
+    }
+
+    /// Evaluates Gaussian comparison probability `P(lhs OP rhs)` with optional correlation.
+    fn eval_prob_comparison(
+        &self,
+        op: grafial_frontend::ast::BinaryOp,
+        left: &ExprAst,
+        right: &ExprAst,
+        rho: f64,
+        fn_name: &str,
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        use grafial_frontend::ast::BinaryOp::*;
+        match op {
+            Gt | Ge | Lt | Le => {
+                let (m_l, v_l) = self.extract_mean_var(left, graph)?;
+                let (m_r, v_r) = self.extract_mean_var(right, graph)?;
+                let m = m_l - m_r;
+                let cov = rho * (v_l.max(0.0) * v_r.max(0.0)).sqrt();
+                let s2 = v_l + v_r - (2.0 * cov);
+
+                if !s2.is_finite() || s2 < -1e-12 {
+                    return Err(ExecError::ValidationError(format!(
+                        "{}(): implied variance is invalid (check rho and operand variances)",
+                        fn_name
+                    )));
+                }
+                if s2 <= 1e-18 {
+                    // Deterministic fallback for near-zero variance.
+                    let val = match op {
+                        Gt | Ge => (m > 0.0) as i32 as f64,
+                        Lt | Le => (m < 0.0) as i32 as f64,
+                        _ => unreachable!(),
+                    };
+                    return Ok(val);
+                }
+
+                let z = m / s2.sqrt();
+                let p_gt = crate::engine::expr_utils::norm_cdf(z);
+                let p = match op {
+                    Gt | Ge => p_gt,
+                    Lt | Le => 1.0 - p_gt,
+                    _ => unreachable!(),
+                };
+                Ok(p)
+            }
+            _ => Err(ExecError::ValidationError(format!(
+                "{}(): only supports comparisons like {}(A > B)",
+                fn_name, fn_name
+            ))),
         }
     }
 
@@ -1343,6 +1416,34 @@ mod tests {
         g
     }
 
+    fn create_uncertain_compare_graph() -> BeliefGraph {
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData {
+            id: NodeId(1),
+            label: Arc::from("Person"),
+            attrs: HashMap::from([(
+                "x".into(),
+                GaussianPosterior {
+                    mean: 0.1,
+                    precision: 1.0, // var = 1.0
+                },
+            )]),
+        });
+        g.insert_node(NodeData {
+            id: NodeId(2),
+            label: Arc::from("Person"),
+            attrs: HashMap::from([(
+                "x".into(),
+                GaussianPosterior {
+                    mean: 0.0,
+                    precision: 1.0, // var = 1.0
+                },
+            )]),
+        });
+        g.ensure_owned();
+        g
+    }
+
     // ============================================================================
     // eval_expr Tests (now using shared evaluator)
     // ============================================================================
@@ -1508,6 +1609,121 @@ mod tests {
             right: Box::new(ExprAst::Number(1.0)),
         };
         assert_eq!(eval_expr_core(&expr, &g, &ctx).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn eval_prob_correlated_changes_comparison_probability() {
+        let g = create_uncertain_compare_graph();
+        let mut bindings = MatchBindings::default();
+        bindings.node_vars.insert("A".into(), NodeId(1));
+        bindings.node_vars.insert("B".into(), NodeId(2));
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
+        };
+
+        let cmp = ExprAst::Binary {
+            op: BinaryOp::Gt,
+            left: Box::new(ExprAst::Field {
+                target: Box::new(ExprAst::Var("A".into())),
+                field: "x".into(),
+            }),
+            right: Box::new(ExprAst::Field {
+                target: Box::new(ExprAst::Var("B".into())),
+                field: "x".into(),
+            }),
+        };
+
+        let p_ind = eval_expr_core(
+            &ExprAst::Call {
+                name: "prob".into(),
+                args: vec![CallArg::Positional(cmp.clone())],
+            },
+            &g,
+            &ctx,
+        )
+        .expect("prob");
+
+        let p_pos_corr = eval_expr_core(
+            &ExprAst::Call {
+                name: "prob_correlated".into(),
+                args: vec![
+                    CallArg::Positional(cmp.clone()),
+                    CallArg::Named {
+                        name: "rho".into(),
+                        value: ExprAst::Number(0.9),
+                    },
+                ],
+            },
+            &g,
+            &ctx,
+        )
+        .expect("prob_correlated positive rho");
+
+        let p_neg_corr = eval_expr_core(
+            &ExprAst::Call {
+                name: "prob_correlated".into(),
+                args: vec![
+                    CallArg::Positional(cmp),
+                    CallArg::Named {
+                        name: "rho".into(),
+                        value: ExprAst::Number(-0.9),
+                    },
+                ],
+            },
+            &g,
+            &ctx,
+        )
+        .expect("prob_correlated negative rho");
+
+        assert!(
+            p_pos_corr > p_ind,
+            "positive correlation should raise P(A > B)"
+        );
+        assert!(
+            p_neg_corr < p_ind,
+            "negative correlation should lower P(A > B)"
+        );
+    }
+
+    #[test]
+    fn eval_prob_correlated_rejects_invalid_rho() {
+        let g = create_uncertain_compare_graph();
+        let mut bindings = MatchBindings::default();
+        bindings.node_vars.insert("A".into(), NodeId(1));
+        bindings.node_vars.insert("B".into(), NodeId(2));
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
+        };
+
+        let expr = ExprAst::Call {
+            name: "prob_correlated".into(),
+            args: vec![
+                CallArg::Positional(ExprAst::Binary {
+                    op: BinaryOp::Gt,
+                    left: Box::new(ExprAst::Field {
+                        target: Box::new(ExprAst::Var("A".into())),
+                        field: "x".into(),
+                    }),
+                    right: Box::new(ExprAst::Field {
+                        target: Box::new(ExprAst::Var("B".into())),
+                        field: "x".into(),
+                    }),
+                }),
+                CallArg::Named {
+                    name: "rho".into(),
+                    value: ExprAst::Number(1.2),
+                },
+            ],
+        };
+
+        let err = eval_expr_core(&expr, &g, &ctx).expect_err("invalid rho should fail");
+        assert!(err.to_string().contains("rho"));
     }
 
     #[test]
