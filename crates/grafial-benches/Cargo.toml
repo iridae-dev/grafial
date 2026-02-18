@@ -19,3 +19,5 @@ harness = false
 grafial-core = { path = "../grafial-core", features = ["serde"] }
 grafial-frontend = { path = "../grafial-frontend" }
 criterion.workspace = true
+serde.workspace = true
+serde_json.workspace = true

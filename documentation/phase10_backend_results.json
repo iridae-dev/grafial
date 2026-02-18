@@ -1,0 +1,1114 @@
+{
+  "generated_unix_seconds": 1771410623,
+  "repeats": 30,
+  "warmup_runs": 4,
+  "workload_count": 12,
+  "workloads": [
+    {
+      "workload": "ab_testing.grafial",
+      "file": "ab_testing.grafial",
+      "flow_count": 1,
+      "results": [
+        {
+          "backend": "interpreter",
+          "cold_ms": 0.026417000000000003,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.020291,
+            "max_ms": 0.024583,
+            "mean_ms": 0.021038933333333332,
+            "median_ms": 0.020792,
+            "p95_ms": 0.022875
+          },
+          "parity_pass": true,
+          "profile": null
+        },
+        {
+          "backend": "prototype_jit",
+          "cold_ms": 0.02275,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.020625,
+            "max_ms": 0.026916000000000002,
+            "mean_ms": 0.021418133333333342,
+            "median_ms": 0.020916999999999998,
+            "p95_ms": 0.023084
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 60,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 60,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "llvm_candidate",
+          "cold_ms": 0.021917,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.019667,
+            "max_ms": 0.040416,
+            "mean_ms": 0.0217334,
+            "median_ms": 0.019958,
+            "p95_ms": 0.032708
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 60,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 60,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "cranelift_candidate",
+          "cold_ms": 0.020208999999999998,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.019666,
+            "max_ms": 0.020166999999999997,
+            "mean_ms": 0.01986803333333333,
+            "median_ms": 0.019875,
+            "p95_ms": 0.020083
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 60,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 60,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "workload": "advanced_metrics.grafial",
+      "file": "advanced_metrics.grafial",
+      "flow_count": 1,
+      "results": [
+        {
+          "backend": "interpreter",
+          "cold_ms": 0.10162500000000001,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.08654099999999999,
+            "max_ms": 0.11204099999999999,
+            "mean_ms": 0.08924576666666667,
+            "median_ms": 0.08804100000000001,
+            "p95_ms": 0.09562499999999999
+          },
+          "parity_pass": true,
+          "profile": null
+        },
+        {
+          "backend": "prototype_jit",
+          "cold_ms": 0.107834,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.08662500000000001,
+            "max_ms": 0.164625,
+            "mean_ms": 0.09967366666666665,
+            "median_ms": 0.09258400000000001,
+            "p95_ms": 0.136333
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 570,
+            "metric_compile_count": 3,
+            "metric_cache_hits": 78,
+            "metric_fallback_count": 489,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "llvm_candidate",
+          "cold_ms": 0.10275000000000001,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.086875,
+            "max_ms": 0.128458,
+            "mean_ms": 0.09040280000000003,
+            "median_ms": 0.088,
+            "p95_ms": 0.09849999999999999
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 570,
+            "metric_compile_count": 3,
+            "metric_cache_hits": 78,
+            "metric_fallback_count": 489,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "cranelift_candidate",
+          "cold_ms": 0.091667,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.085791,
+            "max_ms": 0.2995,
+            "mean_ms": 0.0948596,
+            "median_ms": 0.08745800000000001,
+            "p95_ms": 0.094125
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 570,
+            "metric_compile_count": 3,
+            "metric_cache_hits": 78,
+            "metric_fallback_count": 489,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "workload": "common_mistakes.grafial",
+      "file": "common_mistakes.grafial",
+      "flow_count": 3,
+      "results": [
+        {
+          "backend": "interpreter",
+          "cold_ms": 0.106,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.041166,
+            "max_ms": 0.089083,
+            "mean_ms": 0.04355973333333332,
+            "median_ms": 0.041749999999999995,
+            "p95_ms": 0.045041
+          },
+          "parity_pass": true,
+          "profile": null
+        },
+        {
+          "backend": "prototype_jit",
+          "cold_ms": 0.044375,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.040041,
+            "max_ms": 0.042667000000000004,
+            "mean_ms": 0.04078180000000001,
+            "median_ms": 0.040458,
+            "p95_ms": 0.041958
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 120,
+            "metric_compile_count": 1,
+            "metric_cache_hits": 26,
+            "metric_fallback_count": 93,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "llvm_candidate",
+          "cold_ms": 0.041083,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.040166999999999994,
+            "max_ms": 0.041041999999999995,
+            "mean_ms": 0.040381966666666665,
+            "median_ms": 0.040333,
+            "p95_ms": 0.040666
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 120,
+            "metric_compile_count": 1,
+            "metric_cache_hits": 26,
+            "metric_fallback_count": 93,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "cranelift_candidate",
+          "cold_ms": 0.041,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.040208,
+            "max_ms": 0.043042,
+            "mean_ms": 0.040715100000000004,
+            "median_ms": 0.0405,
+            "p95_ms": 0.042624999999999996
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 120,
+            "metric_compile_count": 1,
+            "metric_cache_hits": 26,
+            "metric_fallback_count": 93,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "workload": "competing_choices.grafial",
+      "file": "competing_choices.grafial",
+      "flow_count": 1,
+      "results": [
+        {
+          "backend": "interpreter",
+          "cold_ms": 0.034249999999999996,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.026708,
+            "max_ms": 0.030750000000000003,
+            "mean_ms": 0.027544399999999993,
+            "median_ms": 0.027209,
+            "p95_ms": 0.029042000000000002
+          },
+          "parity_pass": true,
+          "profile": null
+        },
+        {
+          "backend": "prototype_jit",
+          "cold_ms": 0.028374999999999997,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.026875,
+            "max_ms": 0.08375,
+            "mean_ms": 0.030482033333333335,
+            "median_ms": 0.028125,
+            "p95_ms": 0.036542
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 60,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 60,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "llvm_candidate",
+          "cold_ms": 0.032,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.027583,
+            "max_ms": 0.030042000000000003,
+            "mean_ms": 0.02837496666666667,
+            "median_ms": 0.028249999999999997,
+            "p95_ms": 0.029542
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 60,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 60,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "cranelift_candidate",
+          "cold_ms": 0.028416999999999998,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.027666,
+            "max_ms": 0.060833,
+            "mean_ms": 0.02962073333333333,
+            "median_ms": 0.028042,
+            "p95_ms": 0.037333000000000005
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 60,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 60,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "workload": "minimal.grafial",
+      "file": "minimal.grafial",
+      "flow_count": 1,
+      "results": [
+        {
+          "backend": "interpreter",
+          "cold_ms": 0.00775,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.006583,
+            "max_ms": 0.006875,
+            "mean_ms": 0.006723666666666669,
+            "median_ms": 0.00675,
+            "p95_ms": 0.006875
+          },
+          "parity_pass": true,
+          "profile": null
+        },
+        {
+          "backend": "prototype_jit",
+          "cold_ms": 0.007416,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.006625,
+            "max_ms": 0.007167,
+            "mean_ms": 0.006746000000000001,
+            "median_ms": 0.006709,
+            "p95_ms": 0.006917
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 30,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 30,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "llvm_candidate",
+          "cold_ms": 0.006917,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.006583,
+            "max_ms": 0.006917,
+            "mean_ms": 0.006688966666666667,
+            "median_ms": 0.006667,
+            "p95_ms": 0.006833
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 30,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 30,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "cranelift_candidate",
+          "cold_ms": 0.006792,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.006625,
+            "max_ms": 0.006834,
+            "mean_ms": 0.006676433333333335,
+            "median_ms": 0.006667,
+            "p95_ms": 0.006791
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 30,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 30,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "workload": "pipeline_composition.grafial",
+      "file": "pipeline_composition.grafial",
+      "flow_count": 3,
+      "results": [
+        {
+          "backend": "interpreter",
+          "cold_ms": 0.09929099999999999,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.0875,
+            "max_ms": 0.09175,
+            "mean_ms": 0.08894029999999997,
+            "median_ms": 0.088125,
+            "p95_ms": 0.091709
+          },
+          "parity_pass": true,
+          "profile": null
+        },
+        {
+          "backend": "prototype_jit",
+          "cold_ms": 0.093458,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.08925,
+            "max_ms": 0.120667,
+            "mean_ms": 0.09374029999999998,
+            "median_ms": 0.091917,
+            "p95_ms": 0.110416
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 300,
+            "metric_compile_count": 4,
+            "metric_cache_hits": 104,
+            "metric_fallback_count": 192,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "llvm_candidate",
+          "cold_ms": 0.097,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.091417,
+            "max_ms": 0.09674999999999999,
+            "mean_ms": 0.0924999666666667,
+            "median_ms": 0.091958,
+            "p95_ms": 0.096666
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 300,
+            "metric_compile_count": 4,
+            "metric_cache_hits": 104,
+            "metric_fallback_count": 192,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "cranelift_candidate",
+          "cold_ms": 0.093667,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.088834,
+            "max_ms": 0.096042,
+            "mean_ms": 0.09094173333333336,
+            "median_ms": 0.089834,
+            "p95_ms": 0.094291
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 300,
+            "metric_compile_count": 4,
+            "metric_cache_hits": 104,
+            "metric_fallback_count": 192,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "workload": "prior_sensitivity.grafial",
+      "file": "prior_sensitivity.grafial",
+      "flow_count": 1,
+      "results": [
+        {
+          "backend": "interpreter",
+          "cold_ms": 0.006834,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.0055,
+            "max_ms": 0.006084,
+            "mean_ms": 0.005601400000000001,
+            "median_ms": 0.005582999999999999,
+            "p95_ms": 0.005834000000000001
+          },
+          "parity_pass": true,
+          "profile": null
+        },
+        {
+          "backend": "prototype_jit",
+          "cold_ms": 0.006208,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.0055,
+            "max_ms": 0.006,
+            "mean_ms": 0.0055970666666666676,
+            "median_ms": 0.005582999999999999,
+            "p95_ms": 0.005917
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 30,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 30,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "llvm_candidate",
+          "cold_ms": 0.005875,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.005458,
+            "max_ms": 0.005667,
+            "mean_ms": 0.005534866666666669,
+            "median_ms": 0.005542,
+            "p95_ms": 0.005584
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 30,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 30,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "cranelift_candidate",
+          "cold_ms": 0.005667,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.005458,
+            "max_ms": 0.005625000000000001,
+            "mean_ms": 0.0055333333333333345,
+            "median_ms": 0.005541,
+            "p95_ms": 0.005625000000000001
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 30,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 30,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "workload": "probabilistic_pattern_matching.grafial",
+      "file": "probabilistic_pattern_matching.grafial",
+      "flow_count": 1,
+      "results": [
+        {
+          "backend": "interpreter",
+          "cold_ms": 0.045583,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.036000000000000004,
+            "max_ms": 0.145,
+            "mean_ms": 0.047679166666666675,
+            "median_ms": 0.038625,
+            "p95_ms": 0.106084
+          },
+          "parity_pass": true,
+          "profile": null
+        },
+        {
+          "backend": "prototype_jit",
+          "cold_ms": 0.040042,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.035708,
+            "max_ms": 0.081916,
+            "mean_ms": 0.03767213333333333,
+            "median_ms": 0.036167,
+            "p95_ms": 0.037166000000000005
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 90,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 90,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "llvm_candidate",
+          "cold_ms": 0.081291,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.037333000000000005,
+            "max_ms": 0.06370799999999999,
+            "mean_ms": 0.04310136666666667,
+            "median_ms": 0.038833,
+            "p95_ms": 0.062833
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 90,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 90,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "cranelift_candidate",
+          "cold_ms": 0.036708000000000005,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.036667,
+            "max_ms": 0.039084,
+            "mean_ms": 0.037351366666666656,
+            "median_ms": 0.037,
+            "p95_ms": 0.038792
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 90,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 90,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "workload": "social.grafial",
+      "file": "social.grafial",
+      "flow_count": 1,
+      "results": [
+        {
+          "backend": "interpreter",
+          "cold_ms": 0.024042,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.02025,
+            "max_ms": 0.046583,
+            "mean_ms": 0.022645833333333334,
+            "median_ms": 0.020665999999999997,
+            "p95_ms": 0.037834
+          },
+          "parity_pass": true,
+          "profile": null
+        },
+        {
+          "backend": "prototype_jit",
+          "cold_ms": 0.027542,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.020083,
+            "max_ms": 0.037625,
+            "mean_ms": 0.021763933333333332,
+            "median_ms": 0.020707999999999997,
+            "p95_ms": 0.033624999999999995
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 30,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 30,
+            "prune_eval_count": 60,
+            "prune_compile_count": 1,
+            "prune_cache_hits": 4,
+            "prune_fallback_count": 55
+          }
+        },
+        {
+          "backend": "llvm_candidate",
+          "cold_ms": 0.032833,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.020125,
+            "max_ms": 0.049875,
+            "mean_ms": 0.023093133333333335,
+            "median_ms": 0.021375,
+            "p95_ms": 0.039208
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 30,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 30,
+            "prune_eval_count": 60,
+            "prune_compile_count": 1,
+            "prune_cache_hits": 4,
+            "prune_fallback_count": 55
+          }
+        },
+        {
+          "backend": "cranelift_candidate",
+          "cold_ms": 0.022,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.020041,
+            "max_ms": 0.0245,
+            "mean_ms": 0.020990333333333337,
+            "median_ms": 0.020542,
+            "p95_ms": 0.022834
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 30,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 30,
+            "prune_eval_count": 60,
+            "prune_compile_count": 1,
+            "prune_cache_hits": 4,
+            "prune_fallback_count": 55
+          }
+        }
+      ]
+    },
+    {
+      "workload": "soft_vs_hard_updates.grafial",
+      "file": "soft_vs_hard_updates.grafial",
+      "flow_count": 1,
+      "results": [
+        {
+          "backend": "interpreter",
+          "cold_ms": 0.027917,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.025209,
+            "max_ms": 0.08741600000000001,
+            "mean_ms": 0.03086393333333334,
+            "median_ms": 0.026125000000000002,
+            "p95_ms": 0.062833
+          },
+          "parity_pass": true,
+          "profile": null
+        },
+        {
+          "backend": "prototype_jit",
+          "cold_ms": 0.027833,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.025125,
+            "max_ms": 0.025834,
+            "mean_ms": 0.025380499999999997,
+            "median_ms": 0.025417000000000002,
+            "p95_ms": 0.025792
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 60,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 60,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "llvm_candidate",
+          "cold_ms": 0.025707999999999998,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.024958,
+            "max_ms": 0.025417000000000002,
+            "mean_ms": 0.025162466666666668,
+            "median_ms": 0.025166,
+            "p95_ms": 0.025334
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 60,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 60,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "cranelift_candidate",
+          "cold_ms": 0.025375,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.025,
+            "max_ms": 0.025709,
+            "mean_ms": 0.02521116666666667,
+            "median_ms": 0.025208,
+            "p95_ms": 0.0255
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 60,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 60,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "workload": "transitive_closure.grafial",
+      "file": "transitive_closure.grafial",
+      "flow_count": 1,
+      "results": [
+        {
+          "backend": "interpreter",
+          "cold_ms": 0.034749999999999996,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.031167,
+            "max_ms": 0.103833,
+            "mean_ms": 0.035216500000000005,
+            "median_ms": 0.032332999999999994,
+            "p95_ms": 0.051082999999999996
+          },
+          "parity_pass": true,
+          "profile": null
+        },
+        {
+          "backend": "prototype_jit",
+          "cold_ms": 0.034458,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.030666000000000002,
+            "max_ms": 0.063208,
+            "mean_ms": 0.03420553333333333,
+            "median_ms": 0.03175,
+            "p95_ms": 0.047084
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 90,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 90,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "llvm_candidate",
+          "cold_ms": 0.032709,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.0305,
+            "max_ms": 0.098375,
+            "mean_ms": 0.03395973333333333,
+            "median_ms": 0.030833000000000003,
+            "p95_ms": 0.042707999999999996
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 90,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 90,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "cranelift_candidate",
+          "cold_ms": 0.030916,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.03025,
+            "max_ms": 0.031375,
+            "mean_ms": 0.03050976666666666,
+            "median_ms": 0.030459,
+            "p95_ms": 0.030750000000000003
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 90,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 90,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        }
+      ]
+    },
+    {
+      "workload": "uncertainty_propagation.grafial",
+      "file": "uncertainty_propagation.grafial",
+      "flow_count": 1,
+      "results": [
+        {
+          "backend": "interpreter",
+          "cold_ms": 0.020416,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.017041,
+            "max_ms": 0.018875000000000003,
+            "mean_ms": 0.017688833333333327,
+            "median_ms": 0.017709,
+            "p95_ms": 0.0185
+          },
+          "parity_pass": true,
+          "profile": null
+        },
+        {
+          "backend": "prototype_jit",
+          "cold_ms": 0.018958,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.017915999999999998,
+            "max_ms": 0.0185,
+            "mean_ms": 0.01800696666666667,
+            "median_ms": 0.018000000000000002,
+            "p95_ms": 0.018125
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 60,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 60,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "llvm_candidate",
+          "cold_ms": 0.018125,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.017834,
+            "max_ms": 0.018334,
+            "mean_ms": 0.018013933333333332,
+            "median_ms": 0.018000000000000002,
+            "p95_ms": 0.018125
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 60,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 60,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        },
+        {
+          "backend": "cranelift_candidate",
+          "cold_ms": 0.018125,
+          "warm": {
+            "runs": 30,
+            "min_ms": 0.017833,
+            "max_ms": 0.018333,
+            "mean_ms": 0.017980700000000006,
+            "median_ms": 0.017959,
+            "p95_ms": 0.018125
+          },
+          "parity_pass": true,
+          "profile": {
+            "metric_eval_count": 60,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 0,
+            "metric_fallback_count": 60,
+            "prune_eval_count": 0,
+            "prune_compile_count": 0,
+            "prune_cache_hits": 0,
+            "prune_fallback_count": 0
+          }
+        }
+      ]
+    }
+  ],
+  "aggregate": [
+    {
+      "backend": "interpreter",
+      "mean_cold_ms": 0.04457291666666666,
+      "mean_warm_median_ms": 0.034475666666666675,
+      "mean_warm_p95_ms": 0.04777791666666666
+    },
+    {
+      "backend": "prototype_jit",
+      "mean_cold_ms": 0.03827075,
+      "mean_warm_median_ms": 0.03486125,
+      "mean_warm_p95_ms": 0.04357991666666666
+    },
+    {
+      "backend": "llvm_candidate",
+      "mean_cold_ms": 0.04151733333333334,
+      "mean_warm_median_ms": 0.03457625,
+      "mean_warm_p95_ms": 0.041558916666666675
+    },
+    {
+      "backend": "cranelift_candidate",
+      "mean_cold_ms": 0.03504525,
+      "mean_warm_median_ms": 0.03409041666666667,
+      "mean_warm_p95_ms": 0.03640616666666667
+    }
+  ]
+}

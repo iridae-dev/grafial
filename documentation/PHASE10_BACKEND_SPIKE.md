@@ -23,6 +23,7 @@ Benchmark harness:
 Runner script:
 
 - `/Users/charleshinshaw/Desktop/content/baygraph/scripts/phase10_backend_spike.sh`
+- `/Users/charleshinshaw/Desktop/content/baygraph/scripts/phase10_backend_matrix.sh`
 
 Run commands:
 
@@ -32,6 +33,9 @@ cargo bench -p grafial-benches --bench backend_spike --no-run
 
 # run benchmark
 ./scripts/phase10_backend_spike.sh
+
+# run matrix report across shipped examples
+./scripts/phase10_backend_matrix.sh
 ```
 
 The harness currently includes:
@@ -56,6 +60,9 @@ Measurement note:
 
 - Values above come from one local spike run on February 18, 2026 (`cargo bench -p grafial-benches --bench backend_spike -- --sample-size 10`).
 - LLVM and Cranelift entries currently route through candidate wrappers over the shared prototype hot-expression runtime path; native codegen differentiation is the next implementation step.
+- Matrix reports are written to:
+  - `/Users/charleshinshaw/Desktop/content/baygraph/documentation/PHASE10_BACKEND_RESULTS.md`
+  - `/Users/charleshinshaw/Desktop/content/baygraph/documentation/phase10_backend_results.json`
 
 ## Scoring Rubric
 
