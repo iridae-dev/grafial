@@ -11,11 +11,20 @@ grafial-ir = { path = "../grafial-ir" }
 thiserror.workspace = true
 smallvec.workspace = true
 rustc-hash.workspace = true
+lazy_static = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
+cranelift-codegen = { workspace = true, optional = true }
+cranelift-frontend = { workspace = true, optional = true }
+cranelift-jit = { workspace = true, optional = true }
+cranelift-module = { workspace = true, optional = true }
+cranelift-native = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
 
 [features]
 default = []
@@ -23,3 +32,16 @@ tracing = ["dep:tracing"]
 serde = ["dep:serde", "dep:serde_json"]
 bincode = ["dep:bincode", "serde"]
 rayon = ["dep:rayon"]
+jit = [
+    "dep:cranelift-codegen",
+    "dep:cranelift-frontend",
+    "dep:cranelift-jit",
+    "dep:cranelift-module",
+    "dep:cranelift-native",
+    "dep:lazy_static",
+]
+vectorized = []
+
+[[bench]]
+name = "vectorized_evidence"
+harness = false

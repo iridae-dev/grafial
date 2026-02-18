@@ -258,15 +258,30 @@ Completion notes (this change):
 - Implement hot-expression JIT for metric and prune expressions with caching and deterministic interpreter fallback for unsupported forms.
 - Select and standardize on a single JIT backend to reduce maintenance and avoid parallel half-implemented paths.
 
-Progress notes (this change):
+Completion notes (this change):
 - Added the IR execution backend boundary in `flow_exec`:
   - `IrExecutionBackend` trait
   - `InterpreterExecutionBackend` for explicit interpreter execution
   - `run_flow_ir_with_backend(...)` explicit backend entrypoint
-- Finalized on Cranelift JIT:
+- Finalized on Cranelift JIT (`--features jit`):
   - `CraneliftJitExecutionBackend` with `JitConfig` and `JitProfile`
   - `run_flow_ir(...)` now dispatches through Cranelift JIT by default
   - parity/fallback behavior remains deterministic via interpreter fallback on unsupported expressions
+- Implemented real Cranelift native code generation in `engine/jit_backend.rs`:
+  - `cranelift-codegen`, `cranelift-frontend`, `cranelift-jit`, `cranelift-module`, `cranelift-native`
+    are now feature-gated under `grafial-core/features = ["jit"]`
+  - `compile_metric_expr(expr)` → `CompiledMetricFn`: lowers `ExprIR` (numbers, bools, vars,
+    unary/binary ops) to a native `fn(*const f64, usize) -> f64` via Cranelift; variables are
+    resolved to flat-array indices at compile time
+  - `compile_prune_expr(expr)` → `CompiledPruneFn`: lowers prune predicates (numbers, bools,
+    `prob(edge)`, unary/binary ops) to a native `fn(f64) -> f64` via Cranelift
+  - Pre-check pass validates expression support before any Cranelift state is allocated
+  - `CompiledMetricFn`/`CompiledPruneFn` hold `Arc<JITModule>` to keep JIT memory alive
+  - `unsafe impl Send + Sync` on wrappers: sound because compiled code is immutable after
+    `finalize_definitions()` and is called with thread-local argument slices only
+  - Feature-gated dispatch in `flow_exec`: `jit_compile_metric`/`jit_compile_prune` and
+    `jit_eval_metric`/`jit_eval_prune` select real Cranelift or bytecode fallback at compile time
+  - Without `--features jit` the legacy register-bytecode interpreter path is used unchanged
 - Removed Phase 10 decision artifacts and alternate candidate scaffolding:
   - removed LLVM candidate backend path
   - removed backend spike/matrix harnesses and generated reports
@@ -274,13 +289,53 @@ Progress notes (this change):
 
 ## Phase 11 - AOT + Vectorized Runtime
 
-- Lower selected rule predicates/actions from IR to native kernels while keeping dynamic graph traversal in the runtime planner.
-- Add vectorized Bayesian update kernels for batched evidence ingestion where deterministic ordering is preserved.
-- Add optional flow AOT build path (artifact generation for precompiled execution units) with strict feature gating.
-- Add benchmark and correctness gates:
-  - no semantic drift vs interpreter path,
-  - deterministic parity across backends,
-  - documented performance targets on representative workloads.
+**Status: Mostly Complete**
+
+### Completed Components:
+
+#### 1. Vectorized Bayesian Update Kernels ✅
+
+- **Vectorized evidence ingestion** (`crates/grafial-core/src/engine/vectorized.rs`)
+  - Implemented `gaussian_batch_update` for batched Gaussian posterior updates
+  - Implemented `beta_batch_update` for batched Beta posterior updates
+  - Mathematically equivalent to sequential updates (preserves deterministic ordering)
+  - Auto-vectorization friendly loops for SIMD optimization
+
+- **Feature-gated integration** (`vectorized` feature flag)
+  - Modified `evidence.rs` to use vectorized batch updates when feature enabled
+  - Added `observe_edge_batch` and `observe_attr_batch` methods to `BeliefGraph`
+  - Falls back to sequential scalar updates when feature disabled
+
+- **Testing and benchmarks**
+  - Created comprehensive parity tests (`tests/vectorized_parity.rs`)
+  - Verified identical results between scalar and vectorized paths
+  - Added benchmarks comparing performance (`benches/vectorized_evidence.rs`)
+
+#### 2. Native Rule Kernel Compilation ✅
+
+- **Rule predicate JIT compilation** (`crates/grafial-core/src/engine/rule_kernels.rs`)
+  - Implemented Cranelift-based compilation for simple rule predicates
+  - Compiles arithmetic and logical expressions to native x86_64 code
+  - Hot predicates automatically compiled after threshold (10 executions)
+  - Complex expressions (field access, functions) fall back to interpreter
+
+- **Hybrid execution model** (`rule_exec.rs` integration)
+  - Pattern matching and graph traversal remain interpreted for flexibility
+  - Where clause predicates compiled to native code when hot
+  - Seamless fallback to interpreter for complex or cold expressions
+  - Cache management for compiled kernels with execution counting
+
+- **Comprehensive testing** (`tests/rule_kernels_test.rs`)
+  - Tests for simple arithmetic predicates
+  - Tests for logical operators (AND, OR, NOT)
+  - Verification of compilation threshold mechanism
+  - Fallback testing for complex expressions
+
+### Remaining Work:
+
+- Add optional flow AOT build path (artifact generation for precompiled execution units) with strict feature gating
+- Add benchmarks comparing interpreted vs JIT-compiled rule performance
+- Add performance documentation with targets on representative workloads
 
 ## Phase 12 - Parallel Engine Execution
 

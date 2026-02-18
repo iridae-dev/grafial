@@ -13,6 +13,12 @@ pub mod expr_eval;
 pub mod expr_utils;
 pub mod flow_exec;
 pub mod graph;
+#[cfg(feature = "jit")]
+pub mod jit_backend;
 pub mod query_plan;
 pub mod rule_exec;
+#[cfg(feature = "jit")]
+pub mod rule_kernels;
 pub mod snapshot;
+#[cfg(feature = "vectorized")]
+pub mod vectorized;

@@ -3,22 +3,35 @@
 //! Executes flows: sequences of graph transformations that produce named graphs and metrics.
 //! Graphs are immutable between transforms (each transform produces a new graph), enabling
 //! safe parallel execution and snapshotting.
+//!
+//! ## JIT backend selection
+//!
+//! When the `jit` feature is enabled, hot metric and prune expressions are compiled to
+//! native machine code via Cranelift (`jit_backend`).  When the feature is disabled the
+//! legacy register-bytecode interpreter is used instead.  Both paths share the same
+//! hot-expression detection and caching infrastructure (`eval_hot_metric_with_cache` /
+//! `eval_hot_prune_with_cache`) and provide identical deterministic fallback behaviour.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use crate::engine::errors::ExecError;
 use crate::engine::evidence::build_graph_from_evidence_ir;
-use crate::engine::expr_eval::{eval_binary_op, eval_expr_core, eval_unary_op, ExprContext};
+use crate::engine::expr_eval::{eval_expr_core, ExprContext};
+#[cfg(not(feature = "jit"))]
+use crate::engine::expr_eval::{eval_binary_op, eval_unary_op};
 use crate::engine::graph::{BeliefGraph, EdgeId};
 use crate::engine::rule_exec::run_rule_for_each_with_globals_audit;
 use crate::metrics::{eval_metric_expr, MetricContext, MetricRegistry};
 use grafial_frontend::ast::RuleDef;
 use grafial_frontend::{CallArg, ExprAst, ProgramAst};
-use grafial_ir::{
-    BinaryOpIR, CallArgIR, EvidenceIR, ExprIR, FlowIR, GraphExprIR, MetricImportDefIR, ProgramIR,
-    RuleIR, TransformIR, UnaryOpIR,
-};
+use grafial_ir::{EvidenceIR, ExprIR, FlowIR, GraphExprIR, MetricImportDefIR, ProgramIR, RuleIR, TransformIR};
+#[cfg(not(feature = "jit"))]
+use grafial_ir::{BinaryOpIR, CallArgIR, UnaryOpIR};
+
+// When the `jit` feature is active, bring in the real Cranelift compiled types.
+#[cfg(feature = "jit")]
+use crate::engine::jit_backend::{CompiledMetricFn, CompiledPruneFn};
 
 /// Graph builder trait for abstracting evidence-to-graph construction.
 ///
@@ -165,10 +178,25 @@ pub struct JitProfile {
     pub prune_fallback_count: usize,
 }
 
+/// Compiled metric expression type.
+///
+/// With the `jit` feature: a real Cranelift-compiled native function.
+/// Without the `jit` feature: the legacy register-bytecode program.
+#[cfg(feature = "jit")]
+type CompiledMetric = CompiledMetricFn;
+#[cfg(not(feature = "jit"))]
+type CompiledMetric = CraneliftMetricProgram;
+
+/// Compiled prune expression type (same feature-gate pattern).
+#[cfg(feature = "jit")]
+type CompiledPrune = CompiledPruneFn;
+#[cfg(not(feature = "jit"))]
+type CompiledPrune = CraneliftPruneProgram;
+
 #[derive(Debug, Default)]
 struct JitState {
-    metric_entries: HashMap<MetricExprKey, JitEntry<CraneliftMetricProgram>>,
-    prune_entries: HashMap<PruneExprKey, JitEntry<CraneliftPruneProgram>>,
+    metric_entries: HashMap<MetricExprKey, JitEntry<CompiledMetric>>,
+    prune_entries: HashMap<PruneExprKey, JitEntry<CompiledPrune>>,
     profile: JitProfile,
 }
 
@@ -387,8 +415,8 @@ impl<'a> FlowExprEvaluator for CraneliftExprEvaluator<'a> {
             self.config.metric_compile_threshold,
             key,
             expr,
-            compile_metric_expr_jit,
-            |compiled| compiled.eval(ctx),
+            jit_compile_metric,
+            |compiled| jit_eval_metric(compiled, ctx),
             || {
                 let expr_ast = expr.to_ast();
                 eval_metric_expr(&expr_ast, graph, registry, ctx)
@@ -416,14 +444,77 @@ impl<'a> FlowExprEvaluator for CraneliftExprEvaluator<'a> {
             self.config.prune_compile_threshold,
             key,
             expr,
-            compile_prune_expr_jit,
-            |compiled| compiled.eval(graph, edge),
+            jit_compile_prune,
+            |compiled| jit_eval_prune(compiled, graph, edge),
             || {
                 let expr_ast = expr.to_ast();
                 eval_prune_predicate(&expr_ast, graph, edge)
             },
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// Feature-gated compile / eval dispatch
+// ---------------------------------------------------------------------------
+
+/// Compile a metric expression to the appropriate compiled form.
+///
+/// With `jit` feature: generates real Cranelift native code.
+/// Without `jit` feature: lowers to register-bytecode.
+#[cfg(feature = "jit")]
+fn jit_compile_metric(expr: &ExprIR) -> Option<CompiledMetric> {
+    crate::engine::jit_backend::compile_metric_expr(expr)
+}
+
+#[cfg(not(feature = "jit"))]
+fn jit_compile_metric(expr: &ExprIR) -> Option<CompiledMetric> {
+    compile_metric_expr_jit(expr)
+}
+
+/// Evaluate a compiled metric expression.
+#[cfg(feature = "jit")]
+fn jit_eval_metric(compiled: &CompiledMetric, ctx: &MetricContext) -> Result<f64, ExecError> {
+    compiled.eval(ctx)
+}
+
+#[cfg(not(feature = "jit"))]
+fn jit_eval_metric(compiled: &CompiledMetric, ctx: &MetricContext) -> Result<f64, ExecError> {
+    compiled.eval(ctx)
+}
+
+/// Compile a prune predicate expression.
+#[cfg(feature = "jit")]
+fn jit_compile_prune(expr: &ExprIR) -> Option<CompiledPrune> {
+    crate::engine::jit_backend::compile_prune_expr(expr)
+}
+
+#[cfg(not(feature = "jit"))]
+fn jit_compile_prune(expr: &ExprIR) -> Option<CompiledPrune> {
+    compile_prune_expr_jit(expr)
+}
+
+/// Evaluate a compiled prune expression.
+///
+/// With `jit` feature: pre-compute edge probability and pass as scalar.
+/// Without `jit` feature: pass graph/edge directly to bytecode program.
+#[cfg(feature = "jit")]
+fn jit_eval_prune(
+    compiled: &CompiledPrune,
+    graph: &BeliefGraph,
+    edge: EdgeId,
+) -> Result<f64, ExecError> {
+    let edge_prob = graph.prob_mean(edge)?;
+    compiled.eval(edge_prob)
+}
+
+#[cfg(not(feature = "jit"))]
+fn jit_eval_prune(
+    compiled: &CompiledPrune,
+    graph: &BeliefGraph,
+    edge: EdgeId,
+) -> Result<f64, ExecError> {
+    compiled.eval(graph, edge)
 }
 
 fn eval_hot_metric_with_cache<Compiled, CompileFn, EvalFn, FallbackFn>(
@@ -538,6 +629,14 @@ where
     fallback_eval()
 }
 
+// ---------------------------------------------------------------------------
+// Register-bytecode fallback (used when the `jit` feature is disabled).
+// When `--features jit` is active, the real Cranelift backend in
+// `jit_backend.rs` is used instead and all code below until
+// `run_flow_ir_interpreter` is dead.
+// ---------------------------------------------------------------------------
+
+#[cfg(not(feature = "jit"))]
 #[derive(Debug, Clone)]
 enum CraneliftMetricOp {
     Const {
@@ -565,6 +664,7 @@ enum CraneliftMetricOp {
     },
 }
 
+#[cfg(not(feature = "jit"))]
 #[derive(Debug, Clone)]
 struct CraneliftMetricProgram {
     ops: Vec<CraneliftMetricOp>,
@@ -572,6 +672,7 @@ struct CraneliftMetricProgram {
     reg_count: usize,
 }
 
+#[cfg(not(feature = "jit"))]
 impl CraneliftMetricProgram {
     fn eval(&self, ctx: &MetricContext) -> Result<f64, ExecError> {
         let mut regs = vec![0.0; self.reg_count.max(1)];
@@ -612,12 +713,14 @@ impl CraneliftMetricProgram {
     }
 }
 
+#[cfg(not(feature = "jit"))]
 #[derive(Default)]
 struct CraneliftMetricCompiler {
     ops: Vec<CraneliftMetricOp>,
     next_reg: usize,
 }
 
+#[cfg(not(feature = "jit"))]
 impl CraneliftMetricCompiler {
     fn alloc(&mut self) -> usize {
         let out = self.next_reg;
@@ -671,6 +774,7 @@ impl CraneliftMetricCompiler {
     }
 }
 
+#[cfg(not(feature = "jit"))]
 fn compile_metric_expr_jit(expr: &ExprIR) -> Option<CraneliftMetricProgram> {
     let mut compiler = CraneliftMetricCompiler::default();
     let result_reg = compiler.lower(expr)?;
@@ -681,6 +785,7 @@ fn compile_metric_expr_jit(expr: &ExprIR) -> Option<CraneliftMetricProgram> {
     })
 }
 
+#[cfg(not(feature = "jit"))]
 #[derive(Debug, Clone)]
 enum CraneliftPruneOp {
     Const {
@@ -707,6 +812,7 @@ enum CraneliftPruneOp {
     },
 }
 
+#[cfg(not(feature = "jit"))]
 #[derive(Debug, Clone)]
 struct CraneliftPruneProgram {
     ops: Vec<CraneliftPruneOp>,
@@ -714,6 +820,7 @@ struct CraneliftPruneProgram {
     reg_count: usize,
 }
 
+#[cfg(not(feature = "jit"))]
 impl CraneliftPruneProgram {
     fn eval(&self, graph: &BeliefGraph, edge: EdgeId) -> Result<f64, ExecError> {
         let mut regs = vec![0.0; self.reg_count.max(1)];
@@ -743,12 +850,14 @@ impl CraneliftPruneProgram {
     }
 }
 
+#[cfg(not(feature = "jit"))]
 #[derive(Default)]
 struct CraneliftPruneCompiler {
     ops: Vec<CraneliftPruneOp>,
     next_reg: usize,
 }
 
+#[cfg(not(feature = "jit"))]
 impl CraneliftPruneCompiler {
     fn alloc(&mut self) -> usize {
         let out = self.next_reg;
@@ -807,6 +916,7 @@ impl CraneliftPruneCompiler {
     }
 }
 
+#[cfg(not(feature = "jit"))]
 fn compile_prune_expr_jit(expr: &ExprIR) -> Option<CraneliftPruneProgram> {
     let mut compiler = CraneliftPruneCompiler::default();
     let result_reg = compiler.lower(expr)?;
@@ -817,6 +927,7 @@ fn compile_prune_expr_jit(expr: &ExprIR) -> Option<CraneliftPruneProgram> {
     })
 }
 
+#[cfg(not(feature = "jit"))]
 fn eval_compiled_metric_binary(op: BinaryOpIR, left: f64, right: f64) -> Result<f64, ExecError> {
     let result = match op {
         BinaryOpIR::Add => left + right,
@@ -2110,5 +2221,55 @@ mod tests {
         let cranelift_profile = cranelift.profile_snapshot().expect("cranelift profile");
         assert!(cranelift_profile.metric_compile_count >= 1);
         assert!(cranelift_profile.prune_compile_count >= 1);
+    }
+
+    /// Verify that the `jit` feature wires up real Cranelift compilation, not the bytecode
+    /// interpreter.  This test only runs when `--features jit` is active.
+    #[cfg(feature = "jit")]
+    #[test]
+    fn jit_feature_compiles_metric_and_prune_to_native_code() {
+        use crate::engine::jit_backend;
+
+        // Metric: a + 1 — fully supported by both bytecode and Cranelift.
+        let metric_expr = ExprIR::Binary {
+            op: grafial_ir::BinaryOpIR::Add,
+            left: Box::new(ExprIR::Var("m1".into())),
+            right: Box::new(ExprIR::Number(1.0)),
+        };
+        let compiled_metric =
+            jit_backend::compile_metric_expr(&metric_expr).expect("should compile metric");
+        let mut ctx = crate::metrics::MetricContext::default();
+        ctx.metrics.insert("m1".into(), 3.0);
+        assert_eq!(
+            compiled_metric.eval(&ctx).expect("eval"),
+            4.0,
+            "JIT metric: 3 + 1 = 4"
+        );
+
+        // Prune: prob(edge) < 0.5
+        let prune_expr = ExprIR::Binary {
+            op: grafial_ir::BinaryOpIR::Lt,
+            left: Box::new(ExprIR::Call {
+                name: "prob".into(),
+                args: vec![grafial_ir::CallArgIR::Positional(ExprIR::Var(
+                    "edge".into(),
+                ))],
+            }),
+            right: Box::new(ExprIR::Number(0.5)),
+        };
+        let compiled_prune =
+            jit_backend::compile_prune_expr(&prune_expr).expect("should compile prune");
+        // 0.3 < 0.5 → true (1.0)
+        assert_eq!(
+            compiled_prune.eval(0.3).expect("eval"),
+            1.0,
+            "JIT prune: 0.3 < 0.5 = true"
+        );
+        // 0.7 < 0.5 → false (0.0)
+        assert_eq!(
+            compiled_prune.eval(0.7).expect("eval"),
+            0.0,
+            "JIT prune: 0.7 < 0.5 = false"
+        );
     }
 }

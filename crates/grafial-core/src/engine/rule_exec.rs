@@ -38,12 +38,16 @@
 //! always produce the same output, regardless of hash table iteration order.
 
 use std::collections::HashMap;
+#[cfg(feature = "jit")]
+use std::sync::Mutex;
 
 use crate::engine::errors::ExecError;
 use crate::engine::expr_eval::{eval_binary_op, eval_expr_core, eval_unary_op, ExprContext};
 use crate::engine::expr_utils::inv_norm_cdf;
 use crate::engine::graph::{BeliefGraph, EdgeId, NodeId};
 use crate::engine::query_plan::QueryPlanCache;
+#[cfg(feature = "jit")]
+use crate::engine::rule_kernels::RuleKernelCache;
 use grafial_frontend::ast::{ActionStmt, CallArg, ExprAst, PatternItem, RuleDef};
 use grafial_ir::RuleIR;
 
@@ -57,6 +61,13 @@ const MAX_FIXPOINT_ITERATIONS: usize = 1000;
 /// Convergence tolerance for fixpoint rules
 /// If changes are smaller than this threshold, consider converged
 const FIXPOINT_TOLERANCE: f64 = 1e-6;
+
+#[cfg(feature = "jit")]
+lazy_static::lazy_static! {
+    /// Global kernel cache for JIT-compiled rule predicates and actions.
+    static ref KERNEL_CACHE: Mutex<crate::engine::rule_kernels::RuleKernelCache> =
+        Mutex::new(crate::engine::rule_kernels::RuleKernelCache::new());
+}
 
 /// Variable bindings for a single pattern match.
 ///
@@ -888,6 +899,15 @@ fn evaluate_where_clause(
         return Ok(true);
     };
 
+    // Try to use compiled kernel if available (JIT feature only)
+    #[cfg(feature = "jit")]
+    {
+        if let Ok(result) = evaluate_where_clause_jit(expr, bindings, globals) {
+            return Ok(result);
+        }
+        // Fall back to interpreter if JIT fails or expression is too complex
+    }
+
     let where_locals = Locals::new();
     let where_ctx = RuleExprContext {
         bindings,
@@ -1510,6 +1530,123 @@ pub fn run_rule_ir(
     let ast_rule = rule.to_ast();
     run_rule(input, &ast_rule, globals)
 }
+
+// JIT compilation support functions
+#[cfg(feature = "jit")]
+mod jit_helpers {
+    use super::*;
+
+    /// Attempts to evaluate a where clause using JIT-compiled kernel.
+    ///
+    /// Returns Ok(result) if the expression can be JIT-compiled and evaluated,
+    /// Err if the expression is too complex or compilation fails.
+    pub fn evaluate_where_clause_jit(
+        expr: &ExprAst,
+        bindings: &MatchBindings,
+        globals: &HashMap<String, f64>,
+    ) -> Result<bool, ExecError> {
+        // Check if expression is simple enough for JIT (no field access, no function calls)
+        if !is_simple_expression(expr) {
+            return Err(ExecError::Internal("Expression too complex for JIT".into()));
+        }
+
+        // Try to get or compile a kernel for this expression
+        let mut cache = KERNEL_CACHE.lock().unwrap();
+
+        // Use expression hash as cache key (simplified - in production would use proper hashing)
+        let expr_key = format!("where_{:?}", expr);
+
+        let kernel = if let Some(k) = cache.get(&expr_key) {
+            k
+        } else if cache.should_compile(&expr_key) {
+            // Compile the expression
+            match cache.compile_rule(&expr_key, Some(expr), &[]) {
+                Ok(k) => k,
+                Err(_) => return Err(ExecError::Internal("JIT compilation failed".into())),
+            }
+        } else {
+            // Not hot enough to compile yet
+            return Err(ExecError::Internal("Not compiled yet".into()));
+        };
+
+        // Marshal bindings to arrays
+        let node_values = marshal_node_bindings(bindings, &kernel.node_var_indices);
+        let edge_values = marshal_edge_bindings(bindings, &kernel.edge_var_indices);
+        let global_values = marshal_globals(globals, &kernel.global_var_indices);
+
+        // Call the compiled predicate
+        if let Some(pred_fn) = kernel.predicate {
+            let result = unsafe {
+                pred_fn(
+                    node_values.as_ptr(),
+                    edge_values.as_ptr(),
+                    global_values.as_ptr(),
+                )
+            };
+            Ok(result != 0)
+        } else {
+            Err(ExecError::Internal("No compiled predicate".into()))
+        }
+    }
+
+    /// Check if an expression is simple enough for JIT compilation.
+    fn is_simple_expression(expr: &ExprAst) -> bool {
+        match expr {
+            ExprAst::Number(_) | ExprAst::Var(_) => true,
+            ExprAst::Binary { left, right, .. } => {
+                is_simple_expression(left) && is_simple_expression(right)
+            }
+            ExprAst::Unary { expr, .. } => is_simple_expression(expr),
+            // Field access, function calls, exists, etc. are too complex
+            _ => false,
+        }
+    }
+
+    /// Marshal node bindings to array for JIT kernel.
+    fn marshal_node_bindings(
+        bindings: &MatchBindings,
+        indices: &HashMap<String, usize>,
+    ) -> Vec<f64> {
+        let mut values = vec![0.0; indices.len()];
+        for (name, &idx) in indices {
+            if let Some(&node_id) = bindings.node_vars.get(name) {
+                values[idx] = node_id.0 as f64;
+            }
+        }
+        values
+    }
+
+    /// Marshal edge bindings to array for JIT kernel.
+    fn marshal_edge_bindings(
+        bindings: &MatchBindings,
+        indices: &HashMap<String, usize>,
+    ) -> Vec<f64> {
+        let mut values = vec![0.0; indices.len()];
+        for (name, &idx) in indices {
+            if let Some(&edge_id) = bindings.edge_vars.get(name) {
+                values[idx] = edge_id.0 as f64;
+            }
+        }
+        values
+    }
+
+    /// Marshal global variables to array for JIT kernel.
+    fn marshal_globals(
+        globals: &HashMap<String, f64>,
+        indices: &HashMap<String, usize>,
+    ) -> Vec<f64> {
+        let mut values = vec![0.0; indices.len()];
+        for (name, &idx) in indices {
+            if let Some(&value) = globals.get(name) {
+                values[idx] = value;
+            }
+        }
+        values
+    }
+}
+
+#[cfg(feature = "jit")]
+use jit_helpers::evaluate_where_clause_jit;
 
 #[cfg(test)]
 mod tests {

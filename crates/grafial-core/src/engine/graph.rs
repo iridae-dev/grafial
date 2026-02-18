@@ -98,7 +98,7 @@ pub struct EdgeId(pub u32);
 /// Bayesian update formulas (Normal-Normal conjugacy):
 /// - τ_new = τ_old + τ_obs
 /// - μ_new = (τ_old × μ_old + τ_obs × x) / τ_new
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GaussianPosterior {
     /// The posterior mean (μ)
@@ -215,7 +215,7 @@ impl GaussianPosterior {
 /// Uses the Beta(α, β) parameterization for conjugate Bernoulli updates.
 /// The mean probability is E[p] = α / (α + β).
 /// Bayesian update: increments α if present, β if absent.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BetaPosterior {
     /// The alpha parameter (pseudo-count of successes)
@@ -2381,6 +2381,112 @@ impl BeliefGraph {
             new_mean: x,
             new_precision: FORCE_PRECISION,
         });
+        Ok(())
+    }
+
+    /// Batch observation of multiple values for a node attribute using vectorized kernels.
+    ///
+    /// Applies multiple Gaussian observations in a single kernel call for improved performance.
+    /// This is mathematically equivalent to sequential `observe_attr` calls but more efficient.
+    ///
+    /// # Arguments
+    ///
+    /// * `node` - The node ID
+    /// * `attr` - The attribute name
+    /// * `observations` - Slice of `(value, precision)` pairs
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) if successful, or an error if the update fails
+    #[cfg(feature = "vectorized")]
+    pub fn observe_attr_batch(
+        &mut self,
+        node: NodeId,
+        attr: &str,
+        observations: &[(f64, f64)],
+    ) -> Result<(), ExecError> {
+        use crate::engine::vectorized::gaussian_batch_update;
+
+        if observations.is_empty() {
+            return Ok(());
+        }
+
+        self.ensure_ready_for_delta();
+
+        // Get current attribute value with fine-grained deltas applied
+        let old_posterior = self
+            .get_node_attr_with_deltas(node, attr)
+            .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
+
+        // Apply vectorized batch update
+        let new_posterior = gaussian_batch_update(&old_posterior, observations)?;
+
+        // Store fine-grained delta
+        self.delta.push(GraphDelta::NodeAttributeChange {
+            node,
+            attr: Arc::from(attr),
+            old_mean: old_posterior.mean,
+            old_precision: old_posterior.precision,
+            new_mean: new_posterior.mean,
+            new_precision: new_posterior.precision,
+        });
+        Ok(())
+    }
+
+    /// Batch observation of multiple edge presence/absence using vectorized kernels.
+    ///
+    /// Applies multiple Beta observations in a single kernel call for improved performance.
+    /// This is mathematically equivalent to sequential `observe_edge` calls but more efficient.
+    ///
+    /// # Arguments
+    ///
+    /// * `edge` - The edge ID
+    /// * `observations` - Slice of boolean observations (true = present, false = absent)
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) if successful, or an error if the update fails
+    #[cfg(feature = "vectorized")]
+    pub fn observe_edge_batch(
+        &mut self,
+        edge: EdgeId,
+        observations: &[bool],
+    ) -> Result<(), ExecError> {
+        use crate::engine::vectorized::beta_batch_update;
+
+        if observations.is_empty() {
+            return Ok(());
+        }
+
+        self.ensure_ready_for_delta();
+
+        // Get current posterior with fine-grained deltas applied
+        let edge_posterior = self
+            .get_edge_posterior_with_deltas(edge)
+            .ok_or_else(|| ExecError::Internal(format!("Edge {:?} not found", edge)))?;
+
+        // Extract Beta posterior (only works for independent edges)
+        let old_posterior = match edge_posterior {
+            EdgePosterior::Independent(beta) => beta,
+            EdgePosterior::Competing { .. } => {
+                return Err(ExecError::ValidationError(
+                    "Batch observation not supported for competing edges".into(),
+                ))
+            }
+        };
+
+        // Apply vectorized batch update
+        let new_posterior = beta_batch_update(&old_posterior, observations)?;
+
+        // Store fine-grained delta
+        self.delta.push(GraphDelta::EdgeProbChange {
+            edge,
+            old_alpha: old_posterior.alpha,
+            old_beta: old_posterior.beta,
+            new_alpha: new_posterior.alpha,
+            new_beta: new_posterior.beta,
+        });
+
         Ok(())
     }
 

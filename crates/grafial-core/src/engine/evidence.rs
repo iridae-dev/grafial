@@ -561,9 +561,46 @@ fn apply_observations_parallel(
     let mut attr_groups_vec: Vec<AttrObservationGroup> = attr_groups.into_iter().collect();
     attr_groups_vec.sort_by_key(|((node_id, attr), _)| (*node_id, attr.clone()));
 
-    // Apply observations: sequential within groups (order matters for Bayesian updates),
-    // but groups can be processed in parallel if they don't conflict
-    #[cfg(feature = "rayon")]
+    // Apply observations using vectorized kernels when available
+    #[cfg(feature = "vectorized")]
+    {
+        // Vectorized path: batch observations per target for efficient kernel execution
+        for (edge_id, modes) in edge_groups_vec {
+            // Separate Present/Absent observations for batching from other modes
+            let mut beta_observations = Vec::new();
+            let mut other_modes = Vec::new();
+
+            for mode in modes {
+                match mode {
+                    EvidenceMode::Present => beta_observations.push(true),
+                    EvidenceMode::Absent => beta_observations.push(false),
+                    _ => other_modes.push(mode),
+                }
+            }
+
+            // Apply batched Beta updates if any
+            if !beta_observations.is_empty() {
+                graph.observe_edge_batch(edge_id, &beta_observations)?;
+            }
+
+            // Handle non-Beta updates separately (they don't batch)
+            for mode in other_modes {
+                match mode {
+                    EvidenceMode::Chosen => graph.observe_edge_chosen(edge_id)?,
+                    EvidenceMode::Unchosen => graph.observe_edge_unchosen(edge_id)?,
+                    EvidenceMode::ForcedChoice => graph.observe_edge_forced_choice(edge_id)?,
+                    _ => {} // Should not happen
+                }
+            }
+        }
+
+        // Batch attribute observations for Gaussian updates
+        for ((node_id, attr), values) in attr_groups_vec {
+            graph.observe_attr_batch(node_id, &attr, &values)?;
+        }
+    }
+
+    #[cfg(all(not(feature = "vectorized"), feature = "rayon"))]
     {
         use std::sync::{Arc, Mutex};
 
@@ -600,7 +637,7 @@ fn apply_observations_parallel(
         *graph = Arc::try_unwrap(graph_mutex).unwrap().into_inner().unwrap();
     }
 
-    #[cfg(not(feature = "rayon"))]
+    #[cfg(all(not(feature = "vectorized"), not(feature = "rayon")))]
     {
         // Sequential fallback when rayon is not available
         for (edge_id, modes) in edge_groups_vec {
@@ -620,6 +657,7 @@ fn apply_observations_parallel(
 }
 
 /// Applies a single edge observation to update the posterior.
+#[allow(dead_code)]
 fn apply_edge_observation_single(
     graph: &mut BeliefGraph,
     edge_id: EdgeId,
