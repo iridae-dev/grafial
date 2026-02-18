@@ -59,7 +59,10 @@ Use this matrix for backend selection after collecting benchmark data.
 Measurement note:
 
 - Values above come from one local spike run on February 18, 2026 (`cargo bench -p grafial-benches --bench backend_spike -- --sample-size 10`).
-- LLVM and Cranelift entries currently route through candidate wrappers over the shared prototype hot-expression runtime path; native codegen differentiation is the next implementation step.
+- LLVM and Cranelift entries now execute through distinct candidate pipelines with independent compile/eval caches:
+  - LLVM candidate uses a stack-bytecode metric/prune program format.
+  - Cranelift candidate uses a register-style metric/prune program format.
+- Use `cargo run -p grafial-benches --release --bin backend_matrix -- --metric-threshold <N> --prune-threshold <N>` to compare sensitivity as compile thresholds change.
 - Matrix reports are written to:
   - `/Users/charleshinshaw/Desktop/content/baygraph/documentation/PHASE10_BACKEND_RESULTS.md`
   - `/Users/charleshinshaw/Desktop/content/baygraph/documentation/phase10_backend_results.json`

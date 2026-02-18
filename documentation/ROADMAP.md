@@ -279,10 +279,13 @@ Progress notes (this change):
   - `LlvmCandidateExecutionBackend`
   - `CraneliftCandidateExecutionBackend`
   - backend spike benchmark now runs parity + cold/warm probes for interpreter, prototype, LLVM candidate, and Cranelift candidate
-  - current LLVM/Cranelift candidates are benchmark-visible wrappers over the shared prototype hot-expression runtime path
+  - LLVM and Cranelift now run distinct candidate expression pipelines with independent compile/eval caches and profiles
+    - LLVM candidate: stack bytecode program format for metric/prune execution
+    - Cranelift candidate: register-style IR program format for metric/prune execution
 - Added backend matrix report runner:
   - `crates/grafial-benches/src/bin/backend_matrix.rs` executes all shipped examples across all backend candidates
   - `scripts/phase10_backend_matrix.sh` writes Markdown + JSON reports for decision analysis
+  - matrix runner exposes `--metric-threshold` and `--prune-threshold` to drive compile-threshold sensitivity runs
 
 ## Phase 11 - AOT + Vectorized Runtime
 

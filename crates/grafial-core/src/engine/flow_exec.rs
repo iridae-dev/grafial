@@ -172,6 +172,20 @@ struct PrototypeJitState {
     profile: PrototypeJitProfile,
 }
 
+#[derive(Debug, Default)]
+struct LlvmCandidateState {
+    metric_entries: HashMap<MetricExprKey, JitEntry<LlvmMetricProgram>>,
+    prune_entries: HashMap<PruneExprKey, JitEntry<LlvmPruneProgram>>,
+    profile: PrototypeJitProfile,
+}
+
+#[derive(Debug, Default)]
+struct CraneliftCandidateState {
+    metric_entries: HashMap<MetricExprKey, JitEntry<CraneliftMetricProgram>>,
+    prune_entries: HashMap<PruneExprKey, JitEntry<CraneliftPruneProgram>>,
+    profile: PrototypeJitProfile,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct MetricExprKey {
     flow: String,
@@ -275,28 +289,36 @@ impl IrExecutionBackend for PrototypeJitExecutionBackend {
     }
 }
 
-/// Phase 10 LLVM backend candidate wired to the hot-expression JIT path.
-///
-/// This candidate currently reuses the prototype hot-expression compiler/runtime while
-/// backend benchmarking and selection infrastructure is completed.
+/// Phase 10 LLVM backend candidate using stack-VM compiled expression programs.
 #[derive(Debug)]
 pub struct LlvmCandidateExecutionBackend {
-    inner: PrototypeJitExecutionBackend,
+    config: PrototypeJitConfig,
+    state: Mutex<LlvmCandidateState>,
 }
 
 impl LlvmCandidateExecutionBackend {
     pub fn new(config: PrototypeJitConfig) -> Self {
         Self {
-            inner: PrototypeJitExecutionBackend::new(config),
+            config,
+            state: Mutex::new(LlvmCandidateState::default()),
         }
     }
 
     pub fn profile_snapshot(&self) -> Result<PrototypeJitProfile, ExecError> {
-        self.inner.profile_snapshot()
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ExecError::Internal("llvm candidate state lock poisoned".into()))?;
+        Ok(state.profile)
     }
 
     pub fn clear_profile(&self) -> Result<(), ExecError> {
-        self.inner.clear_profile()
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ExecError::Internal("llvm candidate state lock poisoned".into()))?;
+        state.profile = PrototypeJitProfile::default();
+        Ok(())
     }
 }
 
@@ -317,32 +339,56 @@ impl IrExecutionBackend for LlvmCandidateExecutionBackend {
         flow_name: &str,
         prior: Option<&FlowResult>,
     ) -> Result<FlowResult, ExecError> {
-        self.inner.run_flow_ir(program, flow_name, prior)
+        let optimized_program = program.optimized();
+        let builder = StandardGraphBuilder;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ExecError::Internal("llvm candidate state lock poisoned".into()))?;
+        let mut expr_evaluator = LlvmCandidateExprEvaluator {
+            config: self.config,
+            state: &mut state,
+        };
+        run_flow_internal(
+            &optimized_program,
+            flow_name,
+            prior,
+            &builder,
+            &mut expr_evaluator,
+        )
     }
 }
 
-/// Phase 10 Cranelift backend candidate wired to the hot-expression JIT path.
-///
-/// This candidate currently reuses the prototype hot-expression compiler/runtime while
-/// backend benchmarking and selection infrastructure is completed.
+/// Phase 10 Cranelift backend candidate using register-IR compiled expression programs.
 #[derive(Debug)]
 pub struct CraneliftCandidateExecutionBackend {
-    inner: PrototypeJitExecutionBackend,
+    config: PrototypeJitConfig,
+    state: Mutex<CraneliftCandidateState>,
 }
 
 impl CraneliftCandidateExecutionBackend {
     pub fn new(config: PrototypeJitConfig) -> Self {
         Self {
-            inner: PrototypeJitExecutionBackend::new(config),
+            config,
+            state: Mutex::new(CraneliftCandidateState::default()),
         }
     }
 
     pub fn profile_snapshot(&self) -> Result<PrototypeJitProfile, ExecError> {
-        self.inner.profile_snapshot()
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ExecError::Internal("cranelift candidate state lock poisoned".into()))?;
+        Ok(state.profile)
     }
 
     pub fn clear_profile(&self) -> Result<(), ExecError> {
-        self.inner.clear_profile()
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ExecError::Internal("cranelift candidate state lock poisoned".into()))?;
+        state.profile = PrototypeJitProfile::default();
+        Ok(())
     }
 }
 
@@ -363,7 +409,23 @@ impl IrExecutionBackend for CraneliftCandidateExecutionBackend {
         flow_name: &str,
         prior: Option<&FlowResult>,
     ) -> Result<FlowResult, ExecError> {
-        self.inner.run_flow_ir(program, flow_name, prior)
+        let optimized_program = program.optimized();
+        let builder = StandardGraphBuilder;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ExecError::Internal("cranelift candidate state lock poisoned".into()))?;
+        let mut expr_evaluator = CraneliftCandidateExprEvaluator {
+            config: self.config,
+            state: &mut state,
+        };
+        run_flow_internal(
+            &optimized_program,
+            flow_name,
+            prior,
+            &builder,
+            &mut expr_evaluator,
+        )
     }
 }
 
@@ -469,55 +531,23 @@ impl<'a> FlowExprEvaluator for HotPathExprEvaluator<'a> {
         registry: &MetricRegistry,
         ctx: &MetricContext,
     ) -> Result<f64, ExecError> {
-        self.state.profile.metric_eval_count += 1;
         let key = MetricExprKey {
             flow: flow_name.to_string(),
             metric: metric_name.to_string(),
         };
-
-        let threshold = self.config.metric_compile_threshold.max(1);
-        let mut cached_expr = None;
-        let mut should_try_compile = false;
-        {
-            let entry = self.state.metric_entries.entry(key.clone()).or_default();
-            entry.eval_count += 1;
-            if let Some(compiled) = &entry.compiled {
-                cached_expr = Some(compiled.clone());
-            } else {
-                should_try_compile =
-                    !entry.permanently_interpreted && entry.eval_count >= threshold;
-            }
-        }
-
-        if cached_expr.is_some() {
-            self.state.profile.metric_cache_hits += 1;
-        } else if should_try_compile {
-            if let Some(compiled) = compile_metric_expr(expr) {
-                self.state.profile.metric_compile_count += 1;
-                self.state
-                    .metric_entries
-                    .entry(key.clone())
-                    .or_default()
-                    .compiled = Some(compiled.clone());
-                cached_expr = Some(compiled);
-            } else {
-                self.state
-                    .metric_entries
-                    .entry(key.clone())
-                    .or_default()
-                    .permanently_interpreted = true;
-            }
-        }
-
-        if let Some(compiled) = cached_expr {
-            if let Ok(value) = compiled.eval(ctx) {
-                return Ok(value);
-            }
-        }
-
-        self.state.profile.metric_fallback_count += 1;
-        let expr_ast = expr.to_ast();
-        eval_metric_expr(&expr_ast, graph, registry, ctx)
+        eval_hot_metric_with_cache(
+            &mut self.state.profile,
+            &mut self.state.metric_entries,
+            self.config.metric_compile_threshold,
+            key,
+            expr,
+            compile_metric_expr,
+            |compiled| compiled.eval(ctx),
+            || {
+                let expr_ast = expr.to_ast();
+                eval_metric_expr(&expr_ast, graph, registry, ctx)
+            },
+        )
     }
 
     fn eval_prune_predicate(
@@ -529,57 +559,265 @@ impl<'a> FlowExprEvaluator for HotPathExprEvaluator<'a> {
         graph: &BeliefGraph,
         edge: EdgeId,
     ) -> Result<f64, ExecError> {
-        self.state.profile.prune_eval_count += 1;
         let key = PruneExprKey {
             flow: flow_name.to_string(),
             graph: graph_name.to_string(),
             transform_idx,
         };
-
-        let threshold = self.config.prune_compile_threshold.max(1);
-        let mut cached_expr = None;
-        let mut should_try_compile = false;
-        {
-            let entry = self.state.prune_entries.entry(key.clone()).or_default();
-            entry.eval_count += 1;
-            if let Some(compiled) = &entry.compiled {
-                cached_expr = Some(compiled.clone());
-            } else {
-                should_try_compile =
-                    !entry.permanently_interpreted && entry.eval_count >= threshold;
-            }
-        }
-
-        if cached_expr.is_some() {
-            self.state.profile.prune_cache_hits += 1;
-        } else if should_try_compile {
-            if let Some(compiled) = compile_prune_expr(expr) {
-                self.state.profile.prune_compile_count += 1;
-                self.state
-                    .prune_entries
-                    .entry(key.clone())
-                    .or_default()
-                    .compiled = Some(compiled.clone());
-                cached_expr = Some(compiled);
-            } else {
-                self.state
-                    .prune_entries
-                    .entry(key.clone())
-                    .or_default()
-                    .permanently_interpreted = true;
-            }
-        }
-
-        if let Some(compiled) = cached_expr {
-            if let Ok(value) = compiled.eval(graph, edge) {
-                return Ok(value);
-            }
-        }
-
-        self.state.profile.prune_fallback_count += 1;
-        let expr_ast = expr.to_ast();
-        eval_prune_predicate(&expr_ast, graph, edge)
+        eval_hot_prune_with_cache(
+            &mut self.state.profile,
+            &mut self.state.prune_entries,
+            self.config.prune_compile_threshold,
+            key,
+            expr,
+            compile_prune_expr,
+            |compiled| compiled.eval(graph, edge),
+            || {
+                let expr_ast = expr.to_ast();
+                eval_prune_predicate(&expr_ast, graph, edge)
+            },
+        )
     }
+}
+
+struct LlvmCandidateExprEvaluator<'a> {
+    config: PrototypeJitConfig,
+    state: &'a mut LlvmCandidateState,
+}
+
+impl<'a> FlowExprEvaluator for LlvmCandidateExprEvaluator<'a> {
+    fn eval_metric_expr(
+        &mut self,
+        flow_name: &str,
+        metric_name: &str,
+        expr: &ExprIR,
+        graph: &BeliefGraph,
+        registry: &MetricRegistry,
+        ctx: &MetricContext,
+    ) -> Result<f64, ExecError> {
+        let key = MetricExprKey {
+            flow: flow_name.to_string(),
+            metric: metric_name.to_string(),
+        };
+        eval_hot_metric_with_cache(
+            &mut self.state.profile,
+            &mut self.state.metric_entries,
+            self.config.metric_compile_threshold,
+            key,
+            expr,
+            compile_metric_expr_llvm,
+            |compiled| compiled.eval(ctx),
+            || {
+                let expr_ast = expr.to_ast();
+                eval_metric_expr(&expr_ast, graph, registry, ctx)
+            },
+        )
+    }
+
+    fn eval_prune_predicate(
+        &mut self,
+        flow_name: &str,
+        graph_name: &str,
+        transform_idx: usize,
+        expr: &ExprIR,
+        graph: &BeliefGraph,
+        edge: EdgeId,
+    ) -> Result<f64, ExecError> {
+        let key = PruneExprKey {
+            flow: flow_name.to_string(),
+            graph: graph_name.to_string(),
+            transform_idx,
+        };
+        eval_hot_prune_with_cache(
+            &mut self.state.profile,
+            &mut self.state.prune_entries,
+            self.config.prune_compile_threshold,
+            key,
+            expr,
+            compile_prune_expr_llvm,
+            |compiled| compiled.eval(graph, edge),
+            || {
+                let expr_ast = expr.to_ast();
+                eval_prune_predicate(&expr_ast, graph, edge)
+            },
+        )
+    }
+}
+
+struct CraneliftCandidateExprEvaluator<'a> {
+    config: PrototypeJitConfig,
+    state: &'a mut CraneliftCandidateState,
+}
+
+impl<'a> FlowExprEvaluator for CraneliftCandidateExprEvaluator<'a> {
+    fn eval_metric_expr(
+        &mut self,
+        flow_name: &str,
+        metric_name: &str,
+        expr: &ExprIR,
+        graph: &BeliefGraph,
+        registry: &MetricRegistry,
+        ctx: &MetricContext,
+    ) -> Result<f64, ExecError> {
+        let key = MetricExprKey {
+            flow: flow_name.to_string(),
+            metric: metric_name.to_string(),
+        };
+        eval_hot_metric_with_cache(
+            &mut self.state.profile,
+            &mut self.state.metric_entries,
+            self.config.metric_compile_threshold,
+            key,
+            expr,
+            compile_metric_expr_cranelift,
+            |compiled| compiled.eval(ctx),
+            || {
+                let expr_ast = expr.to_ast();
+                eval_metric_expr(&expr_ast, graph, registry, ctx)
+            },
+        )
+    }
+
+    fn eval_prune_predicate(
+        &mut self,
+        flow_name: &str,
+        graph_name: &str,
+        transform_idx: usize,
+        expr: &ExprIR,
+        graph: &BeliefGraph,
+        edge: EdgeId,
+    ) -> Result<f64, ExecError> {
+        let key = PruneExprKey {
+            flow: flow_name.to_string(),
+            graph: graph_name.to_string(),
+            transform_idx,
+        };
+        eval_hot_prune_with_cache(
+            &mut self.state.profile,
+            &mut self.state.prune_entries,
+            self.config.prune_compile_threshold,
+            key,
+            expr,
+            compile_prune_expr_cranelift,
+            |compiled| compiled.eval(graph, edge),
+            || {
+                let expr_ast = expr.to_ast();
+                eval_prune_predicate(&expr_ast, graph, edge)
+            },
+        )
+    }
+}
+
+fn eval_hot_metric_with_cache<Compiled, CompileFn, EvalFn, FallbackFn>(
+    profile: &mut PrototypeJitProfile,
+    entries: &mut HashMap<MetricExprKey, JitEntry<Compiled>>,
+    compile_threshold: usize,
+    key: MetricExprKey,
+    expr: &ExprIR,
+    compile_expr: CompileFn,
+    eval_compiled: EvalFn,
+    fallback_eval: FallbackFn,
+) -> Result<f64, ExecError>
+where
+    Compiled: Clone,
+    CompileFn: Fn(&ExprIR) -> Option<Compiled>,
+    EvalFn: Fn(&Compiled) -> Result<f64, ExecError>,
+    FallbackFn: FnOnce() -> Result<f64, ExecError>,
+{
+    profile.metric_eval_count += 1;
+
+    let threshold = compile_threshold.max(1);
+    let mut cached_expr = None;
+    let mut should_try_compile = false;
+    {
+        let entry = entries.entry(key.clone()).or_default();
+        entry.eval_count += 1;
+        if let Some(compiled) = &entry.compiled {
+            cached_expr = Some(compiled.clone());
+        } else {
+            should_try_compile = !entry.permanently_interpreted && entry.eval_count >= threshold;
+        }
+    }
+
+    if cached_expr.is_some() {
+        profile.metric_cache_hits += 1;
+    } else if should_try_compile {
+        if let Some(compiled) = compile_expr(expr) {
+            profile.metric_compile_count += 1;
+            entries.entry(key.clone()).or_default().compiled = Some(compiled.clone());
+            cached_expr = Some(compiled);
+        } else {
+            entries
+                .entry(key.clone())
+                .or_default()
+                .permanently_interpreted = true;
+        }
+    }
+
+    if let Some(compiled) = cached_expr {
+        if let Ok(value) = eval_compiled(&compiled) {
+            return Ok(value);
+        }
+    }
+
+    profile.metric_fallback_count += 1;
+    fallback_eval()
+}
+
+fn eval_hot_prune_with_cache<Compiled, CompileFn, EvalFn, FallbackFn>(
+    profile: &mut PrototypeJitProfile,
+    entries: &mut HashMap<PruneExprKey, JitEntry<Compiled>>,
+    compile_threshold: usize,
+    key: PruneExprKey,
+    expr: &ExprIR,
+    compile_expr: CompileFn,
+    eval_compiled: EvalFn,
+    fallback_eval: FallbackFn,
+) -> Result<f64, ExecError>
+where
+    Compiled: Clone,
+    CompileFn: Fn(&ExprIR) -> Option<Compiled>,
+    EvalFn: Fn(&Compiled) -> Result<f64, ExecError>,
+    FallbackFn: FnOnce() -> Result<f64, ExecError>,
+{
+    profile.prune_eval_count += 1;
+
+    let threshold = compile_threshold.max(1);
+    let mut cached_expr = None;
+    let mut should_try_compile = false;
+    {
+        let entry = entries.entry(key.clone()).or_default();
+        entry.eval_count += 1;
+        if let Some(compiled) = &entry.compiled {
+            cached_expr = Some(compiled.clone());
+        } else {
+            should_try_compile = !entry.permanently_interpreted && entry.eval_count >= threshold;
+        }
+    }
+
+    if cached_expr.is_some() {
+        profile.prune_cache_hits += 1;
+    } else if should_try_compile {
+        if let Some(compiled) = compile_expr(expr) {
+            profile.prune_compile_count += 1;
+            entries.entry(key.clone()).or_default().compiled = Some(compiled.clone());
+            cached_expr = Some(compiled);
+        } else {
+            entries
+                .entry(key.clone())
+                .or_default()
+                .permanently_interpreted = true;
+        }
+    }
+
+    if let Some(compiled) = cached_expr {
+        if let Ok(value) = eval_compiled(&compiled) {
+            return Ok(value);
+        }
+    }
+
+    profile.prune_fallback_count += 1;
+    fallback_eval()
 }
 
 #[derive(Debug, Clone)]
@@ -707,6 +945,460 @@ fn compile_prune_expr(expr: &ExprIR) -> Option<CompiledPruneExpr> {
         }
         ExprIR::Var(_) | ExprIR::Field { .. } | ExprIR::Call { .. } | ExprIR::Exists { .. } => None,
     }
+}
+
+#[derive(Debug, Clone)]
+enum LlvmMetricInstr {
+    PushConst(f64),
+    PushBool(bool),
+    PushMetricVar(String),
+    Unary(UnaryOpIR),
+    Binary(BinaryOpIR),
+}
+
+#[derive(Debug, Clone)]
+struct LlvmMetricProgram {
+    code: Vec<LlvmMetricInstr>,
+}
+
+impl LlvmMetricProgram {
+    fn eval(&self, ctx: &MetricContext) -> Result<f64, ExecError> {
+        let mut stack = Vec::with_capacity(self.code.len().max(1));
+        for instr in &self.code {
+            match instr {
+                LlvmMetricInstr::PushConst(value) => stack.push(*value),
+                LlvmMetricInstr::PushBool(value) => stack.push(if *value { 1.0 } else { 0.0 }),
+                LlvmMetricInstr::PushMetricVar(name) => {
+                    let value = ctx.metrics.get(name).copied().ok_or_else(|| {
+                        ExecError::ValidationError(format!("unknown metric variable '{}'", name))
+                    })?;
+                    stack.push(value);
+                }
+                LlvmMetricInstr::Unary(op) => {
+                    let value = stack.pop().ok_or_else(|| {
+                        ExecError::Internal("llvm candidate metric stack underflow".into())
+                    })?;
+                    stack.push(match op {
+                        UnaryOpIR::Neg => -value,
+                        UnaryOpIR::Not => {
+                            if value == 0.0 {
+                                1.0
+                            } else {
+                                0.0
+                            }
+                        }
+                    });
+                }
+                LlvmMetricInstr::Binary(op) => {
+                    let right = stack.pop().ok_or_else(|| {
+                        ExecError::Internal("llvm candidate metric stack underflow".into())
+                    })?;
+                    let left = stack.pop().ok_or_else(|| {
+                        ExecError::Internal("llvm candidate metric stack underflow".into())
+                    })?;
+                    stack.push(eval_compiled_metric_binary(*op, left, right)?);
+                }
+            }
+        }
+
+        if stack.len() != 1 {
+            return Err(ExecError::Internal(format!(
+                "llvm candidate metric stack depth invalid: {}",
+                stack.len()
+            )));
+        }
+        Ok(stack[0])
+    }
+}
+
+fn compile_metric_expr_llvm(expr: &ExprIR) -> Option<LlvmMetricProgram> {
+    let mut code = Vec::new();
+    emit_metric_llvm(expr, &mut code)?;
+    Some(LlvmMetricProgram { code })
+}
+
+fn emit_metric_llvm(expr: &ExprIR, code: &mut Vec<LlvmMetricInstr>) -> Option<()> {
+    match expr {
+        ExprIR::Number(value) => code.push(LlvmMetricInstr::PushConst(*value)),
+        ExprIR::Bool(value) => code.push(LlvmMetricInstr::PushBool(*value)),
+        ExprIR::Var(name) => code.push(LlvmMetricInstr::PushMetricVar(name.clone())),
+        ExprIR::Unary { op, expr } => {
+            emit_metric_llvm(expr, code)?;
+            code.push(LlvmMetricInstr::Unary(*op));
+        }
+        ExprIR::Binary { op, left, right } => {
+            emit_metric_llvm(left, code)?;
+            emit_metric_llvm(right, code)?;
+            code.push(LlvmMetricInstr::Binary(*op));
+        }
+        ExprIR::Field { .. } | ExprIR::Call { .. } | ExprIR::Exists { .. } => return None,
+    }
+    Some(())
+}
+
+#[derive(Debug, Clone)]
+enum LlvmPruneInstr {
+    PushConst(f64),
+    PushBool(bool),
+    PushProbEdge,
+    Unary(UnaryOpIR),
+    Binary(BinaryOpIR),
+}
+
+#[derive(Debug, Clone)]
+struct LlvmPruneProgram {
+    code: Vec<LlvmPruneInstr>,
+}
+
+impl LlvmPruneProgram {
+    fn eval(&self, graph: &BeliefGraph, edge: EdgeId) -> Result<f64, ExecError> {
+        let mut stack = Vec::with_capacity(self.code.len().max(1));
+        for instr in &self.code {
+            match instr {
+                LlvmPruneInstr::PushConst(value) => stack.push(*value),
+                LlvmPruneInstr::PushBool(value) => stack.push(if *value { 1.0 } else { 0.0 }),
+                LlvmPruneInstr::PushProbEdge => stack.push(graph.prob_mean(edge)?),
+                LlvmPruneInstr::Unary(op) => {
+                    let value = stack.pop().ok_or_else(|| {
+                        ExecError::Internal("llvm candidate prune stack underflow".into())
+                    })?;
+                    stack.push(eval_unary_op(op.to_ast(), value));
+                }
+                LlvmPruneInstr::Binary(op) => {
+                    let right = stack.pop().ok_or_else(|| {
+                        ExecError::Internal("llvm candidate prune stack underflow".into())
+                    })?;
+                    let left = stack.pop().ok_or_else(|| {
+                        ExecError::Internal("llvm candidate prune stack underflow".into())
+                    })?;
+                    stack.push(eval_binary_op(op.to_ast(), left, right)?);
+                }
+            }
+        }
+        if stack.len() != 1 {
+            return Err(ExecError::Internal(format!(
+                "llvm candidate prune stack depth invalid: {}",
+                stack.len()
+            )));
+        }
+        Ok(stack[0])
+    }
+}
+
+fn compile_prune_expr_llvm(expr: &ExprIR) -> Option<LlvmPruneProgram> {
+    let mut code = Vec::new();
+    emit_prune_llvm(expr, &mut code)?;
+    Some(LlvmPruneProgram { code })
+}
+
+fn emit_prune_llvm(expr: &ExprIR, code: &mut Vec<LlvmPruneInstr>) -> Option<()> {
+    match expr {
+        ExprIR::Number(value) => code.push(LlvmPruneInstr::PushConst(*value)),
+        ExprIR::Bool(value) => code.push(LlvmPruneInstr::PushBool(*value)),
+        ExprIR::Unary { op, expr } => {
+            emit_prune_llvm(expr, code)?;
+            code.push(LlvmPruneInstr::Unary(*op));
+        }
+        ExprIR::Binary { op, left, right } => {
+            emit_prune_llvm(left, code)?;
+            emit_prune_llvm(right, code)?;
+            code.push(LlvmPruneInstr::Binary(*op));
+        }
+        ExprIR::Call { name, args } if name == "prob" => {
+            if args.len() != 1 {
+                return None;
+            }
+            match &args[0] {
+                CallArgIR::Positional(ExprIR::Var(v)) if v == "edge" => {
+                    code.push(LlvmPruneInstr::PushProbEdge);
+                }
+                _ => return None,
+            }
+        }
+        ExprIR::Var(_) | ExprIR::Field { .. } | ExprIR::Call { .. } | ExprIR::Exists { .. } => {
+            return None
+        }
+    }
+    Some(())
+}
+
+#[derive(Debug, Clone)]
+enum CraneliftMetricOp {
+    Const {
+        dst: usize,
+        value: f64,
+    },
+    Bool {
+        dst: usize,
+        value: bool,
+    },
+    MetricVar {
+        dst: usize,
+        name: String,
+    },
+    Unary {
+        dst: usize,
+        op: UnaryOpIR,
+        src: usize,
+    },
+    Binary {
+        dst: usize,
+        op: BinaryOpIR,
+        left: usize,
+        right: usize,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct CraneliftMetricProgram {
+    ops: Vec<CraneliftMetricOp>,
+    result_reg: usize,
+    reg_count: usize,
+}
+
+impl CraneliftMetricProgram {
+    fn eval(&self, ctx: &MetricContext) -> Result<f64, ExecError> {
+        let mut regs = vec![0.0; self.reg_count.max(1)];
+        for op in &self.ops {
+            match op {
+                CraneliftMetricOp::Const { dst, value } => regs[*dst] = *value,
+                CraneliftMetricOp::Bool { dst, value } => {
+                    regs[*dst] = if *value { 1.0 } else { 0.0 }
+                }
+                CraneliftMetricOp::MetricVar { dst, name } => {
+                    regs[*dst] = ctx.metrics.get(name).copied().ok_or_else(|| {
+                        ExecError::ValidationError(format!("unknown metric variable '{}'", name))
+                    })?;
+                }
+                CraneliftMetricOp::Unary { dst, op, src } => {
+                    regs[*dst] = match op {
+                        UnaryOpIR::Neg => -regs[*src],
+                        UnaryOpIR::Not => {
+                            if regs[*src] == 0.0 {
+                                1.0
+                            } else {
+                                0.0
+                            }
+                        }
+                    };
+                }
+                CraneliftMetricOp::Binary {
+                    dst,
+                    op,
+                    left,
+                    right,
+                } => {
+                    regs[*dst] = eval_compiled_metric_binary(*op, regs[*left], regs[*right])?;
+                }
+            }
+        }
+        Ok(regs[self.result_reg])
+    }
+}
+
+#[derive(Default)]
+struct CraneliftMetricCompiler {
+    ops: Vec<CraneliftMetricOp>,
+    next_reg: usize,
+}
+
+impl CraneliftMetricCompiler {
+    fn alloc(&mut self) -> usize {
+        let out = self.next_reg;
+        self.next_reg += 1;
+        out
+    }
+
+    fn lower(&mut self, expr: &ExprIR) -> Option<usize> {
+        match expr {
+            ExprIR::Number(value) => {
+                let dst = self.alloc();
+                self.ops
+                    .push(CraneliftMetricOp::Const { dst, value: *value });
+                Some(dst)
+            }
+            ExprIR::Bool(value) => {
+                let dst = self.alloc();
+                self.ops
+                    .push(CraneliftMetricOp::Bool { dst, value: *value });
+                Some(dst)
+            }
+            ExprIR::Var(name) => {
+                let dst = self.alloc();
+                self.ops.push(CraneliftMetricOp::MetricVar {
+                    dst,
+                    name: name.clone(),
+                });
+                Some(dst)
+            }
+            ExprIR::Unary { op, expr } => {
+                let src = self.lower(expr)?;
+                let dst = self.alloc();
+                self.ops
+                    .push(CraneliftMetricOp::Unary { dst, op: *op, src });
+                Some(dst)
+            }
+            ExprIR::Binary { op, left, right } => {
+                let left_reg = self.lower(left)?;
+                let right_reg = self.lower(right)?;
+                let dst = self.alloc();
+                self.ops.push(CraneliftMetricOp::Binary {
+                    dst,
+                    op: *op,
+                    left: left_reg,
+                    right: right_reg,
+                });
+                Some(dst)
+            }
+            ExprIR::Field { .. } | ExprIR::Call { .. } | ExprIR::Exists { .. } => None,
+        }
+    }
+}
+
+fn compile_metric_expr_cranelift(expr: &ExprIR) -> Option<CraneliftMetricProgram> {
+    let mut compiler = CraneliftMetricCompiler::default();
+    let result_reg = compiler.lower(expr)?;
+    Some(CraneliftMetricProgram {
+        ops: compiler.ops,
+        result_reg,
+        reg_count: compiler.next_reg,
+    })
+}
+
+#[derive(Debug, Clone)]
+enum CraneliftPruneOp {
+    Const {
+        dst: usize,
+        value: f64,
+    },
+    Bool {
+        dst: usize,
+        value: bool,
+    },
+    ProbEdge {
+        dst: usize,
+    },
+    Unary {
+        dst: usize,
+        op: UnaryOpIR,
+        src: usize,
+    },
+    Binary {
+        dst: usize,
+        op: BinaryOpIR,
+        left: usize,
+        right: usize,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct CraneliftPruneProgram {
+    ops: Vec<CraneliftPruneOp>,
+    result_reg: usize,
+    reg_count: usize,
+}
+
+impl CraneliftPruneProgram {
+    fn eval(&self, graph: &BeliefGraph, edge: EdgeId) -> Result<f64, ExecError> {
+        let mut regs = vec![0.0; self.reg_count.max(1)];
+        for op in &self.ops {
+            match op {
+                CraneliftPruneOp::Const { dst, value } => regs[*dst] = *value,
+                CraneliftPruneOp::Bool { dst, value } => {
+                    regs[*dst] = if *value { 1.0 } else { 0.0 }
+                }
+                CraneliftPruneOp::ProbEdge { dst } => {
+                    regs[*dst] = graph.prob_mean(edge)?;
+                }
+                CraneliftPruneOp::Unary { dst, op, src } => {
+                    regs[*dst] = eval_unary_op(op.to_ast(), regs[*src]);
+                }
+                CraneliftPruneOp::Binary {
+                    dst,
+                    op,
+                    left,
+                    right,
+                } => {
+                    regs[*dst] = eval_binary_op(op.to_ast(), regs[*left], regs[*right])?;
+                }
+            }
+        }
+        Ok(regs[self.result_reg])
+    }
+}
+
+#[derive(Default)]
+struct CraneliftPruneCompiler {
+    ops: Vec<CraneliftPruneOp>,
+    next_reg: usize,
+}
+
+impl CraneliftPruneCompiler {
+    fn alloc(&mut self) -> usize {
+        let out = self.next_reg;
+        self.next_reg += 1;
+        out
+    }
+
+    fn lower(&mut self, expr: &ExprIR) -> Option<usize> {
+        match expr {
+            ExprIR::Number(value) => {
+                let dst = self.alloc();
+                self.ops
+                    .push(CraneliftPruneOp::Const { dst, value: *value });
+                Some(dst)
+            }
+            ExprIR::Bool(value) => {
+                let dst = self.alloc();
+                self.ops.push(CraneliftPruneOp::Bool { dst, value: *value });
+                Some(dst)
+            }
+            ExprIR::Unary { op, expr } => {
+                let src = self.lower(expr)?;
+                let dst = self.alloc();
+                self.ops.push(CraneliftPruneOp::Unary { dst, op: *op, src });
+                Some(dst)
+            }
+            ExprIR::Binary { op, left, right } => {
+                let left_reg = self.lower(left)?;
+                let right_reg = self.lower(right)?;
+                let dst = self.alloc();
+                self.ops.push(CraneliftPruneOp::Binary {
+                    dst,
+                    op: *op,
+                    left: left_reg,
+                    right: right_reg,
+                });
+                Some(dst)
+            }
+            ExprIR::Call { name, args } if name == "prob" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                match &args[0] {
+                    CallArgIR::Positional(ExprIR::Var(v)) if v == "edge" => {
+                        let dst = self.alloc();
+                        self.ops.push(CraneliftPruneOp::ProbEdge { dst });
+                        Some(dst)
+                    }
+                    _ => None,
+                }
+            }
+            ExprIR::Var(_) | ExprIR::Field { .. } | ExprIR::Call { .. } | ExprIR::Exists { .. } => {
+                None
+            }
+        }
+    }
+}
+
+fn compile_prune_expr_cranelift(expr: &ExprIR) -> Option<CraneliftPruneProgram> {
+    let mut compiler = CraneliftPruneCompiler::default();
+    let result_reg = compiler.lower(expr)?;
+    Some(CraneliftPruneProgram {
+        ops: compiler.ops,
+        result_reg,
+        reg_count: compiler.next_reg,
+    })
 }
 
 fn eval_compiled_metric_binary(op: BinaryOpIR, left: f64, right: f64) -> Result<f64, ExecError> {

@@ -24,6 +24,8 @@ const FLOAT_EPSILON: f64 = 1e-12;
 struct Config {
     repeats: usize,
     warmup_runs: usize,
+    metric_compile_threshold: usize,
+    prune_compile_threshold: usize,
     examples_dir: PathBuf,
     output_markdown: PathBuf,
     output_json: PathBuf,
@@ -37,6 +39,8 @@ impl Default for Config {
         Self {
             repeats: 60,
             warmup_runs: 5,
+            metric_compile_threshold: 1,
+            prune_compile_threshold: 1,
             examples_dir,
             output_markdown: PathBuf::from("documentation/PHASE10_BACKEND_RESULTS.md"),
             output_json: PathBuf::from("documentation/phase10_backend_results.json"),
@@ -206,6 +210,8 @@ struct MatrixReport {
     generated_unix_seconds: u64,
     repeats: usize,
     warmup_runs: usize,
+    metric_compile_threshold: usize,
+    prune_compile_threshold: usize,
     workload_count: usize,
     workloads: Vec<WorkloadResult>,
     aggregate: Vec<BackendAggregate>,
@@ -237,6 +243,22 @@ fn parse_config() -> Result<Config, String> {
                     .next()
                     .ok_or_else(|| "missing value for --examples-dir".to_string())?;
                 cfg.examples_dir = PathBuf::from(value);
+            }
+            "--metric-threshold" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "missing value for --metric-threshold".to_string())?;
+                cfg.metric_compile_threshold = value
+                    .parse::<usize>()
+                    .map_err(|e| format!("invalid --metric-threshold '{}': {}", value, e))?;
+            }
+            "--prune-threshold" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "missing value for --prune-threshold".to_string())?;
+                cfg.prune_compile_threshold = value
+                    .parse::<usize>()
+                    .map_err(|e| format!("invalid --prune-threshold '{}': {}", value, e))?;
             }
             "--output-md" => {
                 let value = args
@@ -271,6 +293,12 @@ fn parse_config() -> Result<Config, String> {
     if cfg.warmup_runs == 0 {
         return Err("--warmup must be >= 1".into());
     }
+    if cfg.metric_compile_threshold == 0 {
+        return Err("--metric-threshold must be >= 1".into());
+    }
+    if cfg.prune_compile_threshold == 0 {
+        return Err("--prune-threshold must be >= 1".into());
+    }
     Ok(cfg)
 }
 
@@ -280,6 +308,8 @@ fn print_help() {
     println!("Options:");
     println!("  --repeats <N>        Warm measurement runs per workload/backend (default: 60)");
     println!("  --warmup <N>         Warm-up runs per workload/backend (default: 5)");
+    println!("  --metric-threshold <N>  Metric compile threshold (default: 1)");
+    println!("  --prune-threshold <N>   Prune compile threshold (default: 1)");
     println!("  --examples-dir <P>   Example directory (default: crates/grafial-examples)");
     println!("  --output-md <P>      Markdown report path (default: documentation/PHASE10_BACKEND_RESULTS.md)");
     println!("  --output-json <P>    JSON report path (default: documentation/phase10_backend_results.json)");
@@ -609,6 +639,16 @@ fn render_markdown(report: &MatrixReport) -> String {
         "- Measured warm runs per backend/workload: `{}`",
         report.repeats
     );
+    let _ = writeln!(
+        &mut out,
+        "- Metric compile threshold: `{}`",
+        report.metric_compile_threshold
+    );
+    let _ = writeln!(
+        &mut out,
+        "- Prune compile threshold: `{}`",
+        report.prune_compile_threshold
+    );
     let _ = writeln!(&mut out, "");
 
     let _ = writeln!(&mut out, "## Aggregate (Mean Across Workloads)");
@@ -679,8 +719,8 @@ fn main() -> Result<(), String> {
     let workloads = load_workloads(&cfg)?;
 
     let jit_config = PrototypeJitConfig {
-        metric_compile_threshold: 8,
-        prune_compile_threshold: 64,
+        metric_compile_threshold: cfg.metric_compile_threshold,
+        prune_compile_threshold: cfg.prune_compile_threshold,
     };
 
     let mut workload_results = Vec::with_capacity(workloads.len());
@@ -716,6 +756,8 @@ fn main() -> Result<(), String> {
             .as_secs(),
         repeats: cfg.repeats,
         warmup_runs: cfg.warmup_runs,
+        metric_compile_threshold: cfg.metric_compile_threshold,
+        prune_compile_threshold: cfg.prune_compile_threshold,
         workload_count: workload_results.len(),
         aggregate: build_aggregate(&workload_results),
         workloads: workload_results,

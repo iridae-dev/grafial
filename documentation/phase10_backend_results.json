@@ -1,7 +1,9 @@
 {
-  "generated_unix_seconds": 1771410623,
+  "generated_unix_seconds": 1771411344,
   "repeats": 30,
   "warmup_runs": 4,
+  "metric_compile_threshold": 1,
+  "prune_compile_threshold": 1,
   "workload_count": 12,
   "workloads": [
     {
@@ -11,28 +13,28 @@
       "results": [
         {
           "backend": "interpreter",
-          "cold_ms": 0.026417000000000003,
+          "cold_ms": 0.04725,
           "warm": {
             "runs": 30,
-            "min_ms": 0.020291,
-            "max_ms": 0.024583,
-            "mean_ms": 0.021038933333333332,
-            "median_ms": 0.020792,
-            "p95_ms": 0.022875
+            "min_ms": 0.029750000000000002,
+            "max_ms": 0.037459,
+            "mean_ms": 0.03272223333333332,
+            "median_ms": 0.033125,
+            "p95_ms": 0.037333000000000005
           },
           "parity_pass": true,
           "profile": null
         },
         {
           "backend": "prototype_jit",
-          "cold_ms": 0.02275,
+          "cold_ms": 0.034,
           "warm": {
             "runs": 30,
-            "min_ms": 0.020625,
-            "max_ms": 0.026916000000000002,
-            "mean_ms": 0.021418133333333342,
-            "median_ms": 0.020916999999999998,
-            "p95_ms": 0.023084
+            "min_ms": 0.030209000000000003,
+            "max_ms": 0.031917,
+            "mean_ms": 0.030919466666666676,
+            "median_ms": 0.030792,
+            "p95_ms": 0.031792
           },
           "parity_pass": true,
           "profile": {
@@ -48,14 +50,14 @@
         },
         {
           "backend": "llvm_candidate",
-          "cold_ms": 0.021917,
+          "cold_ms": 0.051583,
           "warm": {
             "runs": 30,
-            "min_ms": 0.019667,
-            "max_ms": 0.040416,
-            "mean_ms": 0.0217334,
-            "median_ms": 0.019958,
-            "p95_ms": 0.032708
+            "min_ms": 0.030208,
+            "max_ms": 0.10404200000000001,
+            "mean_ms": 0.0337597,
+            "median_ms": 0.030542,
+            "p95_ms": 0.0415
           },
           "parity_pass": true,
           "profile": {
@@ -71,14 +73,14 @@
         },
         {
           "backend": "cranelift_candidate",
-          "cold_ms": 0.020208999999999998,
+          "cold_ms": 0.036833,
           "warm": {
             "runs": 30,
-            "min_ms": 0.019666,
-            "max_ms": 0.020166999999999997,
-            "mean_ms": 0.01986803333333333,
-            "median_ms": 0.019875,
-            "p95_ms": 0.020083
+            "min_ms": 0.0305,
+            "max_ms": 0.086542,
+            "mean_ms": 0.03666393333333332,
+            "median_ms": 0.031334,
+            "p95_ms": 0.058125
           },
           "parity_pass": true,
           "profile": {
@@ -101,35 +103,35 @@
       "results": [
         {
           "backend": "interpreter",
-          "cold_ms": 0.10162500000000001,
+          "cold_ms": 0.15645799999999999,
           "warm": {
             "runs": 30,
-            "min_ms": 0.08654099999999999,
-            "max_ms": 0.11204099999999999,
-            "mean_ms": 0.08924576666666667,
-            "median_ms": 0.08804100000000001,
-            "p95_ms": 0.09562499999999999
+            "min_ms": 0.11925,
+            "max_ms": 0.140208,
+            "mean_ms": 0.13081523333333334,
+            "median_ms": 0.133958,
+            "p95_ms": 0.138458
           },
           "parity_pass": true,
           "profile": null
         },
         {
           "backend": "prototype_jit",
-          "cold_ms": 0.107834,
+          "cold_ms": 0.13574999999999998,
           "warm": {
             "runs": 30,
-            "min_ms": 0.08662500000000001,
-            "max_ms": 0.164625,
-            "mean_ms": 0.09967366666666665,
-            "median_ms": 0.09258400000000001,
-            "p95_ms": 0.136333
+            "min_ms": 0.121625,
+            "max_ms": 0.201459,
+            "mean_ms": 0.1309903,
+            "median_ms": 0.124125,
+            "p95_ms": 0.17541700000000002
           },
           "parity_pass": true,
           "profile": {
             "metric_eval_count": 570,
-            "metric_compile_count": 3,
-            "metric_cache_hits": 78,
-            "metric_fallback_count": 489,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 90,
+            "metric_fallback_count": 480,
             "prune_eval_count": 0,
             "prune_compile_count": 0,
             "prune_cache_hits": 0,
@@ -138,21 +140,21 @@
         },
         {
           "backend": "llvm_candidate",
-          "cold_ms": 0.10275000000000001,
+          "cold_ms": 0.151792,
           "warm": {
             "runs": 30,
-            "min_ms": 0.086875,
-            "max_ms": 0.128458,
-            "mean_ms": 0.09040280000000003,
-            "median_ms": 0.088,
-            "p95_ms": 0.09849999999999999
+            "min_ms": 0.12237500000000001,
+            "max_ms": 0.151666,
+            "mean_ms": 0.12497916666666667,
+            "median_ms": 0.123375,
+            "p95_ms": 0.135542
           },
           "parity_pass": true,
           "profile": {
             "metric_eval_count": 570,
-            "metric_compile_count": 3,
-            "metric_cache_hits": 78,
-            "metric_fallback_count": 489,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 90,
+            "metric_fallback_count": 480,
             "prune_eval_count": 0,
             "prune_compile_count": 0,
             "prune_cache_hits": 0,
@@ -161,21 +163,21 @@
         },
         {
           "backend": "cranelift_candidate",
-          "cold_ms": 0.091667,
+          "cold_ms": 0.140291,
           "warm": {
             "runs": 30,
-            "min_ms": 0.085791,
-            "max_ms": 0.2995,
-            "mean_ms": 0.0948596,
-            "median_ms": 0.08745800000000001,
-            "p95_ms": 0.094125
+            "min_ms": 0.108959,
+            "max_ms": 0.191375,
+            "mean_ms": 0.1170389,
+            "median_ms": 0.111375,
+            "p95_ms": 0.154792
           },
           "parity_pass": true,
           "profile": {
             "metric_eval_count": 570,
-            "metric_compile_count": 3,
-            "metric_cache_hits": 78,
-            "metric_fallback_count": 489,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 90,
+            "metric_fallback_count": 480,
             "prune_eval_count": 0,
             "prune_compile_count": 0,
             "prune_cache_hits": 0,
@@ -191,35 +193,35 @@
       "results": [
         {
           "backend": "interpreter",
-          "cold_ms": 0.106,
+          "cold_ms": 0.056916999999999995,
           "warm": {
             "runs": 30,
-            "min_ms": 0.041166,
-            "max_ms": 0.089083,
-            "mean_ms": 0.04355973333333332,
-            "median_ms": 0.041749999999999995,
-            "p95_ms": 0.045041
+            "min_ms": 0.052167,
+            "max_ms": 0.1145,
+            "mean_ms": 0.05552623333333333,
+            "median_ms": 0.052541,
+            "p95_ms": 0.076042
           },
           "parity_pass": true,
           "profile": null
         },
         {
           "backend": "prototype_jit",
-          "cold_ms": 0.044375,
+          "cold_ms": 0.06133400000000001,
           "warm": {
             "runs": 30,
-            "min_ms": 0.040041,
-            "max_ms": 0.042667000000000004,
-            "mean_ms": 0.04078180000000001,
-            "median_ms": 0.040458,
-            "p95_ms": 0.041958
+            "min_ms": 0.052667000000000005,
+            "max_ms": 0.087791,
+            "mean_ms": 0.05443196666666666,
+            "median_ms": 0.053333,
+            "p95_ms": 0.053834
           },
           "parity_pass": true,
           "profile": {
             "metric_eval_count": 120,
-            "metric_compile_count": 1,
-            "metric_cache_hits": 26,
-            "metric_fallback_count": 93,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 30,
+            "metric_fallback_count": 90,
             "prune_eval_count": 0,
             "prune_compile_count": 0,
             "prune_cache_hits": 0,
@@ -228,21 +230,21 @@
         },
         {
           "backend": "llvm_candidate",
-          "cold_ms": 0.041083,
+          "cold_ms": 0.06854199999999999,
           "warm": {
             "runs": 30,
-            "min_ms": 0.040166999999999994,
-            "max_ms": 0.041041999999999995,
-            "mean_ms": 0.040381966666666665,
-            "median_ms": 0.040333,
-            "p95_ms": 0.040666
+            "min_ms": 0.048291999999999995,
+            "max_ms": 0.087,
+            "mean_ms": 0.05348616666666666,
+            "median_ms": 0.053041000000000005,
+            "p95_ms": 0.058417
           },
           "parity_pass": true,
           "profile": {
             "metric_eval_count": 120,
-            "metric_compile_count": 1,
-            "metric_cache_hits": 26,
-            "metric_fallback_count": 93,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 30,
+            "metric_fallback_count": 90,
             "prune_eval_count": 0,
             "prune_compile_count": 0,
             "prune_cache_hits": 0,
@@ -251,21 +253,21 @@
         },
         {
           "backend": "cranelift_candidate",
-          "cold_ms": 0.041,
+          "cold_ms": 0.053833,
           "warm": {
             "runs": 30,
-            "min_ms": 0.040208,
-            "max_ms": 0.043042,
-            "mean_ms": 0.040715100000000004,
-            "median_ms": 0.0405,
-            "p95_ms": 0.042624999999999996
+            "min_ms": 0.048208,
+            "max_ms": 0.109166,
+            "mean_ms": 0.05253466666666668,
+            "median_ms": 0.048708,
+            "p95_ms": 0.064167
           },
           "parity_pass": true,
           "profile": {
             "metric_eval_count": 120,
-            "metric_compile_count": 1,
-            "metric_cache_hits": 26,
-            "metric_fallback_count": 93,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 30,
+            "metric_fallback_count": 90,
             "prune_eval_count": 0,
             "prune_compile_count": 0,
             "prune_cache_hits": 0,
@@ -281,28 +283,28 @@
       "results": [
         {
           "backend": "interpreter",
-          "cold_ms": 0.034249999999999996,
+          "cold_ms": 0.036625000000000005,
           "warm": {
             "runs": 30,
-            "min_ms": 0.026708,
-            "max_ms": 0.030750000000000003,
-            "mean_ms": 0.027544399999999993,
-            "median_ms": 0.027209,
-            "p95_ms": 0.029042000000000002
+            "min_ms": 0.03175,
+            "max_ms": 0.032833,
+            "mean_ms": 0.03223333333333334,
+            "median_ms": 0.03225,
+            "p95_ms": 0.032499999999999994
           },
           "parity_pass": true,
           "profile": null
         },
         {
           "backend": "prototype_jit",
-          "cold_ms": 0.028374999999999997,
+          "cold_ms": 0.035083,
           "warm": {
             "runs": 30,
-            "min_ms": 0.026875,
-            "max_ms": 0.08375,
-            "mean_ms": 0.030482033333333335,
-            "median_ms": 0.028125,
-            "p95_ms": 0.036542
+            "min_ms": 0.032167,
+            "max_ms": 0.033041,
+            "mean_ms": 0.0325014,
+            "median_ms": 0.032459,
+            "p95_ms": 0.032833999999999995
           },
           "parity_pass": true,
           "profile": {
@@ -318,14 +320,14 @@
         },
         {
           "backend": "llvm_candidate",
-          "cold_ms": 0.032,
+          "cold_ms": 0.035125,
           "warm": {
             "runs": 30,
-            "min_ms": 0.027583,
-            "max_ms": 0.030042000000000003,
-            "mean_ms": 0.02837496666666667,
-            "median_ms": 0.028249999999999997,
-            "p95_ms": 0.029542
+            "min_ms": 0.032375,
+            "max_ms": 0.07133300000000001,
+            "mean_ms": 0.03488193333333334,
+            "median_ms": 0.032708,
+            "p95_ms": 0.052542
           },
           "parity_pass": true,
           "profile": {
@@ -341,14 +343,14 @@
         },
         {
           "backend": "cranelift_candidate",
-          "cold_ms": 0.028416999999999998,
+          "cold_ms": 0.036125,
           "warm": {
             "runs": 30,
-            "min_ms": 0.027666,
-            "max_ms": 0.060833,
-            "mean_ms": 0.02962073333333333,
-            "median_ms": 0.028042,
-            "p95_ms": 0.037333000000000005
+            "min_ms": 0.032125,
+            "max_ms": 0.052375,
+            "mean_ms": 0.0341389,
+            "median_ms": 0.032542,
+            "p95_ms": 0.047625
           },
           "parity_pass": true,
           "profile": {
@@ -371,28 +373,28 @@
       "results": [
         {
           "backend": "interpreter",
-          "cold_ms": 0.00775,
+          "cold_ms": 0.00925,
           "warm": {
             "runs": 30,
-            "min_ms": 0.006583,
-            "max_ms": 0.006875,
-            "mean_ms": 0.006723666666666669,
-            "median_ms": 0.00675,
-            "p95_ms": 0.006875
+            "min_ms": 0.007625,
+            "max_ms": 0.007958000000000002,
+            "mean_ms": 0.007743066666666664,
+            "median_ms": 0.007708,
+            "p95_ms": 0.007958000000000002
           },
           "parity_pass": true,
           "profile": null
         },
         {
           "backend": "prototype_jit",
-          "cold_ms": 0.007416,
+          "cold_ms": 0.009708,
           "warm": {
             "runs": 30,
-            "min_ms": 0.006625,
-            "max_ms": 0.007167,
-            "mean_ms": 0.006746000000000001,
-            "median_ms": 0.006709,
-            "p95_ms": 0.006917
+            "min_ms": 0.00775,
+            "max_ms": 0.008,
+            "mean_ms": 0.007849966666666668,
+            "median_ms": 0.007834,
+            "p95_ms": 0.007958000000000002
           },
           "parity_pass": true,
           "profile": {
@@ -408,14 +410,14 @@
         },
         {
           "backend": "llvm_candidate",
-          "cold_ms": 0.006917,
+          "cold_ms": 0.008916,
           "warm": {
             "runs": 30,
-            "min_ms": 0.006583,
-            "max_ms": 0.006917,
-            "mean_ms": 0.006688966666666667,
-            "median_ms": 0.006667,
-            "p95_ms": 0.006833
+            "min_ms": 0.007708,
+            "max_ms": 0.007875,
+            "mean_ms": 0.007788766666666668,
+            "median_ms": 0.007791,
+            "p95_ms": 0.007834
           },
           "parity_pass": true,
           "profile": {
@@ -431,14 +433,14 @@
         },
         {
           "backend": "cranelift_candidate",
-          "cold_ms": 0.006792,
+          "cold_ms": 0.008708,
           "warm": {
             "runs": 30,
-            "min_ms": 0.006625,
-            "max_ms": 0.006834,
-            "mean_ms": 0.006676433333333335,
-            "median_ms": 0.006667,
-            "p95_ms": 0.006791
+            "min_ms": 0.007708,
+            "max_ms": 0.008,
+            "mean_ms": 0.007833266666666667,
+            "median_ms": 0.007833,
+            "p95_ms": 0.008
           },
           "parity_pass": true,
           "profile": {
@@ -461,35 +463,35 @@
       "results": [
         {
           "backend": "interpreter",
-          "cold_ms": 0.09929099999999999,
+          "cold_ms": 0.124833,
           "warm": {
             "runs": 30,
-            "min_ms": 0.0875,
-            "max_ms": 0.09175,
-            "mean_ms": 0.08894029999999997,
-            "median_ms": 0.088125,
-            "p95_ms": 0.091709
+            "min_ms": 0.097334,
+            "max_ms": 0.129792,
+            "mean_ms": 0.10266116666666666,
+            "median_ms": 0.097834,
+            "p95_ms": 0.12829200000000002
           },
           "parity_pass": true,
           "profile": null
         },
         {
           "backend": "prototype_jit",
-          "cold_ms": 0.093458,
+          "cold_ms": 0.112167,
           "warm": {
             "runs": 30,
-            "min_ms": 0.08925,
-            "max_ms": 0.120667,
-            "mean_ms": 0.09374029999999998,
-            "median_ms": 0.091917,
-            "p95_ms": 0.110416
+            "min_ms": 0.098458,
+            "max_ms": 0.10475,
+            "mean_ms": 0.09917356666666666,
+            "median_ms": 0.098917,
+            "p95_ms": 0.099833
           },
           "parity_pass": true,
           "profile": {
             "metric_eval_count": 300,
-            "metric_compile_count": 4,
-            "metric_cache_hits": 104,
-            "metric_fallback_count": 192,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 120,
+            "metric_fallback_count": 180,
             "prune_eval_count": 0,
             "prune_compile_count": 0,
             "prune_cache_hits": 0,
@@ -498,21 +500,21 @@
         },
         {
           "backend": "llvm_candidate",
-          "cold_ms": 0.097,
+          "cold_ms": 0.109208,
           "warm": {
             "runs": 30,
-            "min_ms": 0.091417,
-            "max_ms": 0.09674999999999999,
-            "mean_ms": 0.0924999666666667,
-            "median_ms": 0.091958,
-            "p95_ms": 0.096666
+            "min_ms": 0.098375,
+            "max_ms": 0.18520799999999998,
+            "mean_ms": 0.10790969999999998,
+            "median_ms": 0.101458,
+            "p95_ms": 0.146666
           },
           "parity_pass": true,
           "profile": {
             "metric_eval_count": 300,
-            "metric_compile_count": 4,
-            "metric_cache_hits": 104,
-            "metric_fallback_count": 192,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 120,
+            "metric_fallback_count": 180,
             "prune_eval_count": 0,
             "prune_compile_count": 0,
             "prune_cache_hits": 0,
@@ -521,21 +523,21 @@
         },
         {
           "backend": "cranelift_candidate",
-          "cold_ms": 0.093667,
+          "cold_ms": 0.113917,
           "warm": {
             "runs": 30,
-            "min_ms": 0.088834,
-            "max_ms": 0.096042,
-            "mean_ms": 0.09094173333333336,
-            "median_ms": 0.089834,
-            "p95_ms": 0.094291
+            "min_ms": 0.093917,
+            "max_ms": 0.095084,
+            "mean_ms": 0.09430006666666667,
+            "median_ms": 0.09425,
+            "p95_ms": 0.094792
           },
           "parity_pass": true,
           "profile": {
             "metric_eval_count": 300,
-            "metric_compile_count": 4,
-            "metric_cache_hits": 104,
-            "metric_fallback_count": 192,
+            "metric_compile_count": 0,
+            "metric_cache_hits": 120,
+            "metric_fallback_count": 180,
             "prune_eval_count": 0,
             "prune_compile_count": 0,
             "prune_cache_hits": 0,
@@ -551,28 +553,28 @@
       "results": [
         {
           "backend": "interpreter",
-          "cold_ms": 0.006834,
+          "cold_ms": 0.00675,
           "warm": {
             "runs": 30,
-            "min_ms": 0.0055,
-            "max_ms": 0.006084,
-            "mean_ms": 0.005601400000000001,
-            "median_ms": 0.005582999999999999,
-            "p95_ms": 0.005834000000000001
+            "min_ms": 0.005542,
+            "max_ms": 0.005791,
+            "mean_ms": 0.005662500000000001,
+            "median_ms": 0.005666,
+            "p95_ms": 0.00575
           },
           "parity_pass": true,
           "profile": null
         },
         {
           "backend": "prototype_jit",
-          "cold_ms": 0.006208,
+          "cold_ms": 0.006917,
           "warm": {
             "runs": 30,
-            "min_ms": 0.0055,
-            "max_ms": 0.006,
-            "mean_ms": 0.0055970666666666676,
-            "median_ms": 0.005582999999999999,
-            "p95_ms": 0.005917
+            "min_ms": 0.005708,
+            "max_ms": 0.006083,
+            "mean_ms": 0.005779200000000002,
+            "median_ms": 0.00575,
+            "p95_ms": 0.005875
           },
           "parity_pass": true,
           "profile": {
@@ -588,14 +590,14 @@
         },
         {
           "backend": "llvm_candidate",
-          "cold_ms": 0.005875,
+          "cold_ms": 0.006459,
           "warm": {
             "runs": 30,
-            "min_ms": 0.005458,
-            "max_ms": 0.005667,
-            "mean_ms": 0.005534866666666669,
-            "median_ms": 0.005542,
-            "p95_ms": 0.005584
+            "min_ms": 0.005666,
+            "max_ms": 0.005875,
+            "mean_ms": 0.0057639000000000015,
+            "median_ms": 0.00575,
+            "p95_ms": 0.005834000000000001
           },
           "parity_pass": true,
           "profile": {
@@ -611,14 +613,14 @@
         },
         {
           "backend": "cranelift_candidate",
-          "cold_ms": 0.005667,
+          "cold_ms": 0.006333,
           "warm": {
             "runs": 30,
-            "min_ms": 0.005458,
-            "max_ms": 0.005625000000000001,
-            "mean_ms": 0.0055333333333333345,
-            "median_ms": 0.005541,
-            "p95_ms": 0.005625000000000001
+            "min_ms": 0.005666,
+            "max_ms": 0.005917,
+            "mean_ms": 0.005743133333333333,
+            "median_ms": 0.005709,
+            "p95_ms": 0.005875
           },
           "parity_pass": true,
           "profile": {
@@ -641,28 +643,28 @@
       "results": [
         {
           "backend": "interpreter",
-          "cold_ms": 0.045583,
+          "cold_ms": 0.046667,
           "warm": {
             "runs": 30,
-            "min_ms": 0.036000000000000004,
-            "max_ms": 0.145,
-            "mean_ms": 0.047679166666666675,
-            "median_ms": 0.038625,
-            "p95_ms": 0.106084
+            "min_ms": 0.037375,
+            "max_ms": 0.044333,
+            "mean_ms": 0.038104200000000005,
+            "median_ms": 0.037833,
+            "p95_ms": 0.039042
           },
           "parity_pass": true,
           "profile": null
         },
         {
           "backend": "prototype_jit",
-          "cold_ms": 0.040042,
+          "cold_ms": 0.039875,
           "warm": {
             "runs": 30,
-            "min_ms": 0.035708,
-            "max_ms": 0.081916,
-            "mean_ms": 0.03767213333333333,
-            "median_ms": 0.036167,
-            "p95_ms": 0.037166000000000005
+            "min_ms": 0.037583000000000005,
+            "max_ms": 0.038458,
+            "mean_ms": 0.03790283333333334,
+            "median_ms": 0.037917000000000006,
+            "p95_ms": 0.038167
           },
           "parity_pass": true,
           "profile": {
@@ -678,14 +680,14 @@
         },
         {
           "backend": "llvm_candidate",
-          "cold_ms": 0.081291,
+          "cold_ms": 0.039459,
           "warm": {
             "runs": 30,
-            "min_ms": 0.037333000000000005,
-            "max_ms": 0.06370799999999999,
-            "mean_ms": 0.04310136666666667,
-            "median_ms": 0.038833,
-            "p95_ms": 0.062833
+            "min_ms": 0.036583,
+            "max_ms": 0.091834,
+            "mean_ms": 0.04141946666666666,
+            "median_ms": 0.039042,
+            "p95_ms": 0.066958
           },
           "parity_pass": true,
           "profile": {
@@ -701,14 +703,14 @@
         },
         {
           "backend": "cranelift_candidate",
-          "cold_ms": 0.036708000000000005,
+          "cold_ms": 0.042707999999999996,
           "warm": {
             "runs": 30,
-            "min_ms": 0.036667,
-            "max_ms": 0.039084,
-            "mean_ms": 0.037351366666666656,
-            "median_ms": 0.037,
-            "p95_ms": 0.038792
+            "min_ms": 0.036333,
+            "max_ms": 0.039166,
+            "mean_ms": 0.036630499999999996,
+            "median_ms": 0.0365,
+            "p95_ms": 0.037083
           },
           "parity_pass": true,
           "profile": {
@@ -731,28 +733,28 @@
       "results": [
         {
           "backend": "interpreter",
-          "cold_ms": 0.024042,
+          "cold_ms": 0.026916000000000002,
           "warm": {
             "runs": 30,
-            "min_ms": 0.02025,
-            "max_ms": 0.046583,
-            "mean_ms": 0.022645833333333334,
-            "median_ms": 0.020665999999999997,
-            "p95_ms": 0.037834
+            "min_ms": 0.020333,
+            "max_ms": 0.023417,
+            "mean_ms": 0.020737500000000002,
+            "median_ms": 0.020542,
+            "p95_ms": 0.023375
           },
           "parity_pass": true,
           "profile": null
         },
         {
           "backend": "prototype_jit",
-          "cold_ms": 0.027542,
+          "cold_ms": 0.028292,
           "warm": {
             "runs": 30,
-            "min_ms": 0.020083,
-            "max_ms": 0.037625,
-            "mean_ms": 0.021763933333333332,
-            "median_ms": 0.020707999999999997,
-            "p95_ms": 0.033624999999999995
+            "min_ms": 0.020166999999999997,
+            "max_ms": 0.020707999999999997,
+            "mean_ms": 0.02044026666666666,
+            "median_ms": 0.020458,
+            "p95_ms": 0.020583
           },
           "parity_pass": true,
           "profile": {
@@ -761,21 +763,21 @@
             "metric_cache_hits": 0,
             "metric_fallback_count": 30,
             "prune_eval_count": 60,
-            "prune_compile_count": 1,
-            "prune_cache_hits": 4,
-            "prune_fallback_count": 55
+            "prune_compile_count": 0,
+            "prune_cache_hits": 60,
+            "prune_fallback_count": 0
           }
         },
         {
           "backend": "llvm_candidate",
-          "cold_ms": 0.032833,
+          "cold_ms": 0.0265,
           "warm": {
             "runs": 30,
-            "min_ms": 0.020125,
-            "max_ms": 0.049875,
-            "mean_ms": 0.023093133333333335,
-            "median_ms": 0.021375,
-            "p95_ms": 0.039208
+            "min_ms": 0.020208,
+            "max_ms": 0.020874999999999998,
+            "mean_ms": 0.020392999999999994,
+            "median_ms": 0.020375,
+            "p95_ms": 0.020541
           },
           "parity_pass": true,
           "profile": {
@@ -784,21 +786,21 @@
             "metric_cache_hits": 0,
             "metric_fallback_count": 30,
             "prune_eval_count": 60,
-            "prune_compile_count": 1,
-            "prune_cache_hits": 4,
-            "prune_fallback_count": 55
+            "prune_compile_count": 0,
+            "prune_cache_hits": 60,
+            "prune_fallback_count": 0
           }
         },
         {
           "backend": "cranelift_candidate",
-          "cold_ms": 0.022,
+          "cold_ms": 0.023333,
           "warm": {
             "runs": 30,
-            "min_ms": 0.020041,
-            "max_ms": 0.0245,
-            "mean_ms": 0.020990333333333337,
-            "median_ms": 0.020542,
-            "p95_ms": 0.022834
+            "min_ms": 0.019959,
+            "max_ms": 0.0275,
+            "mean_ms": 0.020513866666666665,
+            "median_ms": 0.020125,
+            "p95_ms": 0.023541
           },
           "parity_pass": true,
           "profile": {
@@ -807,9 +809,9 @@
             "metric_cache_hits": 0,
             "metric_fallback_count": 30,
             "prune_eval_count": 60,
-            "prune_compile_count": 1,
-            "prune_cache_hits": 4,
-            "prune_fallback_count": 55
+            "prune_compile_count": 0,
+            "prune_cache_hits": 60,
+            "prune_fallback_count": 0
           }
         }
       ]
@@ -821,28 +823,28 @@
       "results": [
         {
           "backend": "interpreter",
-          "cold_ms": 0.027917,
+          "cold_ms": 0.027708999999999998,
           "warm": {
             "runs": 30,
-            "min_ms": 0.025209,
-            "max_ms": 0.08741600000000001,
-            "mean_ms": 0.03086393333333334,
-            "median_ms": 0.026125000000000002,
-            "p95_ms": 0.062833
+            "min_ms": 0.0245,
+            "max_ms": 0.025125,
+            "mean_ms": 0.024736099999999997,
+            "median_ms": 0.024709000000000002,
+            "p95_ms": 0.025125
           },
           "parity_pass": true,
           "profile": null
         },
         {
           "backend": "prototype_jit",
-          "cold_ms": 0.027833,
+          "cold_ms": 0.029875000000000002,
           "warm": {
             "runs": 30,
-            "min_ms": 0.025125,
-            "max_ms": 0.025834,
-            "mean_ms": 0.025380499999999997,
-            "median_ms": 0.025417000000000002,
-            "p95_ms": 0.025792
+            "min_ms": 0.024624999999999998,
+            "max_ms": 0.025875,
+            "mean_ms": 0.02499313333333333,
+            "median_ms": 0.025,
+            "p95_ms": 0.025834
           },
           "parity_pass": true,
           "profile": {
@@ -858,14 +860,14 @@
         },
         {
           "backend": "llvm_candidate",
-          "cold_ms": 0.025707999999999998,
+          "cold_ms": 0.043917,
           "warm": {
             "runs": 30,
             "min_ms": 0.024958,
-            "max_ms": 0.025417000000000002,
-            "mean_ms": 0.025162466666666668,
-            "median_ms": 0.025166,
-            "p95_ms": 0.025334
+            "max_ms": 0.027708,
+            "mean_ms": 0.02568466666666667,
+            "median_ms": 0.025542,
+            "p95_ms": 0.027042
           },
           "parity_pass": true,
           "profile": {
@@ -881,14 +883,14 @@
         },
         {
           "backend": "cranelift_candidate",
-          "cold_ms": 0.025375,
+          "cold_ms": 0.027375,
           "warm": {
             "runs": 30,
-            "min_ms": 0.025,
-            "max_ms": 0.025709,
-            "mean_ms": 0.02521116666666667,
-            "median_ms": 0.025208,
-            "p95_ms": 0.0255
+            "min_ms": 0.024083,
+            "max_ms": 0.026,
+            "mean_ms": 0.024773500000000004,
+            "median_ms": 0.024791,
+            "p95_ms": 0.025917
           },
           "parity_pass": true,
           "profile": {
@@ -911,28 +913,28 @@
       "results": [
         {
           "backend": "interpreter",
-          "cold_ms": 0.034749999999999996,
+          "cold_ms": 0.035040999999999996,
           "warm": {
             "runs": 30,
-            "min_ms": 0.031167,
-            "max_ms": 0.103833,
-            "mean_ms": 0.035216500000000005,
-            "median_ms": 0.032332999999999994,
-            "p95_ms": 0.051082999999999996
+            "min_ms": 0.030166,
+            "max_ms": 0.08158299999999999,
+            "mean_ms": 0.0326443,
+            "median_ms": 0.0305,
+            "p95_ms": 0.043207999999999996
           },
           "parity_pass": true,
           "profile": null
         },
         {
           "backend": "prototype_jit",
-          "cold_ms": 0.034458,
+          "cold_ms": 0.035834000000000005,
           "warm": {
             "runs": 30,
-            "min_ms": 0.030666000000000002,
-            "max_ms": 0.063208,
-            "mean_ms": 0.03420553333333333,
-            "median_ms": 0.03175,
-            "p95_ms": 0.047084
+            "min_ms": 0.030625,
+            "max_ms": 0.038791,
+            "mean_ms": 0.03182496666666666,
+            "median_ms": 0.031458,
+            "p95_ms": 0.035625
           },
           "parity_pass": true,
           "profile": {
@@ -948,14 +950,14 @@
         },
         {
           "backend": "llvm_candidate",
-          "cold_ms": 0.032709,
+          "cold_ms": 0.034,
           "warm": {
             "runs": 30,
-            "min_ms": 0.0305,
-            "max_ms": 0.098375,
-            "mean_ms": 0.03395973333333333,
-            "median_ms": 0.030833000000000003,
-            "p95_ms": 0.042707999999999996
+            "min_ms": 0.031208999999999997,
+            "max_ms": 0.032959,
+            "mean_ms": 0.03161109999999999,
+            "median_ms": 0.031542,
+            "p95_ms": 0.032332999999999994
           },
           "parity_pass": true,
           "profile": {
@@ -971,14 +973,14 @@
         },
         {
           "backend": "cranelift_candidate",
-          "cold_ms": 0.030916,
+          "cold_ms": 0.034125,
           "warm": {
             "runs": 30,
-            "min_ms": 0.03025,
-            "max_ms": 0.031375,
-            "mean_ms": 0.03050976666666666,
-            "median_ms": 0.030459,
-            "p95_ms": 0.030750000000000003
+            "min_ms": 0.030375,
+            "max_ms": 0.049917,
+            "mean_ms": 0.032266633333333336,
+            "median_ms": 0.030833000000000003,
+            "p95_ms": 0.045208
           },
           "parity_pass": true,
           "profile": {
@@ -1001,28 +1003,28 @@
       "results": [
         {
           "backend": "interpreter",
-          "cold_ms": 0.020416,
+          "cold_ms": 0.020333,
           "warm": {
             "runs": 30,
-            "min_ms": 0.017041,
-            "max_ms": 0.018875000000000003,
-            "mean_ms": 0.017688833333333327,
-            "median_ms": 0.017709,
-            "p95_ms": 0.0185
+            "min_ms": 0.017082999999999997,
+            "max_ms": 0.024208,
+            "mean_ms": 0.017586099999999997,
+            "median_ms": 0.017333,
+            "p95_ms": 0.017708
           },
           "parity_pass": true,
           "profile": null
         },
         {
           "backend": "prototype_jit",
-          "cold_ms": 0.018958,
+          "cold_ms": 0.019125,
           "warm": {
             "runs": 30,
-            "min_ms": 0.017915999999999998,
-            "max_ms": 0.0185,
-            "mean_ms": 0.01800696666666667,
-            "median_ms": 0.018000000000000002,
-            "p95_ms": 0.018125
+            "min_ms": 0.017249999999999998,
+            "max_ms": 0.017833,
+            "mean_ms": 0.017461033333333337,
+            "median_ms": 0.017458,
+            "p95_ms": 0.017666
           },
           "parity_pass": true,
           "profile": {
@@ -1038,14 +1040,14 @@
         },
         {
           "backend": "llvm_candidate",
-          "cold_ms": 0.018125,
+          "cold_ms": 0.018625,
           "warm": {
             "runs": 30,
-            "min_ms": 0.017834,
-            "max_ms": 0.018334,
-            "mean_ms": 0.018013933333333332,
-            "median_ms": 0.018000000000000002,
-            "p95_ms": 0.018125
+            "min_ms": 0.017166,
+            "max_ms": 0.017625000000000002,
+            "mean_ms": 0.017351399999999996,
+            "median_ms": 0.017334,
+            "p95_ms": 0.017542
           },
           "parity_pass": true,
           "profile": {
@@ -1061,14 +1063,14 @@
         },
         {
           "backend": "cranelift_candidate",
-          "cold_ms": 0.018125,
+          "cold_ms": 0.018666000000000002,
           "warm": {
             "runs": 30,
-            "min_ms": 0.017833,
-            "max_ms": 0.018333,
-            "mean_ms": 0.017980700000000006,
-            "median_ms": 0.017959,
-            "p95_ms": 0.018125
+            "min_ms": 0.017207999999999998,
+            "max_ms": 0.017750000000000002,
+            "mean_ms": 0.01739726666666667,
+            "median_ms": 0.017374999999999998,
+            "p95_ms": 0.017584
           },
           "parity_pass": true,
           "profile": {
@@ -1088,27 +1090,27 @@
   "aggregate": [
     {
       "backend": "interpreter",
-      "mean_cold_ms": 0.04457291666666666,
-      "mean_warm_median_ms": 0.034475666666666675,
-      "mean_warm_p95_ms": 0.04777791666666666
+      "mean_cold_ms": 0.049562416666666664,
+      "mean_warm_median_ms": 0.041166583333333326,
+      "mean_warm_p95_ms": 0.047899250000000004
     },
     {
       "backend": "prototype_jit",
-      "mean_cold_ms": 0.03827075,
-      "mean_warm_median_ms": 0.03486125,
-      "mean_warm_p95_ms": 0.04357991666666666
+      "mean_cold_ms": 0.04566333333333333,
+      "mean_warm_median_ms": 0.04045841666666666,
+      "mean_warm_p95_ms": 0.045451500000000006
     },
     {
       "backend": "llvm_candidate",
-      "mean_cold_ms": 0.04151733333333334,
-      "mean_warm_median_ms": 0.03457625,
-      "mean_warm_p95_ms": 0.041558916666666675
+      "mean_cold_ms": 0.049510500000000006,
+      "mean_warm_median_ms": 0.04070833333333333,
+      "mean_warm_p95_ms": 0.05106258333333333
     },
     {
       "backend": "cranelift_candidate",
-      "mean_cold_ms": 0.03504525,
-      "mean_warm_median_ms": 0.03409041666666667,
-      "mean_warm_p95_ms": 0.03640616666666667
+      "mean_cold_ms": 0.045187249999999984,
+      "mean_warm_median_ms": 0.03844791666666667,
+      "mean_warm_p95_ms": 0.048559083333333336
     }
   ]
 }
