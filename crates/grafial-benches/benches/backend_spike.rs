@@ -8,14 +8,15 @@
 //! This currently benchmarks:
 //! - interpreter backend
 //! - prototype hot-expression JIT backend
-//!
-//! Future LLVM/Cranelift backend candidates can be plugged into the same harness.
+//! - LLVM candidate backend
+//! - Cranelift candidate backend
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 
 use grafial_core::{
-    parse_validate_and_lower, run_flow_ir_with_backend, InterpreterExecutionBackend, ProgramIR,
-    PrototypeJitConfig, PrototypeJitExecutionBackend,
+    parse_validate_and_lower, run_flow_ir_with_backend, CraneliftCandidateExecutionBackend,
+    InterpreterExecutionBackend, LlvmCandidateExecutionBackend, ProgramIR, PrototypeJitConfig,
+    PrototypeJitExecutionBackend,
 };
 
 const FLOW_NAME: &str = "Spike";
@@ -73,18 +74,18 @@ fn approx_eq(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-12
 }
 
-fn assert_backend_parity(program: &ProgramIR) {
-    let interpreter = InterpreterExecutionBackend;
-    let expected = run_flow_ir_with_backend(program, FLOW_NAME, None, &interpreter)
-        .expect("interpreter flow execution");
-
-    let prototype = PrototypeJitExecutionBackend::new(PrototypeJitConfig {
+fn hot_config() -> PrototypeJitConfig {
+    PrototypeJitConfig {
         metric_compile_threshold: 1,
         prune_compile_threshold: 1,
-    });
-    let actual = run_flow_ir_with_backend(program, FLOW_NAME, None, &prototype)
-        .expect("prototype flow execution");
+    }
+}
 
+fn assert_result_parity(
+    backend_name: &str,
+    expected: &grafial_core::engine::flow_exec::FlowResult,
+    actual: &grafial_core::engine::flow_exec::FlowResult,
+) {
     let expected_hot = expected
         .metric_exports
         .get("m_hot")
@@ -97,7 +98,7 @@ fn assert_backend_parity(program: &ProgramIR) {
         .unwrap_or_default();
     assert!(
         approx_eq(expected_hot, actual_hot),
-        "m_hot mismatch: interpreter={} prototype={}",
+        "m_hot mismatch ({backend_name}): interpreter={} candidate={}",
         expected_hot,
         actual_hot
     );
@@ -114,7 +115,7 @@ fn assert_backend_parity(program: &ProgramIR) {
         .unwrap_or_default();
     assert!(
         approx_eq(expected_density, actual_density),
-        "edge_density mismatch: interpreter={} prototype={}",
+        "edge_density mismatch ({backend_name}): interpreter={} candidate={}",
         expected_density,
         actual_density
     );
@@ -131,9 +132,30 @@ fn assert_backend_parity(program: &ProgramIR) {
         .unwrap_or_default();
     assert_eq!(
         expected_edges, actual_edges,
-        "exported edge count mismatch: interpreter={} prototype={}",
+        "exported edge count mismatch ({backend_name}): interpreter={} candidate={}",
         expected_edges, actual_edges
     );
+}
+
+fn assert_backend_parity(program: &ProgramIR) {
+    let interpreter = InterpreterExecutionBackend;
+    let expected = run_flow_ir_with_backend(program, FLOW_NAME, None, &interpreter)
+        .expect("interpreter flow execution");
+
+    let prototype = PrototypeJitExecutionBackend::new(hot_config());
+    let prototype_actual = run_flow_ir_with_backend(program, FLOW_NAME, None, &prototype)
+        .expect("prototype flow execution");
+    assert_result_parity("prototype-jit", &expected, &prototype_actual);
+
+    let llvm = LlvmCandidateExecutionBackend::new(hot_config());
+    let llvm_actual = run_flow_ir_with_backend(program, FLOW_NAME, None, &llvm)
+        .expect("llvm candidate flow execution");
+    assert_result_parity("llvm-candidate", &expected, &llvm_actual);
+
+    let cranelift = CraneliftCandidateExecutionBackend::new(hot_config());
+    let cranelift_actual = run_flow_ir_with_backend(program, FLOW_NAME, None, &cranelift)
+        .expect("cranelift candidate flow execution");
+    assert_result_parity("cranelift-candidate", &expected, &cranelift_actual);
 }
 
 fn bench_backend_spike(c: &mut Criterion) {
@@ -160,10 +182,7 @@ fn bench_backend_spike(c: &mut Criterion) {
 
     group.bench_function("prototype_jit_cold_run", |b| {
         b.iter(|| {
-            let backend = PrototypeJitExecutionBackend::new(PrototypeJitConfig {
-                metric_compile_threshold: 1,
-                prune_compile_threshold: 1,
-            });
+            let backend = PrototypeJitExecutionBackend::new(hot_config());
             let result = run_flow_ir_with_backend(
                 black_box(&program),
                 black_box(FLOW_NAME),
@@ -171,6 +190,34 @@ fn bench_backend_spike(c: &mut Criterion) {
                 black_box(&backend),
             )
             .expect("prototype cold run");
+            black_box(result.metric_exports.get("edge_density").copied());
+        });
+    });
+
+    group.bench_function("llvm_candidate_cold_run", |b| {
+        b.iter(|| {
+            let backend = LlvmCandidateExecutionBackend::new(hot_config());
+            let result = run_flow_ir_with_backend(
+                black_box(&program),
+                black_box(FLOW_NAME),
+                None,
+                black_box(&backend),
+            )
+            .expect("llvm candidate cold run");
+            black_box(result.metric_exports.get("edge_density").copied());
+        });
+    });
+
+    group.bench_function("cranelift_candidate_cold_run", |b| {
+        b.iter(|| {
+            let backend = CraneliftCandidateExecutionBackend::new(hot_config());
+            let result = run_flow_ir_with_backend(
+                black_box(&program),
+                black_box(FLOW_NAME),
+                None,
+                black_box(&backend),
+            )
+            .expect("cranelift candidate cold run");
             black_box(result.metric_exports.get("edge_density").copied());
         });
     });
@@ -189,10 +236,7 @@ fn bench_backend_spike(c: &mut Criterion) {
         });
     });
 
-    let prototype = PrototypeJitExecutionBackend::new(PrototypeJitConfig {
-        metric_compile_threshold: 1,
-        prune_compile_threshold: 1,
-    });
+    let prototype = PrototypeJitExecutionBackend::new(hot_config());
     let _ = run_flow_ir_with_backend(&program, FLOW_NAME, None, &prototype)
         .expect("prototype warm-up run");
     group.bench_function("prototype_jit_warm_run", |b| {
@@ -204,6 +248,38 @@ fn bench_backend_spike(c: &mut Criterion) {
                 black_box(&prototype),
             )
             .expect("prototype warm run");
+            black_box(result.metric_exports.get("edge_density").copied());
+        });
+    });
+
+    let llvm = LlvmCandidateExecutionBackend::new(hot_config());
+    let _ = run_flow_ir_with_backend(&program, FLOW_NAME, None, &llvm)
+        .expect("llvm candidate warm-up run");
+    group.bench_function("llvm_candidate_warm_run", |b| {
+        b.iter(|| {
+            let result = run_flow_ir_with_backend(
+                black_box(&program),
+                black_box(FLOW_NAME),
+                None,
+                black_box(&llvm),
+            )
+            .expect("llvm candidate warm run");
+            black_box(result.metric_exports.get("edge_density").copied());
+        });
+    });
+
+    let cranelift = CraneliftCandidateExecutionBackend::new(hot_config());
+    let _ = run_flow_ir_with_backend(&program, FLOW_NAME, None, &cranelift)
+        .expect("cranelift candidate warm-up run");
+    group.bench_function("cranelift_candidate_warm_run", |b| {
+        b.iter(|| {
+            let result = run_flow_ir_with_backend(
+                black_box(&program),
+                black_box(FLOW_NAME),
+                None,
+                black_box(&cranelift),
+            )
+            .expect("cranelift candidate warm run");
             black_box(result.metric_exports.get("edge_density").copied());
         });
     });

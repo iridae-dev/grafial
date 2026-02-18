@@ -275,6 +275,98 @@ impl IrExecutionBackend for PrototypeJitExecutionBackend {
     }
 }
 
+/// Phase 10 LLVM backend candidate wired to the hot-expression JIT path.
+///
+/// This candidate currently reuses the prototype hot-expression compiler/runtime while
+/// backend benchmarking and selection infrastructure is completed.
+#[derive(Debug)]
+pub struct LlvmCandidateExecutionBackend {
+    inner: PrototypeJitExecutionBackend,
+}
+
+impl LlvmCandidateExecutionBackend {
+    pub fn new(config: PrototypeJitConfig) -> Self {
+        Self {
+            inner: PrototypeJitExecutionBackend::new(config),
+        }
+    }
+
+    pub fn profile_snapshot(&self) -> Result<PrototypeJitProfile, ExecError> {
+        self.inner.profile_snapshot()
+    }
+
+    pub fn clear_profile(&self) -> Result<(), ExecError> {
+        self.inner.clear_profile()
+    }
+}
+
+impl Default for LlvmCandidateExecutionBackend {
+    fn default() -> Self {
+        Self::new(PrototypeJitConfig::default())
+    }
+}
+
+impl IrExecutionBackend for LlvmCandidateExecutionBackend {
+    fn backend_name(&self) -> &'static str {
+        "llvm-candidate"
+    }
+
+    fn run_flow_ir(
+        &self,
+        program: &ProgramIR,
+        flow_name: &str,
+        prior: Option<&FlowResult>,
+    ) -> Result<FlowResult, ExecError> {
+        self.inner.run_flow_ir(program, flow_name, prior)
+    }
+}
+
+/// Phase 10 Cranelift backend candidate wired to the hot-expression JIT path.
+///
+/// This candidate currently reuses the prototype hot-expression compiler/runtime while
+/// backend benchmarking and selection infrastructure is completed.
+#[derive(Debug)]
+pub struct CraneliftCandidateExecutionBackend {
+    inner: PrototypeJitExecutionBackend,
+}
+
+impl CraneliftCandidateExecutionBackend {
+    pub fn new(config: PrototypeJitConfig) -> Self {
+        Self {
+            inner: PrototypeJitExecutionBackend::new(config),
+        }
+    }
+
+    pub fn profile_snapshot(&self) -> Result<PrototypeJitProfile, ExecError> {
+        self.inner.profile_snapshot()
+    }
+
+    pub fn clear_profile(&self) -> Result<(), ExecError> {
+        self.inner.clear_profile()
+    }
+}
+
+impl Default for CraneliftCandidateExecutionBackend {
+    fn default() -> Self {
+        Self::new(PrototypeJitConfig::default())
+    }
+}
+
+impl IrExecutionBackend for CraneliftCandidateExecutionBackend {
+    fn backend_name(&self) -> &'static str {
+        "cranelift-candidate"
+    }
+
+    fn run_flow_ir(
+        &self,
+        program: &ProgramIR,
+        flow_name: &str,
+        prior: Option<&FlowResult>,
+    ) -> Result<FlowResult, ExecError> {
+        self.inner.run_flow_ir(program, flow_name, prior)
+    }
+}
+
 /// Runs a named flow from a parsed and validated program.
 ///
 /// Each transform produces a new graph (immutability), enabling safe snapshotting and
@@ -1897,5 +1989,28 @@ mod tests {
         assert!(profile.metric_cache_hits >= 1);
         assert!(profile.prune_cache_hits >= 1);
         assert!(profile.metric_fallback_count >= 2); // unsupported avg_degree call falls back
+
+        let llvm = LlvmCandidateExecutionBackend::new(PrototypeJitConfig {
+            metric_compile_threshold: 1,
+            prune_compile_threshold: 1,
+        });
+        let llvm_result = run_flow_ir_with_backend(&program, "HotFlow", Some(&prior), &llvm)
+            .expect("llvm candidate run");
+        assert_eq!(llvm_result.metric_exports, expected.metric_exports);
+        let llvm_profile = llvm.profile_snapshot().expect("llvm profile");
+        assert!(llvm_profile.metric_compile_count >= 1);
+        assert!(llvm_profile.prune_compile_count >= 1);
+
+        let cranelift = CraneliftCandidateExecutionBackend::new(PrototypeJitConfig {
+            metric_compile_threshold: 1,
+            prune_compile_threshold: 1,
+        });
+        let cranelift_result =
+            run_flow_ir_with_backend(&program, "HotFlow", Some(&prior), &cranelift)
+                .expect("cranelift candidate run");
+        assert_eq!(cranelift_result.metric_exports, expected.metric_exports);
+        let cranelift_profile = cranelift.profile_snapshot().expect("cranelift profile");
+        assert!(cranelift_profile.metric_compile_count >= 1);
+        assert!(cranelift_profile.prune_compile_count >= 1);
     }
 }

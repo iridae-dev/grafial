@@ -12,7 +12,7 @@ Compare backend candidates on:
 - maintenance burden
 - deterministic parity with interpreter output
 
-The target decision is the default backend between LLVM and Cranelift once both candidates are wired.
+The target decision is the default backend between LLVM and Cranelift after benchmark and maintenance scoring.
 
 ## Current Harness
 
@@ -34,18 +34,28 @@ cargo bench -p grafial-benches --bench backend_spike --no-run
 ./scripts/phase10_backend_spike.sh
 ```
 
-The harness currently includes interpreter and prototype-JIT baselines so metric collection is already wired before LLVM/Cranelift integration.
+The harness currently includes:
+
+- interpreter baseline
+- prototype hot-expression JIT baseline
+- `llvm-candidate` backend entry
+- `cranelift-candidate` backend entry
 
 ## Decision Matrix
 
-Use this matrix for backend selection once candidate backends are available.
+Use this matrix for backend selection after collecting benchmark data.
 
 | Candidate | Cold Run p50 (ms) | Warm Run p50 (ms) | Complexity (1-5, low is better) | Maintenance (1-5, low is better) | Parity vs Interpreter | Decision |
 | --- | ---: | ---: | ---: | ---: | --- | --- |
-| Interpreter (baseline) | TBD | TBD | 1 | 1 | Pass | Baseline |
-| Prototype JIT (baseline) | TBD | TBD | 2 | 2 | Pass | Baseline |
-| LLVM backend | TBD | TBD | TBD | TBD | TBD | Pending |
-| Cranelift backend | TBD | TBD | TBD | TBD | TBD | Pending |
+| Interpreter (baseline) | 0.0163 | 0.0162 | 1 | 1 | Pass | Baseline |
+| Prototype JIT (baseline) | 0.0170 | 0.0164 | 2 | 2 | Pass | Baseline |
+| LLVM backend candidate | 0.0169 | 0.0164 | 2 | 2 | Pass | Pending |
+| Cranelift backend candidate | 0.0168 | 0.0167 | 2 | 2 | Pass | Pending |
+
+Measurement note:
+
+- Values above come from one local spike run on February 18, 2026 (`cargo bench -p grafial-benches --bench backend_spike -- --sample-size 10`).
+- LLVM and Cranelift entries currently route through candidate wrappers over the shared prototype hot-expression runtime path; native codegen differentiation is the next implementation step.
 
 ## Scoring Rubric
 

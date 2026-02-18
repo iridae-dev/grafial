@@ -275,6 +275,11 @@ Progress notes (this change):
   - `crates/grafial-benches/benches/backend_spike.rs` (cold/warm backend comparisons)
   - `scripts/phase10_backend_spike.sh` benchmark runner
   - `documentation/PHASE10_BACKEND_SPIKE.md` decision matrix + scoring rubric for LLVM vs Cranelift selection
+- Added explicit backend candidates and harness wiring:
+  - `LlvmCandidateExecutionBackend`
+  - `CraneliftCandidateExecutionBackend`
+  - backend spike benchmark now runs parity + cold/warm probes for interpreter, prototype, LLVM candidate, and Cranelift candidate
+  - current LLVM/Cranelift candidates are benchmark-visible wrappers over the shared prototype hot-expression runtime path
 
 ## Phase 11 - AOT + Vectorized Runtime
 

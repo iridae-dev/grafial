@@ -92,6 +92,7 @@ baygraph/
 - `run_flow_ir_with_backend(program: &ProgramIR, flow_name: &str, prior: Option<&FlowResult>, backend: &dyn IrExecutionBackend) -> Result<FlowResult, ExecError>`
 - `IrExecutionBackend` + `InterpreterExecutionBackend` define the IR execution backend boundary (interpreter default; JIT-pluggable path for future phases)
 - `PrototypeJitExecutionBackend` with `PrototypeJitConfig` and `PrototypeJitProfile` provides a hot-expression compilation/cache prototype with interpreter fallback
+- `LlvmCandidateExecutionBackend` and `CraneliftCandidateExecutionBackend` provide benchmarkable backend candidates on the same execution boundary
 
 ---
 
