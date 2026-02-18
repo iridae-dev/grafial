@@ -154,6 +154,12 @@ Run performance benchmarks:
 cargo bench -p grafial-benches
 ```
 
+Run the Phase 10 backend spike benchmark scaffold:
+
+```bash
+./scripts/phase10_backend_spike.sh
+```
+
 ## Development Environment
 
 ### Using Nix (Recommended)

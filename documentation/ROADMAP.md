@@ -271,6 +271,10 @@ Progress notes (this change):
   - compiles hot supported expressions into cached execution trees
   - deterministically falls back to interpreter execution for unsupported expressions
 - Added parity coverage ensuring prototype backend output matches interpreter output.
+- Added backend spike benchmark scaffold:
+  - `crates/grafial-benches/benches/backend_spike.rs` (cold/warm backend comparisons)
+  - `scripts/phase10_backend_spike.sh` benchmark runner
+  - `documentation/PHASE10_BACKEND_SPIKE.md` decision matrix + scoring rubric for LLVM vs Cranelift selection
 
 ## Phase 11 - AOT + Vectorized Runtime
 

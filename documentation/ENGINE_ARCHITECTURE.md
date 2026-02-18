@@ -355,6 +355,7 @@ pub trait MetricFn: Send + Sync + 'static {
 - Located in `crates/grafial-benches/benches/`
 - Use `criterion` for performance tracking
 - Bench evidence application, rule evaluation, metric scans
+- Phase 10 backend spike harness in `crates/grafial-benches/benches/backend_spike.rs`
 - Track allocations with profiling tools
 
 ---

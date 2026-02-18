@@ -10,6 +10,11 @@ name = "graph_benchmarks"
 path = "benches/graph_benchmarks.rs"
 harness = false
 
+[[bench]]
+name = "backend_spike"
+path = "benches/backend_spike.rs"
+harness = false
+
 [dependencies]
 grafial-core = { path = "../grafial-core", features = ["serde"] }
 grafial-frontend = { path = "../grafial-frontend" }
