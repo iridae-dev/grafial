@@ -10,7 +10,7 @@ pub mod storage;
 pub use engine::errors::ExecError;
 pub use engine::flow_exec::{
     run_flow, run_flow_ir, run_flow_ir_with_backend, InterpreterExecutionBackend,
-    IrExecutionBackend,
+    IrExecutionBackend, PrototypeJitConfig, PrototypeJitExecutionBackend, PrototypeJitProfile,
 };
 pub use engine::graph::BeliefGraph;
 pub use grafial_ir::ProgramIR;

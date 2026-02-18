@@ -266,6 +266,11 @@ Progress notes (this change):
   - `run_flow_ir_with_backend(...)` explicit backend entrypoint
 - `run_flow_ir(...)` now dispatches through the interpreter backend boundary (no behavior change).
 - Added core unit coverage validating explicit backend dispatch.
+- Added `PrototypeJitExecutionBackend` hot-expression prototype:
+  - profiles metric/prune expression evaluation counts
+  - compiles hot supported expressions into cached execution trees
+  - deterministically falls back to interpreter execution for unsupported expressions
+- Added parity coverage ensuring prototype backend output matches interpreter output.
 
 ## Phase 11 - AOT + Vectorized Runtime
 

@@ -5,17 +5,19 @@
 //! safe parallel execution and snapshotting.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
 
 use crate::engine::errors::ExecError;
 use crate::engine::evidence::build_graph_from_evidence_ir;
-use crate::engine::expr_eval::{eval_expr_core, ExprContext};
+use crate::engine::expr_eval::{eval_binary_op, eval_expr_core, eval_unary_op, ExprContext};
 use crate::engine::graph::{BeliefGraph, EdgeId};
 use crate::engine::rule_exec::run_rule_for_each_with_globals_audit;
 use crate::metrics::{eval_metric_expr, MetricContext, MetricRegistry};
 use grafial_frontend::ast::RuleDef;
 use grafial_frontend::{CallArg, ExprAst, ProgramAst};
 use grafial_ir::{
-    EvidenceIR, ExprIR, FlowIR, GraphExprIR, MetricImportDefIR, ProgramIR, RuleIR, TransformIR,
+    BinaryOpIR, CallArgIR, EvidenceIR, ExprIR, FlowIR, GraphExprIR, MetricImportDefIR, ProgramIR,
+    RuleIR, TransformIR, UnaryOpIR,
 };
 
 /// Graph builder trait for abstracting evidence-to-graph construction.
@@ -132,6 +134,147 @@ impl IrExecutionBackend for InterpreterExecutionBackend {
     }
 }
 
+/// Configuration for the prototype hot-expression JIT backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrototypeJitConfig {
+    /// Number of metric expression evaluations before compile is attempted.
+    pub metric_compile_threshold: usize,
+    /// Number of prune predicate evaluations before compile is attempted.
+    pub prune_compile_threshold: usize,
+}
+
+impl Default for PrototypeJitConfig {
+    fn default() -> Self {
+        Self {
+            metric_compile_threshold: 8,
+            prune_compile_threshold: 64,
+        }
+    }
+}
+
+/// Runtime profile counters for the prototype hot-expression JIT backend.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PrototypeJitProfile {
+    pub metric_eval_count: usize,
+    pub metric_compile_count: usize,
+    pub metric_cache_hits: usize,
+    pub metric_fallback_count: usize,
+    pub prune_eval_count: usize,
+    pub prune_compile_count: usize,
+    pub prune_cache_hits: usize,
+    pub prune_fallback_count: usize,
+}
+
+#[derive(Debug, Default)]
+struct PrototypeJitState {
+    metric_entries: HashMap<MetricExprKey, JitEntry<CompiledMetricExpr>>,
+    prune_entries: HashMap<PruneExprKey, JitEntry<CompiledPruneExpr>>,
+    profile: PrototypeJitProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct MetricExprKey {
+    flow: String,
+    metric: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PruneExprKey {
+    flow: String,
+    graph: String,
+    transform_idx: usize,
+}
+
+#[derive(Debug)]
+struct JitEntry<T> {
+    eval_count: usize,
+    compiled: Option<T>,
+    permanently_interpreted: bool,
+}
+
+impl<T> Default for JitEntry<T> {
+    fn default() -> Self {
+        Self {
+            eval_count: 0,
+            compiled: None,
+            permanently_interpreted: false,
+        }
+    }
+}
+
+/// Phase 10 prototype backend that compiles hot metric/prune expressions and
+/// falls back to interpreter evaluation for unsupported cases.
+#[derive(Debug)]
+pub struct PrototypeJitExecutionBackend {
+    config: PrototypeJitConfig,
+    state: Mutex<PrototypeJitState>,
+}
+
+impl PrototypeJitExecutionBackend {
+    pub fn new(config: PrototypeJitConfig) -> Self {
+        Self {
+            config,
+            state: Mutex::new(PrototypeJitState::default()),
+        }
+    }
+
+    /// Snapshot profiling counters for observability/debugging.
+    pub fn profile_snapshot(&self) -> Result<PrototypeJitProfile, ExecError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ExecError::Internal("prototype JIT state lock poisoned".into()))?;
+        Ok(state.profile)
+    }
+
+    /// Clears profile counters without dropping compiled expression cache.
+    pub fn clear_profile(&self) -> Result<(), ExecError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ExecError::Internal("prototype JIT state lock poisoned".into()))?;
+        state.profile = PrototypeJitProfile::default();
+        Ok(())
+    }
+}
+
+impl Default for PrototypeJitExecutionBackend {
+    fn default() -> Self {
+        Self::new(PrototypeJitConfig::default())
+    }
+}
+
+impl IrExecutionBackend for PrototypeJitExecutionBackend {
+    fn backend_name(&self) -> &'static str {
+        "prototype-jit"
+    }
+
+    fn run_flow_ir(
+        &self,
+        program: &ProgramIR,
+        flow_name: &str,
+        prior: Option<&FlowResult>,
+    ) -> Result<FlowResult, ExecError> {
+        let optimized_program = program.optimized();
+        let builder = StandardGraphBuilder;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ExecError::Internal("prototype JIT state lock poisoned".into()))?;
+        let mut expr_evaluator = HotPathExprEvaluator {
+            config: self.config,
+            state: &mut state,
+        };
+        run_flow_internal(
+            &optimized_program,
+            flow_name,
+            prior,
+            &builder,
+            &mut expr_evaluator,
+        )
+    }
+}
+
 /// Runs a named flow from a parsed and validated program.
 ///
 /// Each transform produces a new graph (immutability), enabling safe snapshotting and
@@ -165,6 +308,394 @@ pub fn run_flow_ir_with_backend(
     backend.run_flow_ir(program, flow_name, prior)
 }
 
+/// Expression evaluation abstraction for flow metric/prune execution.
+trait FlowExprEvaluator {
+    fn eval_metric_expr(
+        &mut self,
+        flow_name: &str,
+        metric_name: &str,
+        expr: &ExprIR,
+        graph: &BeliefGraph,
+        registry: &MetricRegistry,
+        ctx: &MetricContext,
+    ) -> Result<f64, ExecError>;
+
+    fn eval_prune_predicate(
+        &mut self,
+        flow_name: &str,
+        graph_name: &str,
+        transform_idx: usize,
+        expr: &ExprIR,
+        graph: &BeliefGraph,
+        edge: EdgeId,
+    ) -> Result<f64, ExecError>;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct InterpreterFlowExprEvaluator;
+
+impl FlowExprEvaluator for InterpreterFlowExprEvaluator {
+    fn eval_metric_expr(
+        &mut self,
+        _flow_name: &str,
+        _metric_name: &str,
+        expr: &ExprIR,
+        graph: &BeliefGraph,
+        registry: &MetricRegistry,
+        ctx: &MetricContext,
+    ) -> Result<f64, ExecError> {
+        let expr_ast = expr.to_ast();
+        eval_metric_expr(&expr_ast, graph, registry, ctx)
+    }
+
+    fn eval_prune_predicate(
+        &mut self,
+        _flow_name: &str,
+        _graph_name: &str,
+        _transform_idx: usize,
+        expr: &ExprIR,
+        graph: &BeliefGraph,
+        edge: EdgeId,
+    ) -> Result<f64, ExecError> {
+        let expr_ast = expr.to_ast();
+        eval_prune_predicate(&expr_ast, graph, edge)
+    }
+}
+
+struct HotPathExprEvaluator<'a> {
+    config: PrototypeJitConfig,
+    state: &'a mut PrototypeJitState,
+}
+
+impl<'a> FlowExprEvaluator for HotPathExprEvaluator<'a> {
+    fn eval_metric_expr(
+        &mut self,
+        flow_name: &str,
+        metric_name: &str,
+        expr: &ExprIR,
+        graph: &BeliefGraph,
+        registry: &MetricRegistry,
+        ctx: &MetricContext,
+    ) -> Result<f64, ExecError> {
+        self.state.profile.metric_eval_count += 1;
+        let key = MetricExprKey {
+            flow: flow_name.to_string(),
+            metric: metric_name.to_string(),
+        };
+
+        let threshold = self.config.metric_compile_threshold.max(1);
+        let mut cached_expr = None;
+        let mut should_try_compile = false;
+        {
+            let entry = self.state.metric_entries.entry(key.clone()).or_default();
+            entry.eval_count += 1;
+            if let Some(compiled) = &entry.compiled {
+                cached_expr = Some(compiled.clone());
+            } else {
+                should_try_compile =
+                    !entry.permanently_interpreted && entry.eval_count >= threshold;
+            }
+        }
+
+        if cached_expr.is_some() {
+            self.state.profile.metric_cache_hits += 1;
+        } else if should_try_compile {
+            if let Some(compiled) = compile_metric_expr(expr) {
+                self.state.profile.metric_compile_count += 1;
+                self.state
+                    .metric_entries
+                    .entry(key.clone())
+                    .or_default()
+                    .compiled = Some(compiled.clone());
+                cached_expr = Some(compiled);
+            } else {
+                self.state
+                    .metric_entries
+                    .entry(key.clone())
+                    .or_default()
+                    .permanently_interpreted = true;
+            }
+        }
+
+        if let Some(compiled) = cached_expr {
+            if let Ok(value) = compiled.eval(ctx) {
+                return Ok(value);
+            }
+        }
+
+        self.state.profile.metric_fallback_count += 1;
+        let expr_ast = expr.to_ast();
+        eval_metric_expr(&expr_ast, graph, registry, ctx)
+    }
+
+    fn eval_prune_predicate(
+        &mut self,
+        flow_name: &str,
+        graph_name: &str,
+        transform_idx: usize,
+        expr: &ExprIR,
+        graph: &BeliefGraph,
+        edge: EdgeId,
+    ) -> Result<f64, ExecError> {
+        self.state.profile.prune_eval_count += 1;
+        let key = PruneExprKey {
+            flow: flow_name.to_string(),
+            graph: graph_name.to_string(),
+            transform_idx,
+        };
+
+        let threshold = self.config.prune_compile_threshold.max(1);
+        let mut cached_expr = None;
+        let mut should_try_compile = false;
+        {
+            let entry = self.state.prune_entries.entry(key.clone()).or_default();
+            entry.eval_count += 1;
+            if let Some(compiled) = &entry.compiled {
+                cached_expr = Some(compiled.clone());
+            } else {
+                should_try_compile =
+                    !entry.permanently_interpreted && entry.eval_count >= threshold;
+            }
+        }
+
+        if cached_expr.is_some() {
+            self.state.profile.prune_cache_hits += 1;
+        } else if should_try_compile {
+            if let Some(compiled) = compile_prune_expr(expr) {
+                self.state.profile.prune_compile_count += 1;
+                self.state
+                    .prune_entries
+                    .entry(key.clone())
+                    .or_default()
+                    .compiled = Some(compiled.clone());
+                cached_expr = Some(compiled);
+            } else {
+                self.state
+                    .prune_entries
+                    .entry(key.clone())
+                    .or_default()
+                    .permanently_interpreted = true;
+            }
+        }
+
+        if let Some(compiled) = cached_expr {
+            if let Ok(value) = compiled.eval(graph, edge) {
+                return Ok(value);
+            }
+        }
+
+        self.state.profile.prune_fallback_count += 1;
+        let expr_ast = expr.to_ast();
+        eval_prune_predicate(&expr_ast, graph, edge)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum CompiledMetricExpr {
+    Number(f64),
+    Bool(bool),
+    MetricVar(String),
+    Unary {
+        op: UnaryOpIR,
+        expr: Box<CompiledMetricExpr>,
+    },
+    Binary {
+        op: BinaryOpIR,
+        left: Box<CompiledMetricExpr>,
+        right: Box<CompiledMetricExpr>,
+    },
+}
+
+impl CompiledMetricExpr {
+    fn eval(&self, ctx: &MetricContext) -> Result<f64, ExecError> {
+        match self {
+            Self::Number(value) => Ok(*value),
+            Self::Bool(value) => Ok(if *value { 1.0 } else { 0.0 }),
+            Self::MetricVar(name) => ctx.metrics.get(name).copied().ok_or_else(|| {
+                ExecError::ValidationError(format!("unknown metric variable '{}'", name))
+            }),
+            Self::Unary { op, expr } => {
+                let v = expr.eval(ctx)?;
+                Ok(match op {
+                    UnaryOpIR::Neg => -v,
+                    UnaryOpIR::Not => {
+                        if v == 0.0 {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                })
+            }
+            Self::Binary { op, left, right } => {
+                let l = left.eval(ctx)?;
+                let r = right.eval(ctx)?;
+                eval_compiled_metric_binary(*op, l, r)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum CompiledPruneExpr {
+    Number(f64),
+    Bool(bool),
+    ProbEdge,
+    Unary {
+        op: UnaryOpIR,
+        expr: Box<CompiledPruneExpr>,
+    },
+    Binary {
+        op: BinaryOpIR,
+        left: Box<CompiledPruneExpr>,
+        right: Box<CompiledPruneExpr>,
+    },
+}
+
+impl CompiledPruneExpr {
+    fn eval(&self, graph: &BeliefGraph, edge: EdgeId) -> Result<f64, ExecError> {
+        match self {
+            Self::Number(value) => Ok(*value),
+            Self::Bool(value) => Ok(if *value { 1.0 } else { 0.0 }),
+            Self::ProbEdge => graph.prob_mean(edge),
+            Self::Unary { op, expr } => {
+                let value = expr.eval(graph, edge)?;
+                Ok(eval_unary_op(op.to_ast(), value))
+            }
+            Self::Binary { op, left, right } => {
+                let l = left.eval(graph, edge)?;
+                let r = right.eval(graph, edge)?;
+                eval_binary_op(op.to_ast(), l, r)
+            }
+        }
+    }
+}
+
+fn compile_metric_expr(expr: &ExprIR) -> Option<CompiledMetricExpr> {
+    match expr {
+        ExprIR::Number(value) => Some(CompiledMetricExpr::Number(*value)),
+        ExprIR::Bool(value) => Some(CompiledMetricExpr::Bool(*value)),
+        ExprIR::Var(name) => Some(CompiledMetricExpr::MetricVar(name.clone())),
+        ExprIR::Unary { op, expr } => Some(CompiledMetricExpr::Unary {
+            op: *op,
+            expr: Box::new(compile_metric_expr(expr)?),
+        }),
+        ExprIR::Binary { op, left, right } => Some(CompiledMetricExpr::Binary {
+            op: *op,
+            left: Box::new(compile_metric_expr(left)?),
+            right: Box::new(compile_metric_expr(right)?),
+        }),
+        ExprIR::Field { .. } | ExprIR::Call { .. } | ExprIR::Exists { .. } => None,
+    }
+}
+
+fn compile_prune_expr(expr: &ExprIR) -> Option<CompiledPruneExpr> {
+    match expr {
+        ExprIR::Number(value) => Some(CompiledPruneExpr::Number(*value)),
+        ExprIR::Bool(value) => Some(CompiledPruneExpr::Bool(*value)),
+        ExprIR::Unary { op, expr } => Some(CompiledPruneExpr::Unary {
+            op: *op,
+            expr: Box::new(compile_prune_expr(expr)?),
+        }),
+        ExprIR::Binary { op, left, right } => Some(CompiledPruneExpr::Binary {
+            op: *op,
+            left: Box::new(compile_prune_expr(left)?),
+            right: Box::new(compile_prune_expr(right)?),
+        }),
+        ExprIR::Call { name, args } if name == "prob" => {
+            if args.len() != 1 {
+                return None;
+            }
+            match &args[0] {
+                CallArgIR::Positional(ExprIR::Var(v)) if v == "edge" => {
+                    Some(CompiledPruneExpr::ProbEdge)
+                }
+                _ => None,
+            }
+        }
+        ExprIR::Var(_) | ExprIR::Field { .. } | ExprIR::Call { .. } | ExprIR::Exists { .. } => None,
+    }
+}
+
+fn eval_compiled_metric_binary(op: BinaryOpIR, left: f64, right: f64) -> Result<f64, ExecError> {
+    let result = match op {
+        BinaryOpIR::Add => left + right,
+        BinaryOpIR::Sub => left - right,
+        BinaryOpIR::Mul => left * right,
+        BinaryOpIR::Div => {
+            if right.abs() < 1e-15 {
+                return Err(ExecError::ValidationError(
+                    "division by zero in metric expression".into(),
+                ));
+            }
+            left / right
+        }
+        BinaryOpIR::Eq => {
+            if (left - right).abs() < 1e-12 {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        BinaryOpIR::Ne => {
+            if (left - right).abs() >= 1e-12 {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        BinaryOpIR::Lt => {
+            if left < right {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        BinaryOpIR::Le => {
+            if left <= right {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        BinaryOpIR::Gt => {
+            if left > right {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        BinaryOpIR::Ge => {
+            if left >= right {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        BinaryOpIR::And => {
+            if (left != 0.0) && (right != 0.0) {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        BinaryOpIR::Or => {
+            if (left != 0.0) || (right != 0.0) {
+                1.0
+            } else {
+                0.0
+            }
+        }
+    };
+    if !result.is_finite() {
+        return Err(ExecError::ValidationError(format!(
+            "metric expression produced non-finite value: {}",
+            result
+        )));
+    }
+    Ok(result)
+}
+
 fn run_flow_ir_interpreter(
     program: &ProgramIR,
     flow_name: &str,
@@ -172,7 +703,14 @@ fn run_flow_ir_interpreter(
 ) -> Result<FlowResult, ExecError> {
     let optimized_program = program.optimized();
     let builder = StandardGraphBuilder;
-    run_flow_internal(&optimized_program, flow_name, prior, &builder)
+    let mut expr_evaluator = InterpreterFlowExprEvaluator;
+    run_flow_internal(
+        &optimized_program,
+        flow_name,
+        prior,
+        &builder,
+        &mut expr_evaluator,
+    )
 }
 
 /// Test-only helper that allows custom evidence builders for testing.
@@ -190,15 +728,17 @@ pub fn run_flow_with_builder<'a>(
     let builder = CustomGraphBuilder {
         builder: evidence_builder,
     };
-    run_flow_internal(&lowered, flow_name, prior, &builder)
+    let mut expr_evaluator = InterpreterFlowExprEvaluator;
+    run_flow_internal(&lowered, flow_name, prior, &builder, &mut expr_evaluator)
 }
 
 /// Internal flow execution logic shared between `run_flow` and `run_flow_with_builder`.
-fn run_flow_internal<B: GraphBuilder>(
+fn run_flow_internal<B: GraphBuilder, E: FlowExprEvaluator>(
     program: &ProgramIR,
     flow_name: &str,
     prior: Option<&FlowResult>,
     graph_builder: &B,
+    expr_evaluator: &mut E,
 ) -> Result<FlowResult, ExecError> {
     let flow = find_flow(program, flow_name)?;
     let graph_plan = build_graph_execution_plan(flow)?;
@@ -234,6 +774,7 @@ fn run_flow_internal<B: GraphBuilder>(
                         &graph_def.name,
                         transform_idx,
                         &mut result,
+                        expr_evaluator,
                     )?;
                 }
                 current
@@ -249,7 +790,7 @@ fn run_flow_internal<B: GraphBuilder>(
         result.graphs.insert(graph_def.name.clone(), graph);
     }
 
-    evaluate_metrics(flow, prior, &mut result)?;
+    evaluate_metrics(flow, prior, &mut result, expr_evaluator)?;
     handle_exports(flow, &mut result)?;
 
     Ok(result)
@@ -437,7 +978,7 @@ fn lookup_graph_from_prior(
 }
 
 /// Applies a single transform to a graph, returning a new graph.
-fn apply_transform(
+fn apply_transform<E: FlowExprEvaluator>(
     transform: &TransformIR,
     graph: &BeliefGraph,
     rules_by_name: &HashMap<String, RuleDef>,
@@ -446,6 +987,7 @@ fn apply_transform(
     graph_name: &str,
     transform_idx: usize,
     result: &mut FlowResult,
+    expr_evaluator: &mut E,
 ) -> Result<BeliefGraph, ExecError> {
     match transform {
         TransformIR::ApplyRule { rule, .. } => {
@@ -496,10 +1038,15 @@ fn apply_transform(
         TransformIR::PruneEdges {
             edge_type,
             predicate,
-        } => {
-            let predicate_ast = predicate.to_ast();
-            prune_edges(graph, edge_type, &predicate_ast)
-        }
+        } => prune_edges_ir(
+            graph,
+            edge_type,
+            predicate,
+            flow_name,
+            graph_name,
+            transform_idx,
+            expr_evaluator,
+        ),
     }
 }
 
@@ -507,10 +1054,11 @@ fn apply_transform(
 ///
 /// Metrics are evaluated in dependency order (earlier metrics are available to later ones).
 /// Imported metrics from prior flows are available to all metric expressions.
-fn evaluate_metrics(
+fn evaluate_metrics<E: FlowExprEvaluator>(
     flow: &FlowIR,
     prior: Option<&FlowResult>,
     result: &mut FlowResult,
+    expr_evaluator: &mut E,
 ) -> Result<(), ExecError> {
     if flow.metrics.is_empty() && flow.metric_exports.is_empty() && flow.metric_imports.is_empty() {
         return Ok(());
@@ -550,8 +1098,14 @@ fn evaluate_metrics(
             }
         }
 
-        let metric_expr = m.expr.to_ast();
-        let v = eval_metric_expr(&metric_expr, target_graph, &registry, &ctx)?;
+        let v = expr_evaluator.eval_metric_expr(
+            &flow.name,
+            &m.name,
+            &m.expr,
+            target_graph,
+            &registry,
+            &ctx,
+        )?;
         result.metrics.insert(m.name.clone(), v);
         ctx.metrics.insert(m.name.clone(), v);
     }
@@ -676,16 +1230,46 @@ fn handle_exports(flow: &FlowIR, result: &mut FlowResult) -> Result<(), ExecErro
     Ok(())
 }
 
+#[cfg(test)]
 fn prune_edges(
     input: &BeliefGraph,
     edge_type: &str,
     predicate: &ExprAst,
 ) -> Result<BeliefGraph, ExecError> {
+    let predicate_ir = ExprIR::from(predicate);
+    let mut expr_evaluator = InterpreterFlowExprEvaluator;
+    prune_edges_ir(
+        input,
+        edge_type,
+        &predicate_ir,
+        "<test>",
+        "<graph>",
+        0,
+        &mut expr_evaluator,
+    )
+}
+
+fn prune_edges_ir<E: FlowExprEvaluator>(
+    input: &BeliefGraph,
+    edge_type: &str,
+    predicate: &ExprIR,
+    flow_name: &str,
+    graph_name: &str,
+    transform_idx: usize,
+    expr_evaluator: &mut E,
+) -> Result<BeliefGraph, ExecError> {
     let (mut keep, mut candidates) = classify_edges(input, edge_type);
     candidates.sort();
 
     for eid in candidates {
-        let should_keep = eval_prune_predicate(predicate, input, eid)? == 0.0;
+        let should_keep = expr_evaluator.eval_prune_predicate(
+            flow_name,
+            graph_name,
+            transform_idx,
+            predicate,
+            input,
+            eid,
+        )? == 0.0;
         if should_keep {
             keep.push(eid);
         }
@@ -1209,5 +1793,109 @@ mod tests {
             run_flow_ir_with_backend(&program, "Demo", None, &backend).expect("backend run");
         assert_eq!(backend.backend_name(), "stub");
         assert_eq!(result.metrics.get("backend_marker"), Some(&4.0));
+    }
+
+    fn build_phase10_hot_expr_program() -> ProgramIR {
+        ProgramIR {
+            schemas: vec![],
+            belief_models: vec![],
+            evidences: vec![],
+            rules: vec![],
+            flows: vec![FlowIR {
+                name: "HotFlow".into(),
+                on_model: "M".into(),
+                graphs: vec![
+                    grafial_ir::GraphDefIR {
+                        name: "g0".into(),
+                        expr: GraphExprIR::FromGraph("seed".into()),
+                    },
+                    grafial_ir::GraphDefIR {
+                        name: "g1".into(),
+                        expr: GraphExprIR::Pipeline {
+                            start_graph: "g0".into(),
+                            transforms: vec![TransformIR::PruneEdges {
+                                edge_type: "REL".into(),
+                                predicate: ExprIR::Binary {
+                                    op: grafial_ir::BinaryOpIR::Lt,
+                                    left: Box::new(ExprIR::Call {
+                                        name: "prob".into(),
+                                        args: vec![grafial_ir::CallArgIR::Positional(ExprIR::Var(
+                                            "edge".into(),
+                                        ))],
+                                    }),
+                                    right: Box::new(ExprIR::Number(0.5)),
+                                },
+                            }],
+                        },
+                    },
+                ],
+                metrics: vec![
+                    grafial_ir::MetricDefIR {
+                        name: "m1".into(),
+                        expr: ExprIR::Number(1.0),
+                    },
+                    grafial_ir::MetricDefIR {
+                        name: "m2".into(),
+                        expr: ExprIR::Binary {
+                            op: grafial_ir::BinaryOpIR::Add,
+                            left: Box::new(ExprIR::Var("m1".into())),
+                            right: Box::new(ExprIR::Number(2.0)),
+                        },
+                    },
+                    grafial_ir::MetricDefIR {
+                        name: "m3".into(),
+                        expr: ExprIR::Call {
+                            name: "avg_degree".into(),
+                            args: vec![
+                                grafial_ir::CallArgIR::Positional(ExprIR::Var("Person".into())),
+                                grafial_ir::CallArgIR::Positional(ExprIR::Var("REL".into())),
+                            ],
+                        },
+                    },
+                ],
+                exports: vec![],
+                metric_exports: vec![
+                    grafial_ir::MetricExportDefIR {
+                        metric: "m2".into(),
+                        alias: "out".into(),
+                    },
+                    grafial_ir::MetricExportDefIR {
+                        metric: "m3".into(),
+                        alias: "avg".into(),
+                    },
+                ],
+                metric_imports: vec![],
+            }],
+        }
+    }
+
+    #[test]
+    fn prototype_jit_backend_compiles_hot_exprs_with_interpreter_parity() {
+        let program = build_phase10_hot_expr_program();
+        let mut prior = FlowResult::default();
+        prior.exports.insert("seed".into(), build_simple_graph());
+
+        let expected = run_flow_ir(&program, "HotFlow", Some(&prior)).expect("interpreter run");
+
+        let backend = PrototypeJitExecutionBackend::new(PrototypeJitConfig {
+            metric_compile_threshold: 1,
+            prune_compile_threshold: 1,
+        });
+        let first =
+            run_flow_ir_with_backend(&program, "HotFlow", Some(&prior), &backend).expect("run 1");
+        let second =
+            run_flow_ir_with_backend(&program, "HotFlow", Some(&prior), &backend).expect("run 2");
+
+        assert_eq!(first.metric_exports, expected.metric_exports);
+        assert_eq!(second.metric_exports, expected.metric_exports);
+        assert_eq!(first.graphs.get("g1").map(|g| g.edges().len()), Some(1));
+        assert_eq!(second.graphs.get("g1").map(|g| g.edges().len()), Some(1));
+
+        let profile = backend.profile_snapshot().expect("profile");
+        assert!(profile.metric_compile_count >= 1);
+        assert!(profile.prune_compile_count >= 1);
+        assert!(profile.metric_cache_hits >= 1);
+        assert!(profile.prune_cache_hits >= 1);
+        assert!(profile.metric_fallback_count >= 2); // unsupported avg_degree call falls back
     }
 }
