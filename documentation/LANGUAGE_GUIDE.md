@@ -408,3 +408,31 @@ Current canonical-style rewrites target compatibility argument forms for:
 - soft updates (`~=`)
 - `delete`
 - `suppress`
+
+## 16. Statistical Lints and Suppression Pragmas
+
+Frontend/LSP tooling emits non-fatal statistical guardrail lints with stable codes:
+
+- `stat_variance_collapse`
+- `stat_prior_dominance`
+- `stat_precision_outlier`
+- `stat_prior_data_conflict`
+- `stat_numerical_instability`
+- `stat_multiple_testing`
+- `stat_circular_update`
+- `stat_delete_explanation`
+- `stat_suppress_explanation`
+
+You can suppress specific lint codes in scoped regions with pragmas:
+
+```grafial
+// grafial-lint: ignore(stat_multiple_testing)
+rule RiskyButIntentional on MyBeliefs {
+  ...
+}
+```
+
+Scope behavior:
+
+- A pragma inside a declaration applies from that line to the end of that declaration.
+- A pragma before a declaration applies to the next declaration block.

@@ -7,7 +7,10 @@
 
 use clap::Parser;
 use grafial_core::{parse_and_validate, run_flow};
-use grafial_frontend::{format_canonical_style, lint_canonical_style, CanonicalStyleLint};
+use grafial_frontend::{
+    collect_lint_suppressions, format_canonical_style, lint_canonical_style, lint_is_suppressed,
+    CanonicalStyleLint,
+};
 use std::collections::HashMap;
 use std::process;
 
@@ -69,7 +72,11 @@ fn main() {
     }
 
     if cli.lint_style {
-        let lints = lint_canonical_style(&source);
+        let suppressions = collect_lint_suppressions(&source);
+        let lints: Vec<_> = lint_canonical_style(&source)
+            .into_iter()
+            .filter(|lint| !lint_is_suppressed(&suppressions, lint.code, lint.range))
+            .collect();
         print_style_lints(&lints);
     }
 

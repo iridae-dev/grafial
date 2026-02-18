@@ -11,7 +11,7 @@ This is the canonical compiler/runtime roadmap for Grafial.
 - Phase 4: Completed
 - Phase 5: Completed
 - Phase 6: Completed
-- Phase 7: Future
+- Phase 7: Completed
 - Phase 8: Future
 - Phase 9: Future
 - Phase 10: Future
@@ -189,6 +189,23 @@ Completion notes (this change):
 - Add delete/suppress explanatory diagnostics (including undelete observation count estimates).
 - Add scoped lint suppression pragmas for noisy-but-intentional cases (for example `// grafial-lint: ignore(<code>)`).
 
+Completion notes (this change):
+- Added frontend statistical lint pass with stable codes:
+  - `stat_variance_collapse`
+  - `stat_prior_dominance`
+  - `stat_precision_outlier`
+  - `stat_prior_data_conflict`
+  - `stat_numerical_instability`
+  - `stat_multiple_testing`
+  - `stat_circular_update`
+  - `stat_delete_explanation`
+  - `stat_suppress_explanation`
+- Added explanatory diagnostics for `delete`/`suppress`, including observation-count estimates to recover edge probability above 0.5.
+- Added scoped lint suppression pragmas:
+  - `// grafial-lint: ignore(<code>)`
+  - supports declaration-scoped suppression for both canonical-style and statistical lints in tooling surfaces.
+- Wired Phase 7 lints into LSP diagnostics and added regression tests in frontend/LSP crates.
+
 ## Phase 8 - Canonicalization Completion
 
 - Add modernization quick fixes for legacy constructs:
@@ -196,7 +213,7 @@ Completion notes (this change):
   - `force_absent` -> `delete ... confidence=high`
 - Expand canonical style lint/fix coverage for remaining compatibility forms.
 - Migrate examples/docs to canonical syntax-first presentation and gate/retire remaining legacy parser paths.
-- Ship a migration guide that maps legacy forms to canonical forms and documents auto-fix coverage.
+- We don't have to support anything "legacy" since we haven't yet released Grafial to the public. Ensure the right way is the only way. 
 
 ## Phase 9 - Advanced Probabilistic Semantics
 

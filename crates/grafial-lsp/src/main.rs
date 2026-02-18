@@ -1,7 +1,8 @@
 use grafial_frontend::parser::{BayGraphParser, Rule};
 use grafial_frontend::{
-    lint_canonical_style, parse_program, validate_program_with_source, CanonicalStyleLint,
-    FrontendError, SourceRange,
+    collect_lint_suppressions, lint_canonical_style, lint_is_suppressed,
+    lint_statistical_guardrails, parse_program, validate_program_with_source, CanonicalStyleLint,
+    FrontendError, LintSeverity, LintSuppression, SourceRange, StatisticalLint,
 };
 use pest::Parser;
 use serde_json::json;
@@ -158,6 +159,7 @@ impl Backend {
     async fn publish_diagnostics(&self, uri: lsp::Url, text: String) {
         let mut diagnostics: Vec<lsp::Diagnostic> = Vec::new();
         let mut syntax_ok = false;
+        let mut parsed_ast = None;
 
         // Phase 1: syntax diagnostics via Pest parse
         match BayGraphParser::parse(Rule::program, &text) {
@@ -169,6 +171,7 @@ impl Backend {
                         if let Err(err) = validate_program_with_source(&ast, &text) {
                             diagnostics.push(self.validation_error_to_diag(err));
                         }
+                        parsed_ast = Some(ast);
                     }
                     Err(err) => {
                         // Unexpected: surface as a generic diagnostic at start
@@ -182,7 +185,11 @@ impl Backend {
         }
 
         if syntax_ok {
-            diagnostics.extend(canonical_style_diagnostics(&text));
+            let suppressions = collect_lint_suppressions(&text);
+            diagnostics.extend(canonical_style_diagnostics(&text, &suppressions));
+            if let Some(ast) = parsed_ast.as_ref() {
+                diagnostics.extend(statistical_guardrail_diagnostics(ast, &text));
+            }
         }
 
         let _ = self
@@ -339,9 +346,13 @@ fn pest_error_to_diag(e: &pest::error::Error<Rule>, input: &str) -> lsp::Diagnos
     }
 }
 
-fn canonical_style_diagnostics(text: &str) -> Vec<lsp::Diagnostic> {
+fn canonical_style_diagnostics(
+    text: &str,
+    suppressions: &[LintSuppression],
+) -> Vec<lsp::Diagnostic> {
     lint_canonical_style(text)
         .into_iter()
+        .filter(|lint| !lint_is_suppressed(suppressions, lint.code, lint.range))
         .map(style_lint_to_diag)
         .collect()
 }
@@ -362,6 +373,34 @@ fn style_lint_to_diag(lint: CanonicalStyleLint) -> lsp::Diagnostic {
                 "replacement": lint.replacement,
             }
         })),
+    }
+}
+
+fn statistical_guardrail_diagnostics(
+    ast: &grafial_frontend::ProgramAst,
+    text: &str,
+) -> Vec<lsp::Diagnostic> {
+    lint_statistical_guardrails(ast, text)
+        .into_iter()
+        .map(stat_lint_to_diag)
+        .collect()
+}
+
+fn stat_lint_to_diag(lint: StatisticalLint) -> lsp::Diagnostic {
+    let severity = match lint.severity {
+        LintSeverity::Warning => lsp::DiagnosticSeverity::WARNING,
+        LintSeverity::Information => lsp::DiagnosticSeverity::INFORMATION,
+    };
+    lsp::Diagnostic {
+        range: to_lsp_range(lint.range),
+        severity: Some(severity),
+        code: Some(lsp::NumberOrString::String(lint.code.to_string())),
+        code_description: None,
+        source: Some("grafial".into()),
+        message: lint.message,
+        related_information: None,
+        tags: None,
+        data: None,
     }
 }
 
@@ -711,7 +750,7 @@ mod tests {
     #[test]
     fn style_lint_diagnostic_carries_quick_fix_payload() {
         let src = "delete e (confidence=high)\n";
-        let diagnostics = canonical_style_diagnostics(src);
+        let diagnostics = canonical_style_diagnostics(src, &[]);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(
             diagnostics[0].code,
@@ -744,5 +783,43 @@ mod tests {
         let start = offset_at_position(src, edit_range.start).expect("start offset");
         let end = offset_at_position(src, edit_range.end).expect("end offset");
         assert_eq!(&src[start..end], "A.score");
+    }
+
+    #[test]
+    fn style_lint_is_suppressed_by_pragma() {
+        let src = "// grafial-lint: ignore(canonical_inline_args)\ndelete e (confidence=high)\n";
+        let suppressions = collect_lint_suppressions(src);
+        let diagnostics = canonical_style_diagnostics(src, &suppressions);
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn statistical_lints_surface_stable_codes() {
+        let src = r#"
+schema S { node N { x: Real } edge E { } }
+belief_model M on S {
+  node N { x ~ Gaussian(mean=0.0, precision=500.0) }
+  edge E { exist ~ Bernoulli(prior=0.5, weight=2.0) }
+}
+evidence Ev on M { N { "a" { x: 0.0 } } E(N -> N) { "a" -> "a" } }
+rule R on M {
+  pattern (A:N)-[ab:E]->(B:N)
+  where prob(ab) > 0.1 and prob(ab) > 0.2 and prob(ab) > 0.3
+  action { delete ab confidence=low }
+}
+flow F on M { graph g = from_evidence Ev }
+"#;
+        let ast = parse_program(src).expect("parse");
+        let diagnostics = statistical_guardrail_diagnostics(&ast, src);
+        let codes: Vec<String> = diagnostics
+            .iter()
+            .filter_map(|diag| match &diag.code {
+                Some(lsp::NumberOrString::String(code)) => Some(code.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(codes.contains(&"stat_prior_dominance".into()));
+        assert!(codes.contains(&"stat_multiple_testing".into()));
+        assert!(codes.contains(&"stat_delete_explanation".into()));
     }
 }
