@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 description = "Integration and unit tests for Grafial"
 
+[features]
+default = []
+parallel = ["grafial-core/parallel"]
+serde = ["grafial-core/serde"]
+
 [[test]]
 name = "integration_tests"
 path = "tests/integration_tests.rs"

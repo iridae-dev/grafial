@@ -32,12 +32,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bincode = "1"
 rayon = "1"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+num_cpus = "1"
 pyo3 = { version = "0.21", features = ["auto-initialize"] }
 cranelift-codegen = "0.125"
 cranelift-frontend = "0.125"
 cranelift-jit = "0.125"
 cranelift-module = "0.125"
 cranelift-native = "0.125"
+cranelift-object = "0.125"
 
 [workspace.dependencies.pretty_assertions]
 version = "1"

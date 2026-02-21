@@ -34,35 +34,31 @@ fn bench_gaussian_scalar(c: &mut Criterion) {
     let mut group = c.benchmark_group("gaussian_updates");
 
     for num_obs in [10, 100, 1000] {
-        group.bench_with_input(
-            BenchmarkId::new("scalar", num_obs),
-            &num_obs,
-            |b, &n| {
-                b.iter(|| {
-                    let mut posterior = GaussianPosterior {
-                        mean: 0.0,
-                        precision: 1.0,
+        group.bench_with_input(BenchmarkId::new("scalar", num_obs), &num_obs, |b, &n| {
+            b.iter(|| {
+                let mut posterior = GaussianPosterior {
+                    mean: 0.0,
+                    precision: 1.0,
+                };
+
+                for i in 0..n {
+                    let value = i as f64;
+                    let tau_obs = 1.0;
+
+                    // Simulate scalar update (from graph.rs observe_attr logic)
+                    let tau_old = posterior.precision;
+                    let tau_new = tau_old + tau_obs;
+                    let mu_new = (tau_old * posterior.mean + tau_obs * value) / tau_new;
+
+                    posterior = GaussianPosterior {
+                        mean: mu_new,
+                        precision: tau_new,
                     };
+                }
 
-                    for i in 0..n {
-                        let value = i as f64;
-                        let tau_obs = 1.0;
-
-                        // Simulate scalar update (from graph.rs observe_attr logic)
-                        let tau_old = posterior.precision;
-                        let tau_new = tau_old + tau_obs;
-                        let mu_new = (tau_old * posterior.mean + tau_obs * value) / tau_new;
-
-                        posterior = GaussianPosterior {
-                            mean: mu_new,
-                            precision: tau_new,
-                        };
-                    }
-
-                    black_box(posterior)
-                });
-            },
-        );
+                black_box(posterior)
+            });
+        });
     }
 
     group.finish();
@@ -84,9 +80,7 @@ fn bench_gaussian_vectorized(c: &mut Criterion) {
                         precision: 1.0,
                     };
 
-                    let observations: Vec<(f64, f64)> = (0..n)
-                        .map(|i| (i as f64, 1.0))
-                        .collect();
+                    let observations: Vec<(f64, f64)> = (0..n).map(|i| (i as f64, 1.0)).collect();
 
                     let result = gaussian_batch_update(&prior, &observations).unwrap();
                     black_box(result)
@@ -103,31 +97,27 @@ fn bench_beta_scalar(c: &mut Criterion) {
     let mut group = c.benchmark_group("beta_updates");
 
     for num_obs in [10, 100, 1000] {
-        group.bench_with_input(
-            BenchmarkId::new("scalar", num_obs),
-            &num_obs,
-            |b, &n| {
-                b.iter(|| {
-                    let mut posterior = BetaPosterior {
-                        alpha: 1.0,
-                        beta: 1.0,
-                    };
+        group.bench_with_input(BenchmarkId::new("scalar", num_obs), &num_obs, |b, &n| {
+            b.iter(|| {
+                let mut posterior = BetaPosterior {
+                    alpha: 1.0,
+                    beta: 1.0,
+                };
 
-                    for i in 0..n {
-                        let present = i % 2 == 0;
+                for i in 0..n {
+                    let present = i % 2 == 0;
 
-                        // Simulate scalar update (from graph.rs observe_edge logic)
-                        if present {
-                            posterior.alpha += 1.0;
-                        } else {
-                            posterior.beta += 1.0;
-                        }
+                    // Simulate scalar update (from graph.rs observe_edge logic)
+                    if present {
+                        posterior.alpha += 1.0;
+                    } else {
+                        posterior.beta += 1.0;
                     }
+                }
 
-                    black_box(posterior)
-                });
-            },
-        );
+                black_box(posterior)
+            });
+        });
     }
 
     group.finish();
@@ -149,9 +139,7 @@ fn bench_beta_vectorized(c: &mut Criterion) {
                         beta: 1.0,
                     };
 
-                    let observations: Vec<bool> = (0..n)
-                        .map(|i| i % 2 == 0)
-                        .collect();
+                    let observations: Vec<bool> = (0..n).map(|i| i % 2 == 0).collect();
 
                     let result = beta_batch_update(&prior, &observations).unwrap();
                     black_box(result)
@@ -190,14 +178,18 @@ fn bench_evidence_pipeline(c: &mut Criterion) {
                                 .map(|i| (i as f64, 1.0))
                                 .collect();
 
-                            graph.observe_attr_batch(node_id, &attr_name, &observations).unwrap();
+                            graph
+                                .observe_attr_batch(node_id, &attr_name, &observations)
+                                .unwrap();
                         }
 
                         #[cfg(not(feature = "vectorized"))]
                         {
                             // Scalar path: apply observations one by one
                             for i in 0..observations_per_node {
-                                graph.observe_attr(node_id, &attr_name, i as f64, 1.0).unwrap();
+                                graph
+                                    .observe_attr(node_id, &attr_name, i as f64, 1.0)
+                                    .unwrap();
                             }
                         }
                     }

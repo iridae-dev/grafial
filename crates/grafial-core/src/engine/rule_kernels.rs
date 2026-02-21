@@ -19,7 +19,7 @@
 #[cfg(feature = "jit")]
 use cranelift_codegen::ir::condcodes::FloatCC;
 #[cfg(feature = "jit")]
-use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Value, types};
+use cranelift_codegen::ir::{types, AbiParam, InstBuilder, MemFlags, Value};
 #[cfg(feature = "jit")]
 use cranelift_codegen::settings::{self, Configurable};
 #[cfg(feature = "jit")]
@@ -80,15 +80,18 @@ impl RuleKernelCache {
     #[cfg(feature = "jit")]
     fn init_jit_module() -> Result<JITModule, ExecError> {
         let mut flag_builder = settings::builder();
-        flag_builder.set("use_colocated_libcalls", "false")
+        flag_builder
+            .set("use_colocated_libcalls", "false")
             .map_err(|e| ExecError::Internal(format!("Failed to set cranelift flag: {}", e)))?;
-        flag_builder.set("is_pic", "false")
+        flag_builder
+            .set("is_pic", "false")
             .map_err(|e| ExecError::Internal(format!("Failed to set cranelift flag: {}", e)))?;
 
         let isa_builder = cranelift_native::builder()
             .map_err(|msg| ExecError::Internal(format!("Host machine not supported: {}", msg)))?;
 
-        let isa = isa_builder.finish(settings::Flags::new(flag_builder))
+        let isa = isa_builder
+            .finish(settings::Flags::new(flag_builder))
             .map_err(|e| ExecError::Internal(format!("Failed to create ISA: {}", e)))?;
 
         let builder = JITBuilder::with_isa(isa, default_libcall_names());
@@ -135,9 +138,10 @@ impl RuleKernelCache {
         predicate: Option<&ExprAst>,
         _actions: &[grafial_frontend::ast::ActionStmt],
     ) -> Result<Arc<CompiledRuleKernel>, ExecError> {
-        let module = self.jit_module.as_mut().ok_or_else(|| {
-            ExecError::Internal("JIT module not initialized".to_string())
-        })?;
+        let module = self
+            .jit_module
+            .as_mut()
+            .ok_or_else(|| ExecError::Internal("JIT module not initialized".to_string()))?;
 
         // Extract variable names from predicate
         let mut node_vars = Vec::new();
@@ -205,6 +209,12 @@ impl RuleKernelCache {
     }
 }
 
+impl Default for RuleKernelCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Extract variable names from an expression for binding marshalling.
 fn extract_variables(
     expr: &ExprAst,
@@ -215,7 +225,7 @@ fn extract_variables(
     match expr {
         ExprAst::Var(name) => {
             // Heuristic: uppercase = node var, lowercase = edge/global var
-            if name.chars().next().map_or(false, |c| c.is_uppercase()) {
+            if name.chars().next().is_some_and(|c| c.is_uppercase()) {
                 if !node_vars.contains(name) {
                     node_vars.push(name.clone());
                 }
@@ -272,18 +282,17 @@ fn compile_predicate_kernel(
     let node_ptr = builder.block_params(entry_block)[0];
     let edge_ptr = builder.block_params(entry_block)[1];
     let global_ptr = builder.block_params(entry_block)[2];
-
-    // Compile the expression
-    let result = compile_expr(
-        &mut builder,
-        expr,
+    let compile_ctx = ExprCompileCtx {
         node_ptr,
         edge_ptr,
         global_ptr,
         node_var_indices,
         edge_var_indices,
         global_var_indices,
-    )?;
+    };
+
+    // Compile the expression
+    let result = compile_expr(&mut builder, expr, &compile_ctx)?;
 
     // Convert to boolean (0 or 1)
     let zero = builder.ins().f64const(0.0);
@@ -304,11 +313,7 @@ fn compile_predicate_kernel(
     let func_name = format!("rule_predicate_{}", counter);
 
     let id = module
-        .declare_function(
-            &func_name,
-            Linkage::Local,
-            &ctx.func.signature,
-        )
+        .declare_function(&func_name, Linkage::Local, &ctx.func.signature)
         .map_err(|e| ExecError::Internal(format!("Failed to declare function: {}", e)))?;
 
     // Enable verification for debugging
@@ -324,70 +329,70 @@ fn compile_predicate_kernel(
         .map_err(|e| ExecError::Internal(format!("Failed to define function: {}", e)))?;
 
     module.clear_context(&mut ctx);
-    module.finalize_definitions().unwrap();
+    module
+        .finalize_definitions()
+        .map_err(|e| ExecError::Internal(format!("Failed to finalize JIT definitions: {}", e)))?;
 
     let code_ptr = module.get_finalized_function(id);
-    Ok(unsafe { std::mem::transmute(code_ptr) })
+    Ok(unsafe { std::mem::transmute::<*const u8, CompiledPredicateFn>(code_ptr) })
 }
 
 /// Compile an expression to Cranelift IR.
 #[cfg(feature = "jit")]
-fn compile_expr(
-    builder: &mut FunctionBuilder<'_>,
-    expr: &ExprAst,
+struct ExprCompileCtx<'a> {
     node_ptr: Value,
     edge_ptr: Value,
     global_ptr: Value,
-    node_var_indices: &HashMap<String, usize>,
-    edge_var_indices: &HashMap<String, usize>,
-    global_var_indices: &HashMap<String, usize>,
+    node_var_indices: &'a HashMap<String, usize>,
+    edge_var_indices: &'a HashMap<String, usize>,
+    global_var_indices: &'a HashMap<String, usize>,
+}
+
+#[cfg(feature = "jit")]
+impl ExprCompileCtx<'_> {
+    fn load_var(&self, builder: &mut FunctionBuilder<'_>, name: &str) -> Result<Value, ExecError> {
+        if let Some(&idx) = self.node_var_indices.get(name) {
+            Ok(load_f64_from_ptr(builder, self.node_ptr, idx))
+        } else if let Some(&idx) = self.edge_var_indices.get(name) {
+            Ok(load_f64_from_ptr(builder, self.edge_ptr, idx))
+        } else if let Some(&idx) = self.global_var_indices.get(name) {
+            Ok(load_f64_from_ptr(builder, self.global_ptr, idx))
+        } else {
+            Err(ExecError::Internal(format!(
+                "Variable '{}' not found in bindings",
+                name
+            )))
+        }
+    }
+}
+
+#[cfg(feature = "jit")]
+fn load_f64_from_ptr(builder: &mut FunctionBuilder<'_>, base_ptr: Value, idx: usize) -> Value {
+    let offset = (idx * std::mem::size_of::<f64>()) as i64;
+    let addr = builder.ins().iadd_imm(base_ptr, offset);
+    builder.ins().load(types::F64, MemFlags::new(), addr, 0)
+}
+
+#[cfg(feature = "jit")]
+fn bool_to_f64(builder: &mut FunctionBuilder<'_>, condition: Value) -> Value {
+    let extended = builder.ins().uextend(types::I32, condition);
+    builder.ins().fcvt_from_uint(types::F64, extended)
+}
+
+#[cfg(feature = "jit")]
+fn compile_expr(
+    builder: &mut FunctionBuilder<'_>,
+    expr: &ExprAst,
+    ctx: &ExprCompileCtx<'_>,
 ) -> Result<Value, ExecError> {
     match expr {
         ExprAst::Number(n) => Ok(builder.ins().f64const(*n)),
 
-        ExprAst::Var(name) => {
-            // Load variable from appropriate binding array
-            if let Some(&idx) = node_var_indices.get(name) {
-                let offset = (idx * 8) as i32; // f64 is 8 bytes
-                let addr = builder.ins().iadd_imm(node_ptr, offset as i64);
-                Ok(builder.ins().load(types::F64, MemFlags::new(), addr, 0))
-            } else if let Some(&idx) = edge_var_indices.get(name) {
-                let offset = (idx * 8) as i32;
-                let addr = builder.ins().iadd_imm(edge_ptr, offset as i64);
-                Ok(builder.ins().load(types::F64, MemFlags::new(), addr, 0))
-            } else if let Some(&idx) = global_var_indices.get(name) {
-                let offset = (idx * 8) as i32;
-                let addr = builder.ins().iadd_imm(global_ptr, offset as i64);
-                Ok(builder.ins().load(types::F64, MemFlags::new(), addr, 0))
-            } else {
-                Err(ExecError::Internal(format!(
-                    "Variable '{}' not found in bindings",
-                    name
-                )))
-            }
-        }
+        ExprAst::Var(name) => ctx.load_var(builder, name),
 
         ExprAst::Binary { op, left, right } => {
-            let lhs = compile_expr(
-                builder,
-                left,
-                node_ptr,
-                edge_ptr,
-                global_ptr,
-                node_var_indices,
-                edge_var_indices,
-                global_var_indices,
-            )?;
-            let rhs = compile_expr(
-                builder,
-                right,
-                node_ptr,
-                edge_ptr,
-                global_ptr,
-                node_var_indices,
-                edge_var_indices,
-                global_var_indices,
-            )?;
+            let lhs = compile_expr(builder, left, ctx)?;
+            let rhs = compile_expr(builder, right, ctx)?;
 
             let result = match op {
                 BinaryOp::Add => builder.ins().fadd(lhs, rhs),
@@ -396,33 +401,27 @@ fn compile_expr(
                 BinaryOp::Div => builder.ins().fdiv(lhs, rhs),
                 BinaryOp::Lt => {
                     let cmp = builder.ins().fcmp(FloatCC::LessThan, lhs, rhs);
-                    let extended = builder.ins().uextend(types::I32, cmp);
-                    builder.ins().fcvt_from_uint(types::F64, extended)
+                    bool_to_f64(builder, cmp)
                 }
                 BinaryOp::Le => {
                     let cmp = builder.ins().fcmp(FloatCC::LessThanOrEqual, lhs, rhs);
-                    let extended = builder.ins().uextend(types::I32, cmp);
-                    builder.ins().fcvt_from_uint(types::F64, extended)
+                    bool_to_f64(builder, cmp)
                 }
                 BinaryOp::Gt => {
                     let cmp = builder.ins().fcmp(FloatCC::GreaterThan, lhs, rhs);
-                    let extended = builder.ins().uextend(types::I32, cmp);
-                    builder.ins().fcvt_from_uint(types::F64, extended)
+                    bool_to_f64(builder, cmp)
                 }
                 BinaryOp::Ge => {
                     let cmp = builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs);
-                    let extended = builder.ins().uextend(types::I32, cmp);
-                    builder.ins().fcvt_from_uint(types::F64, extended)
+                    bool_to_f64(builder, cmp)
                 }
                 BinaryOp::Eq => {
                     let cmp = builder.ins().fcmp(FloatCC::Equal, lhs, rhs);
-                    let extended = builder.ins().uextend(types::I32, cmp);
-                    builder.ins().fcvt_from_uint(types::F64, extended)
+                    bool_to_f64(builder, cmp)
                 }
                 BinaryOp::Ne => {
                     let cmp = builder.ins().fcmp(FloatCC::NotEqual, lhs, rhs);
-                    let extended = builder.ins().uextend(types::I32, cmp);
-                    builder.ins().fcvt_from_uint(types::F64, extended)
+                    bool_to_f64(builder, cmp)
                 }
                 BinaryOp::And => {
                     // Logical AND: both non-zero
@@ -430,8 +429,7 @@ fn compile_expr(
                     let lhs_true = builder.ins().fcmp(FloatCC::NotEqual, lhs, zero);
                     let rhs_true = builder.ins().fcmp(FloatCC::NotEqual, rhs, zero);
                     let both = builder.ins().band(lhs_true, rhs_true);
-                    let extended = builder.ins().uextend(types::I32, both);
-                    builder.ins().fcvt_from_uint(types::F64, extended)
+                    bool_to_f64(builder, both)
                 }
                 BinaryOp::Or => {
                     // Logical OR: either non-zero
@@ -439,32 +437,21 @@ fn compile_expr(
                     let lhs_true = builder.ins().fcmp(FloatCC::NotEqual, lhs, zero);
                     let rhs_true = builder.ins().fcmp(FloatCC::NotEqual, rhs, zero);
                     let either = builder.ins().bor(lhs_true, rhs_true);
-                    let extended = builder.ins().uextend(types::I32, either);
-                    builder.ins().fcvt_from_uint(types::F64, extended)
+                    bool_to_f64(builder, either)
                 }
             };
             Ok(result)
         }
 
         ExprAst::Unary { op, expr } => {
-            let val = compile_expr(
-                builder,
-                expr,
-                node_ptr,
-                edge_ptr,
-                global_ptr,
-                node_var_indices,
-                edge_var_indices,
-                global_var_indices,
-            )?;
+            let val = compile_expr(builder, expr, ctx)?;
 
             let result = match op {
                 UnaryOp::Neg => builder.ins().fneg(val),
                 UnaryOp::Not => {
                     let zero = builder.ins().f64const(0.0);
                     let is_zero = builder.ins().fcmp(FloatCC::Equal, val, zero);
-                    let extended = builder.ins().uextend(types::I32, is_zero);
-                    builder.ins().fcvt_from_uint(types::F64, extended)
+                    bool_to_f64(builder, is_zero)
                 }
             };
             Ok(result)
@@ -515,7 +502,11 @@ mod tests {
         };
 
         let result = cache.compile_rule("test_rule_1", Some(&predicate1), &[]);
-        assert!(result.is_ok(), "Compilation of numeric predicate failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Compilation of numeric predicate failed: {:?}",
+            result.err()
+        );
 
         let kernel = result.unwrap();
         assert!(kernel.predicate.is_some());
@@ -536,6 +527,10 @@ mod tests {
         };
 
         let result2 = cache.compile_rule("test_rule_2", Some(&predicate2), &[]);
-        assert!(result2.is_ok(), "Compilation of complex predicate failed: {:?}", result2.err());
+        assert!(
+            result2.is_ok(),
+            "Compilation of complex predicate failed: {:?}",
+            result2.err()
+        );
     }
 }

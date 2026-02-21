@@ -7,6 +7,12 @@
 //! - **rule_exec**: Pattern matching and rule execution engine
 //! - **flow_exec**: Flow execution and graph transformation pipelines
 
+pub mod adjacency_index;
+#[cfg(any(feature = "aot", test))]
+pub mod aot_flows;
+#[cfg(feature = "aot")]
+pub mod aot_integration;
+pub mod arena_allocator;
 pub mod errors;
 pub mod evidence;
 pub mod expr_eval;
@@ -15,6 +21,16 @@ pub mod flow_exec;
 pub mod graph;
 #[cfg(feature = "jit")]
 pub mod jit_backend;
+#[cfg(feature = "parallel")]
+pub mod parallel_evidence;
+#[cfg(feature = "parallel")]
+pub mod parallel_flow;
+#[cfg(feature = "parallel")]
+pub mod parallel_graph;
+#[cfg(feature = "parallel")]
+pub mod parallel_metrics;
+#[cfg(feature = "parallel")]
+pub mod parallel_rules;
 pub mod query_plan;
 pub mod rule_exec;
 #[cfg(feature = "jit")]

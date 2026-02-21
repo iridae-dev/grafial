@@ -270,7 +270,13 @@ mod tests {
 
         // Create a unique rule to avoid cache conflicts
         let rule = RuleDef {
-            name: format!("threshold_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()),
+            name: format!(
+                "threshold_test_{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ),
             on_model: "test_model".to_string(),
             patterns: vec![PatternItem {
                 src: NodePattern {

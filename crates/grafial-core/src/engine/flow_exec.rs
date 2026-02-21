@@ -11,23 +11,27 @@
 //! legacy register-bytecode interpreter is used instead.  Both paths share the same
 //! hot-expression detection and caching infrastructure (`eval_hot_metric_with_cache` /
 //! `eval_hot_prune_with_cache`) and provide identical deterministic fallback behaviour.
+#![cfg_attr(feature = "parallel", allow(dead_code))]
 
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::sync::Mutex;
 
 use crate::engine::errors::ExecError;
 use crate::engine::evidence::build_graph_from_evidence_ir;
-use crate::engine::expr_eval::{eval_expr_core, ExprContext};
 #[cfg(not(feature = "jit"))]
 use crate::engine::expr_eval::{eval_binary_op, eval_unary_op};
+use crate::engine::expr_eval::{eval_expr_core, ExprContext};
 use crate::engine::graph::{BeliefGraph, EdgeId};
 use crate::engine::rule_exec::run_rule_for_each_with_globals_audit;
 use crate::metrics::{eval_metric_expr, MetricContext, MetricRegistry};
 use grafial_frontend::ast::RuleDef;
 use grafial_frontend::{CallArg, ExprAst, ProgramAst};
-use grafial_ir::{EvidenceIR, ExprIR, FlowIR, GraphExprIR, MetricImportDefIR, ProgramIR, RuleIR, TransformIR};
 #[cfg(not(feature = "jit"))]
 use grafial_ir::{BinaryOpIR, CallArgIR, UnaryOpIR};
+use grafial_ir::{
+    EvidenceIR, ExprIR, FlowIR, GraphExprIR, MetricImportDefIR, ProgramIR, RuleIR, TransformIR,
+};
 
 // When the `jit` feature is active, bring in the real Cranelift compiled types.
 #[cfg(feature = "jit")]
@@ -411,10 +415,12 @@ impl<'a> FlowExprEvaluator for CraneliftExprEvaluator<'a> {
         };
         eval_hot_metric_with_cache(
             &mut self.state.profile,
-            &mut self.state.metric_entries,
-            self.config.metric_compile_threshold,
-            key,
-            expr,
+            HotEvalRequest {
+                entries: &mut self.state.metric_entries,
+                compile_threshold: self.config.metric_compile_threshold,
+                key,
+                expr,
+            },
             jit_compile_metric,
             |compiled| jit_eval_metric(compiled, ctx),
             || {
@@ -440,10 +446,12 @@ impl<'a> FlowExprEvaluator for CraneliftExprEvaluator<'a> {
         };
         eval_hot_prune_with_cache(
             &mut self.state.profile,
-            &mut self.state.prune_entries,
-            self.config.prune_compile_threshold,
-            key,
-            expr,
+            HotEvalRequest {
+                entries: &mut self.state.prune_entries,
+                compile_threshold: self.config.prune_compile_threshold,
+                key,
+                expr,
+            },
             jit_compile_prune,
             |compiled| jit_eval_prune(compiled, graph, edge),
             || {
@@ -517,23 +525,43 @@ fn jit_eval_prune(
     compiled.eval(graph, edge)
 }
 
-fn eval_hot_metric_with_cache<Compiled, CompileFn, EvalFn, FallbackFn>(
-    profile: &mut JitProfile,
-    entries: &mut HashMap<MetricExprKey, JitEntry<Compiled>>,
+#[allow(clippy::too_many_arguments)]
+struct HotEvalRequest<'a, K, Compiled> {
+    entries: &'a mut HashMap<K, JitEntry<Compiled>>,
     compile_threshold: usize,
-    key: MetricExprKey,
-    expr: &ExprIR,
+    key: K,
+    expr: &'a ExprIR,
+}
+
+struct HotEvalCounters<'a> {
+    eval_count: &'a mut usize,
+    compile_count: &'a mut usize,
+    cache_hits: &'a mut usize,
+    fallback_count: &'a mut usize,
+}
+
+fn eval_hot_with_cache<K, Compiled, CompileFn, EvalFn, FallbackFn>(
+    counters: HotEvalCounters<'_>,
+    request: HotEvalRequest<'_, K, Compiled>,
     compile_expr: CompileFn,
     eval_compiled: EvalFn,
     fallback_eval: FallbackFn,
 ) -> Result<f64, ExecError>
 where
+    K: Eq + Hash + Clone,
     Compiled: Clone,
     CompileFn: Fn(&ExprIR) -> Option<Compiled>,
     EvalFn: Fn(&Compiled) -> Result<f64, ExecError>,
     FallbackFn: FnOnce() -> Result<f64, ExecError>,
 {
-    profile.metric_eval_count += 1;
+    *counters.eval_count += 1;
+
+    let HotEvalRequest {
+        entries,
+        compile_threshold,
+        key,
+        expr,
+    } = request;
 
     let threshold = compile_threshold.max(1);
     let mut cached_expr = None;
@@ -549,10 +577,10 @@ where
     }
 
     if cached_expr.is_some() {
-        profile.metric_cache_hits += 1;
+        *counters.cache_hits += 1;
     } else if should_try_compile {
         if let Some(compiled) = compile_expr(expr) {
-            profile.metric_compile_count += 1;
+            *counters.compile_count += 1;
             entries.entry(key.clone()).or_default().compiled = Some(compiled.clone());
             cached_expr = Some(compiled);
         } else {
@@ -569,16 +597,13 @@ where
         }
     }
 
-    profile.metric_fallback_count += 1;
+    *counters.fallback_count += 1;
     fallback_eval()
 }
 
 fn eval_hot_prune_with_cache<Compiled, CompileFn, EvalFn, FallbackFn>(
     profile: &mut JitProfile,
-    entries: &mut HashMap<PruneExprKey, JitEntry<Compiled>>,
-    compile_threshold: usize,
-    key: PruneExprKey,
-    expr: &ExprIR,
+    request: HotEvalRequest<'_, PruneExprKey, Compiled>,
     compile_expr: CompileFn,
     eval_compiled: EvalFn,
     fallback_eval: FallbackFn,
@@ -589,44 +614,45 @@ where
     EvalFn: Fn(&Compiled) -> Result<f64, ExecError>,
     FallbackFn: FnOnce() -> Result<f64, ExecError>,
 {
-    profile.prune_eval_count += 1;
+    eval_hot_with_cache(
+        HotEvalCounters {
+            eval_count: &mut profile.prune_eval_count,
+            compile_count: &mut profile.prune_compile_count,
+            cache_hits: &mut profile.prune_cache_hits,
+            fallback_count: &mut profile.prune_fallback_count,
+        },
+        request,
+        compile_expr,
+        eval_compiled,
+        fallback_eval,
+    )
+}
 
-    let threshold = compile_threshold.max(1);
-    let mut cached_expr = None;
-    let mut should_try_compile = false;
-    {
-        let entry = entries.entry(key.clone()).or_default();
-        entry.eval_count += 1;
-        if let Some(compiled) = &entry.compiled {
-            cached_expr = Some(compiled.clone());
-        } else {
-            should_try_compile = !entry.permanently_interpreted && entry.eval_count >= threshold;
-        }
-    }
-
-    if cached_expr.is_some() {
-        profile.prune_cache_hits += 1;
-    } else if should_try_compile {
-        if let Some(compiled) = compile_expr(expr) {
-            profile.prune_compile_count += 1;
-            entries.entry(key.clone()).or_default().compiled = Some(compiled.clone());
-            cached_expr = Some(compiled);
-        } else {
-            entries
-                .entry(key.clone())
-                .or_default()
-                .permanently_interpreted = true;
-        }
-    }
-
-    if let Some(compiled) = cached_expr {
-        if let Ok(value) = eval_compiled(&compiled) {
-            return Ok(value);
-        }
-    }
-
-    profile.prune_fallback_count += 1;
-    fallback_eval()
+fn eval_hot_metric_with_cache<Compiled, CompileFn, EvalFn, FallbackFn>(
+    profile: &mut JitProfile,
+    request: HotEvalRequest<'_, MetricExprKey, Compiled>,
+    compile_expr: CompileFn,
+    eval_compiled: EvalFn,
+    fallback_eval: FallbackFn,
+) -> Result<f64, ExecError>
+where
+    Compiled: Clone,
+    CompileFn: Fn(&ExprIR) -> Option<Compiled>,
+    EvalFn: Fn(&Compiled) -> Result<f64, ExecError>,
+    FallbackFn: FnOnce() -> Result<f64, ExecError>,
+{
+    eval_hot_with_cache(
+        HotEvalCounters {
+            eval_count: &mut profile.metric_eval_count,
+            compile_count: &mut profile.metric_compile_count,
+            cache_hits: &mut profile.metric_cache_hits,
+            fallback_count: &mut profile.metric_fallback_count,
+        },
+        request,
+        compile_expr,
+        eval_compiled,
+        fallback_eval,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1076,17 +1102,16 @@ fn run_flow_internal<B: GraphBuilder, E: FlowExprEvaluator>(
                     })?
                     .clone();
                 for (transform_idx, transform) in transforms.iter().enumerate() {
-                    current = apply_transform(
-                        transform,
-                        &current,
-                        &rule_defs_by_name,
-                        &rule_globals,
+                    let mut transform_ctx = TransformExecutionCtx {
+                        rules_by_name: &rule_defs_by_name,
+                        rule_globals: &rule_globals,
                         flow_name,
-                        &graph_def.name,
+                        graph_name: &graph_def.name,
                         transform_idx,
-                        &mut result,
+                        result: &mut result,
                         expr_evaluator,
-                    )?;
+                    };
+                    current = apply_transform(transform, &current, &mut transform_ctx)?;
                 }
                 current
             }
@@ -1288,28 +1313,34 @@ fn lookup_graph_from_prior(
         })
 }
 
+/// Mutable runtime context for a single pipeline transform.
+struct TransformExecutionCtx<'a, E: FlowExprEvaluator> {
+    rules_by_name: &'a HashMap<String, RuleDef>,
+    rule_globals: &'a HashMap<String, f64>,
+    flow_name: &'a str,
+    graph_name: &'a str,
+    transform_idx: usize,
+    result: &'a mut FlowResult,
+    expr_evaluator: &'a mut E,
+}
+
 /// Applies a single transform to a graph, returning a new graph.
 fn apply_transform<E: FlowExprEvaluator>(
     transform: &TransformIR,
     graph: &BeliefGraph,
-    rules_by_name: &HashMap<String, RuleDef>,
-    rule_globals: &HashMap<String, f64>,
-    flow_name: &str,
-    graph_name: &str,
-    transform_idx: usize,
-    result: &mut FlowResult,
-    expr_evaluator: &mut E,
+    ctx: &mut TransformExecutionCtx<'_, E>,
 ) -> Result<BeliefGraph, ExecError> {
     match transform {
         TransformIR::ApplyRule { rule, .. } => {
-            let r = rules_by_name
+            let r = ctx
+                .rules_by_name
                 .get(rule)
                 .ok_or_else(|| ExecError::Internal(format!("unknown rule '{}'", rule)))?;
-            let (next, audit) = run_rule_for_each_with_globals_audit(graph, r, rule_globals)?;
-            result.intervention_audit.push(InterventionAuditEvent {
-                flow: flow_name.to_string(),
-                graph: graph_name.to_string(),
-                transform: format!("apply_rule#{}", transform_idx),
+            let (next, audit) = run_rule_for_each_with_globals_audit(graph, r, ctx.rule_globals)?;
+            ctx.result.intervention_audit.push(InterventionAuditEvent {
+                flow: ctx.flow_name.to_string(),
+                graph: ctx.graph_name.to_string(),
+                transform: format!("apply_rule#{}", ctx.transform_idx),
                 rule: audit.rule_name,
                 mode: audit.mode,
                 matched_bindings: audit.matched_bindings,
@@ -1321,15 +1352,15 @@ fn apply_transform<E: FlowExprEvaluator>(
             // Sequential application: each rule receives the previous rule's output
             let mut current = graph.clone();
             for (rule_idx, rule_name) in rules.iter().enumerate() {
-                let r = rules_by_name.get(rule_name).ok_or_else(|| {
+                let r = ctx.rules_by_name.get(rule_name).ok_or_else(|| {
                     ExecError::Internal(format!("unknown rule '{}' in ruleset", rule_name))
                 })?;
                 let (next, audit) =
-                    run_rule_for_each_with_globals_audit(&current, r, rule_globals)?;
-                result.intervention_audit.push(InterventionAuditEvent {
-                    flow: flow_name.to_string(),
-                    graph: graph_name.to_string(),
-                    transform: format!("apply_ruleset#{}[{}]", transform_idx, rule_idx),
+                    run_rule_for_each_with_globals_audit(&current, r, ctx.rule_globals)?;
+                ctx.result.intervention_audit.push(InterventionAuditEvent {
+                    flow: ctx.flow_name.to_string(),
+                    graph: ctx.graph_name.to_string(),
+                    transform: format!("apply_ruleset#{}[{}]", ctx.transform_idx, rule_idx),
                     rule: audit.rule_name,
                     mode: audit.mode,
                     matched_bindings: audit.matched_bindings,
@@ -1343,7 +1374,7 @@ fn apply_transform<E: FlowExprEvaluator>(
             // Ensure deltas are applied before snapshotting
             let mut snapshot_graph = graph.clone();
             snapshot_graph.ensure_owned();
-            result.snapshots.insert(name.clone(), snapshot_graph);
+            ctx.result.snapshots.insert(name.clone(), snapshot_graph);
             Ok(graph.clone())
         }
         TransformIR::PruneEdges {
@@ -1353,10 +1384,10 @@ fn apply_transform<E: FlowExprEvaluator>(
             graph,
             edge_type,
             predicate,
-            flow_name,
-            graph_name,
-            transform_idx,
-            expr_evaluator,
+            ctx.flow_name,
+            ctx.graph_name,
+            ctx.transform_idx,
+            ctx.expr_evaluator,
         ),
     }
 }
@@ -1386,6 +1417,7 @@ fn evaluate_metrics<E: FlowExprEvaluator>(
         .get(last_graph_name)
         .ok_or_else(|| ExecError::Internal("metric target graph missing".into()))?;
 
+    // Sequential metric evaluation.
     let registry = MetricRegistry::with_builtins();
     let mut ctx = MetricContext {
         metrics: import_metric_bindings(&flow.metric_imports, prior),
@@ -2106,6 +2138,7 @@ mod tests {
         assert_eq!(result.metrics.get("backend_marker"), Some(&4.0));
     }
 
+    #[cfg(feature = "jit")]
     fn build_phase10_hot_expr_program() -> ProgramIR {
         ProgramIR {
             schemas: vec![],
@@ -2181,6 +2214,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "jit")]
     fn cranelift_jit_backend_compiles_hot_exprs_with_interpreter_parity() {
         let program = build_phase10_hot_expr_program();
         let mut prior = FlowResult::default();

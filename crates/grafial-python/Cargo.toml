@@ -8,6 +8,7 @@ description = "Python bindings for Grafial"
 [lib]
 name = "grafial"
 crate-type = ["cdylib", "rlib"]
+test = false
 
 [dependencies]
 grafial-core = { path = "../grafial-core" }
@@ -16,4 +17,3 @@ pyo3 = { workspace = true, features = ["auto-initialize"] }
 
 [features]
 default = []
-

@@ -17,11 +17,15 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 bincode = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
+crossbeam-channel = { workspace = true, optional = true }
+parking_lot = { workspace = true }
+num_cpus = { workspace = true, optional = true }
 cranelift-codegen = { workspace = true, optional = true }
 cranelift-frontend = { workspace = true, optional = true }
 cranelift-jit = { workspace = true, optional = true }
 cranelift-module = { workspace = true, optional = true }
 cranelift-native = { workspace = true, optional = true }
+cranelift-object = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -41,7 +45,24 @@ jit = [
     "dep:lazy_static",
 ]
 vectorized = []
+parallel = [
+    "dep:rayon",
+    "dep:crossbeam-channel",
+    "dep:num_cpus",
+]
+aot = [
+    "dep:cranelift-codegen",
+    "dep:cranelift-frontend",
+    "dep:cranelift-module",
+    "dep:cranelift-native",
+    "dep:cranelift-object",
+    "dep:lazy_static",
+]
 
 [[bench]]
 name = "vectorized_evidence"
+harness = false
+
+[[bench]]
+name = "parallel_execution"
 harness = false

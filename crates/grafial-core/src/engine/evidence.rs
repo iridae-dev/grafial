@@ -9,9 +9,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[cfg(feature = "rayon")]
+#[cfg(all(not(feature = "parallel"), feature = "rayon"))]
 use rayon::prelude::*;
 
+#[cfg(feature = "parallel")]
+use super::parallel_evidence::{apply_parallel_results, process_evidence_parallel};
 use crate::engine::errors::ExecError;
 use crate::engine::graph::{
     BeliefGraph, BetaPosterior, CompetingEdgeGroup, CompetingGroupId, DirichletPosterior, EdgeData,
@@ -34,8 +36,34 @@ struct EdgeBuildInput {
     edge_type: String,
 }
 
+#[cfg(not(feature = "parallel"))]
+type EdgeObservation = (EdgeId, EvidenceMode);
+#[cfg(not(feature = "parallel"))]
+type AttrObservationEntry = (NodeId, String, f64, f64);
+#[cfg(not(feature = "parallel"))]
 type AttrObservation = (f64, f64);
+#[cfg(not(feature = "parallel"))]
 type AttrObservationGroup = ((NodeId, String), Vec<AttrObservation>);
+#[cfg(not(feature = "parallel"))]
+type PreparedObservationSplit = (Vec<EdgeObservation>, Vec<AttrObservationEntry>);
+
+#[derive(Debug, Clone)]
+enum PreparedObservation {
+    Edge {
+        edge_id: EdgeId,
+        edge_type: String,
+        src: (String, String),
+        dst: (String, String),
+        mode: EvidenceMode,
+    },
+    Attribute {
+        node_id: NodeId,
+        node: (String, String),
+        attr: String,
+        value: f64,
+        precision: f64,
+    },
+}
 
 /// Builds a BeliefGraph from an evidence definition.
 ///
@@ -143,10 +171,8 @@ fn build_graph_from_evidence_with_context(
         node_map.insert((node_type, label), node_id);
     }
 
-    // Second pass: create edges and collect observations for parallel processing
-    // We need to create all edges first, then apply observations in parallel
-    let mut edge_observations: Vec<(EdgeId, EvidenceMode)> = Vec::new();
-    let mut attr_observations: Vec<(NodeId, String, f64, f64)> = Vec::new(); // (node_id, attr, value, tau_obs)
+    // Second pass: create edges and normalize observations once.
+    let mut prepared_observations = Vec::with_capacity(evidence.observations.len());
 
     for obs in &evidence.observations {
         match obs {
@@ -205,8 +231,13 @@ fn build_graph_from_evidence_with_context(
                         )?
                     };
 
-                // Collect observation for parallel processing
-                edge_observations.push((edge_id, mode.clone()));
+                prepared_observations.push(PreparedObservation::Edge {
+                    edge_id,
+                    edge_type: edge_type.clone(),
+                    src: src.clone(),
+                    dst: dst.clone(),
+                    mode: mode.clone(),
+                });
             }
             ObserveStmt::Attribute {
                 node,
@@ -259,20 +290,116 @@ fn build_graph_from_evidence_with_context(
                     }
                 };
 
-                // Collect observation for parallel processing
-                attr_observations.push((*node_id, attr.clone(), *value, tau_obs));
+                prepared_observations.push(PreparedObservation::Attribute {
+                    node_id: *node_id,
+                    node: node.clone(),
+                    attr: attr.clone(),
+                    value: *value,
+                    precision: tau_obs,
+                });
             }
         }
     }
 
-    // Apply observations in parallel batches
-    // Group by target for deterministic ordering, then process batches in parallel
-    apply_observations_parallel(&mut graph, edge_observations, attr_observations)?;
+    // Apply observations in parallel batches when parallel feature is enabled
+    #[cfg(feature = "parallel")]
+    {
+        let parallel_observations = prepared_to_parallel_observations(&prepared_observations);
+        let parallel_result =
+            process_evidence_parallel(&graph, &parallel_observations, &node_map, &edge_map)?;
+
+        // Apply parallel results to the graph
+        apply_parallel_results(&mut graph, parallel_result)?;
+    }
+
+    #[cfg(not(feature = "parallel"))]
+    {
+        let (edge_observations, attr_observations) =
+            split_prepared_observations(prepared_observations);
+        // Sequential fallback: group by target for deterministic ordering
+        apply_observations_sequential(&mut graph, edge_observations, attr_observations)?;
+    }
 
     // Apply any pending deltas before returning to ensure nodes() and edges() work correctly
     graph.ensure_owned();
 
     Ok(graph)
+}
+
+#[cfg(feature = "parallel")]
+fn prepared_to_parallel_observations(
+    prepared_observations: &[PreparedObservation],
+) -> Vec<ObserveStmt> {
+    prepared_observations
+        .iter()
+        .map(|obs| match obs {
+            PreparedObservation::Edge {
+                edge_id,
+                edge_type,
+                src,
+                dst,
+                mode,
+            } => {
+                let _ = edge_id;
+                ObserveStmt::Edge {
+                    edge_type: edge_type.clone(),
+                    src: src.clone(),
+                    dst: dst.clone(),
+                    mode: mode.clone(),
+                }
+            }
+            PreparedObservation::Attribute {
+                node_id,
+                node,
+                attr,
+                value,
+                precision,
+            } => {
+                let _ = node_id;
+                ObserveStmt::Attribute {
+                    node: node.clone(),
+                    attr: attr.clone(),
+                    value: *value,
+                    precision: Some(*precision),
+                }
+            }
+        })
+        .collect()
+}
+
+#[cfg(not(feature = "parallel"))]
+fn split_prepared_observations(
+    prepared_observations: Vec<PreparedObservation>,
+) -> PreparedObservationSplit {
+    let mut edge_observations = Vec::new();
+    let mut attr_observations = Vec::new();
+
+    for obs in prepared_observations {
+        match obs {
+            PreparedObservation::Edge {
+                edge_id,
+                edge_type,
+                src,
+                dst,
+                mode,
+            } => {
+                let _ = (edge_type, src, dst);
+                edge_observations.push((edge_id, mode));
+            }
+            PreparedObservation::Attribute {
+                node_id,
+                node,
+                attr,
+                value,
+                precision,
+            } => {
+                let _ = node;
+                attr_observations.push((node_id, attr, value, precision));
+            }
+        }
+    }
+
+    (edge_observations, attr_observations)
 }
 
 /// Creates a node if it doesn't exist, initializing attributes from the belief model.
@@ -527,12 +654,12 @@ fn create_edge_with_posterior(
     }
 }
 
-/// Applies observations in parallel batches for better performance.
+/// Applies observations sequentially with optional vectorized batching.
 ///
 /// Groups observations by target (EdgeId or (NodeId, attr)) for deterministic ordering,
-/// then processes batches in parallel where targets don't conflict.
-/// Uses a mutex for thread-safe access to the graph when parallel processing is enabled.
-fn apply_observations_parallel(
+/// then applies updates either using vectorized kernels (when available) or sequentially.
+#[cfg(not(feature = "parallel"))]
+fn apply_observations_sequential(
     graph: &mut BeliefGraph,
     edge_observations: Vec<(EdgeId, EvidenceMode)>,
     attr_observations: Vec<(NodeId, String, f64, f64)>,
@@ -657,7 +784,7 @@ fn apply_observations_parallel(
 }
 
 /// Applies a single edge observation to update the posterior.
-#[allow(dead_code)]
+#[cfg(all(not(feature = "parallel"), not(feature = "vectorized")))]
 fn apply_edge_observation_single(
     graph: &mut BeliefGraph,
     edge_id: EdgeId,

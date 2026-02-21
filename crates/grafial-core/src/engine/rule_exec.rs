@@ -46,8 +46,6 @@ use crate::engine::expr_eval::{eval_binary_op, eval_expr_core, eval_unary_op, Ex
 use crate::engine::expr_utils::inv_norm_cdf;
 use crate::engine::graph::{BeliefGraph, EdgeId, NodeId};
 use crate::engine::query_plan::QueryPlanCache;
-#[cfg(feature = "jit")]
-use crate::engine::rule_kernels::RuleKernelCache;
 use grafial_frontend::ast::{ActionStmt, CallArg, ExprAst, PatternItem, RuleDef};
 use grafial_ir::RuleIR;
 

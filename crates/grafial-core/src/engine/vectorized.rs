@@ -52,7 +52,7 @@ pub fn gaussian_batch_update(
     observations: &[(f64, f64)],
 ) -> Result<GaussianPosterior, ExecError> {
     if observations.is_empty() {
-        return Ok(prior.clone());
+        return Ok(*prior);
     }
 
     let tau_old = prior.precision;
@@ -97,7 +97,7 @@ pub fn gaussian_batch_update_simd(
     observations: &[(f64, f64)],
 ) -> Result<GaussianPosterior, ExecError> {
     if observations.is_empty() {
-        return Ok(prior.clone());
+        return Ok(*prior);
     }
 
     // For x86_64, we could use AVX for 4-wide f64 operations
@@ -148,7 +148,7 @@ pub fn beta_batch_update(
     observations: &[bool],
 ) -> Result<BetaPosterior, ExecError> {
     if observations.is_empty() {
-        return Ok(prior.clone());
+        return Ok(*prior);
     }
 
     // Count present and absent observations
@@ -311,7 +311,7 @@ mod tests {
         let result = beta_batch_update(&prior, &observations).unwrap();
 
         assert_eq!(result.alpha, 4.0); // 1 + 3
-        assert_eq!(result.beta, 1.0);  // unchanged
+        assert_eq!(result.beta, 1.0); // unchanged
     }
 
     #[test]
@@ -324,7 +324,7 @@ mod tests {
         let result = beta_batch_update(&prior, &observations).unwrap();
 
         assert_eq!(result.alpha, 1.0); // unchanged
-        assert_eq!(result.beta, 4.0);  // 1 + 3
+        assert_eq!(result.beta, 4.0); // 1 + 3
     }
 
     #[test]
@@ -337,7 +337,7 @@ mod tests {
         let result = beta_batch_update(&prior, &observations).unwrap();
 
         assert_eq!(result.alpha, 5.0); // 2 + 3 present
-        assert_eq!(result.beta, 5.0);  // 3 + 2 absent
+        assert_eq!(result.beta, 5.0); // 3 + 2 absent
     }
 
     #[test]
@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn beta_batch_min_param_clipping() {
         let prior = BetaPosterior {
-            alpha: 0.001,  // Below MIN_BETA_PARAM
+            alpha: 0.001, // Below MIN_BETA_PARAM
             beta: 0.001,
         };
         let observations = vec![true];

@@ -3,13 +3,10 @@
 //! Ensures that batched vectorized updates produce identical results to sequential scalar updates.
 
 #[cfg(feature = "vectorized")]
-use grafial_core::engine::vectorized::{beta_batch_update, gaussian_batch_update};
-#[cfg(feature = "vectorized")]
 use grafial_core::engine::graph::{BetaPosterior, GaussianPosterior};
-use grafial_core::engine::{
-    evidence::build_graph_from_evidence,
-    graph::NodeId,
-};
+#[cfg(feature = "vectorized")]
+use grafial_core::engine::vectorized::{beta_batch_update, gaussian_batch_update};
+use grafial_core::engine::{evidence::build_graph_from_evidence, graph::NodeId};
 use grafial_frontend::ast::{
     BeliefModel, EdgeBeliefDecl, EvidenceDef, EvidenceMode, NodeBeliefDecl, ObserveStmt,
     PosteriorType, ProgramAst, Schema,
@@ -27,7 +24,9 @@ fn test_gaussian_parity() {
         // Varying precisions
         vec![(8.0, 0.5), (12.0, 2.0), (10.0, 1.5)],
         // Large batch
-        (0..100).map(|i| (i as f64, 1.0 + i as f64 / 100.0)).collect(),
+        (0..100)
+            .map(|i| (i as f64, 1.0 + i as f64 / 100.0))
+            .collect(),
     ];
 
     for observations in test_cases {
@@ -172,17 +171,20 @@ fn test_evidence_pipeline_parity() {
         edges: vec![EdgeBeliefDecl {
             edge_type: "knows".to_string(),
             exist: PosteriorType::Bernoulli {
-                params: vec![("prior".to_string(), 0.3), ("pseudo_count".to_string(), 2.0)],
+                params: vec![
+                    ("prior".to_string(), 0.3),
+                    ("pseudo_count".to_string(), 2.0),
+                ],
             },
         }],
-        body_src: String::new(),  // Not needed for testing
+        body_src: String::new(), // Not needed for testing
     };
 
     // Create evidence with multiple observations on the same targets
     let evidence = EvidenceDef {
         name: "test_evidence".to_string(),
         on_model: "test_model".to_string(),
-        body_src: String::new(),  // Not needed for testing
+        body_src: String::new(), // Not needed for testing
         observations: vec![
             // Multiple age observations for Alice
             ObserveStmt::Attribute {
@@ -367,9 +369,7 @@ fn test_vectorized_numerical_stability() {
         };
 
         // 10000 observations should not cause numerical issues
-        let observations: Vec<(f64, f64)> = (0..10000)
-            .map(|i| (i as f64 / 1000.0, 1.0))
-            .collect();
+        let observations: Vec<(f64, f64)> = (0..10000).map(|i| (i as f64 / 1000.0, 1.0)).collect();
 
         let result = gaussian_batch_update(&prior, &observations).unwrap();
         assert!(result.mean.is_finite());
@@ -391,6 +391,6 @@ fn test_vectorized_numerical_stability() {
         assert!(result.alpha.is_finite());
         assert!(result.beta.is_finite());
         assert_eq!(result.alpha, 5001.0); // 1 + 5000 true observations
-        assert_eq!(result.beta, 5001.0);  // 1 + 5000 false observations
+        assert_eq!(result.beta, 5001.0); // 1 + 5000 false observations
     }
 }

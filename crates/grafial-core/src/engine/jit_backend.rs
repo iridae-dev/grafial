@@ -40,7 +40,7 @@ use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{default_libcall_names, Linkage, Module};
 use cranelift_native;
 
-use grafial_ir::{BinaryOpIR, ExprIR, UnaryOpIR, CallArgIR};
+use grafial_ir::{BinaryOpIR, CallArgIR, ExprIR, UnaryOpIR};
 
 use crate::engine::errors::ExecError;
 use crate::metrics::MetricContext;
@@ -92,6 +92,7 @@ pub struct CompiledMetricFn {
     /// The pointer is valid for the lifetime of `_module`.
     func_ptr: *const u8,
     /// Keeps the JIT memory alive.
+    #[allow(clippy::arc_with_non_send_sync)]
     _module: Arc<JITModule>,
 }
 
@@ -145,6 +146,7 @@ impl CompiledMetricFn {
 #[derive(Clone)]
 pub struct CompiledPruneFn {
     func_ptr: *const u8,
+    #[allow(clippy::arc_with_non_send_sync)]
     _module: Arc<JITModule>,
 }
 
@@ -161,8 +163,7 @@ impl CompiledPruneFn {
     /// Evaluate the compiled predicate with the given edge probability.
     pub fn eval(&self, edge_prob: f64) -> Result<f64, ExecError> {
         // SAFETY: func_ptr is a valid native function with the right ABI.
-        let f: unsafe extern "C" fn(f64) -> f64 =
-            unsafe { std::mem::transmute(self.func_ptr) };
+        let f: unsafe extern "C" fn(f64) -> f64 = unsafe { std::mem::transmute(self.func_ptr) };
         let result = unsafe { f(edge_prob) };
         if !result.is_finite() {
             return Err(ExecError::ValidationError(format!(
@@ -228,11 +229,12 @@ pub fn compile_metric_expr(expr: &ExprIR) -> Option<CompiledMetricFn> {
     module.finalize_definitions().ok()?;
 
     let raw = module.get_finalized_function(func_id);
+    #[allow(clippy::arc_with_non_send_sync)]
     let module = Arc::new(module);
 
     Some(CompiledMetricFn {
         var_order,
-        func_ptr: raw as *const u8,
+        func_ptr: raw,
         _module: module,
     })
 }
@@ -252,8 +254,7 @@ fn check_and_collect_metric_vars(expr: &ExprIR, out: &mut Vec<String>) -> bool {
         }
         ExprIR::Unary { expr, .. } => check_and_collect_metric_vars(expr, out),
         ExprIR::Binary { left, right, .. } => {
-            check_and_collect_metric_vars(left, out)
-                && check_and_collect_metric_vars(right, out)
+            check_and_collect_metric_vars(left, out) && check_and_collect_metric_vars(right, out)
         }
         ExprIR::Number(_) | ExprIR::Bool(_) => true,
         // Unsupported: field, call, exists
@@ -277,9 +278,7 @@ fn check_prune_expr(expr: &ExprIR) -> bool {
                 )
         }
         ExprIR::Unary { expr, .. } => check_prune_expr(expr),
-        ExprIR::Binary { left, right, .. } => {
-            check_prune_expr(left) && check_prune_expr(right)
-        }
+        ExprIR::Binary { left, right, .. } => check_prune_expr(left) && check_prune_expr(right),
         ExprIR::Var(_) | ExprIR::Field { .. } | ExprIR::Exists { .. } => false,
     }
 }
@@ -372,10 +371,11 @@ pub fn compile_prune_expr(expr: &ExprIR) -> Option<CompiledPruneFn> {
     module.finalize_definitions().ok()?;
 
     let raw = module.get_finalized_function(func_id);
+    #[allow(clippy::arc_with_non_send_sync)]
     let module = Arc::new(module);
 
     Some(CompiledPruneFn {
-        func_ptr: raw as *const u8,
+        func_ptr: raw,
         _module: module,
     })
 }
@@ -513,8 +513,8 @@ fn lower_binary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grafial_ir::{BinaryOpIR, ExprIR, UnaryOpIR};
     use crate::metrics::MetricContext;
+    use grafial_ir::{BinaryOpIR, ExprIR, UnaryOpIR};
 
     fn metric_ctx(vars: &[(&str, f64)]) -> MetricContext {
         let mut ctx = MetricContext::default();

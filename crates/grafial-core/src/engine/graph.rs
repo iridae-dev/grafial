@@ -579,6 +579,16 @@ pub enum EdgePosterior {
     },
 }
 
+impl Default for EdgePosterior {
+    fn default() -> Self {
+        // Default to independent edge with uniform Beta(1,1) prior
+        Self::Independent(BetaPosterior {
+            alpha: 1.0,
+            beta: 1.0,
+        })
+    }
+}
+
 impl EdgePosterior {
     /// Creates an independent edge posterior from a Beta posterior.
     pub fn independent(beta: BetaPosterior) -> Self {
@@ -1265,7 +1275,7 @@ impl BeliefGraph {
                 if *id == node_id {
                     // Node is in delta, check if it has the attribute
                     if let Some(posterior) = node.attrs.get(attr) {
-                        let mut result = posterior.clone();
+                        let mut result = *posterior;
                         // Apply any fine-grained changes on top
                         for change2 in &self.delta {
                             if let GraphDelta::NodeAttributeChange {
@@ -1297,7 +1307,7 @@ impl BeliefGraph {
             .and_then(|&idx| self.inner.nodes.get(idx))?;
 
         // Get base attribute value
-        let mut posterior = base_node.attrs.get(attr)?.clone();
+        let mut posterior = *base_node.attrs.get(attr)?;
 
         // Apply fine-grained attribute changes in order
         for change in &self.delta {
