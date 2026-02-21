@@ -432,7 +432,7 @@ Stable canonical-style lint codes:
 - `canonical_force_absent`
 - `canonical_inline_args`
 
-See `documentation/MIGRATION_GUIDE.md` for migration details.
+Refer to repository release notes and commit history for migration details.
 
 ## 16. Statistical Lints and Suppression Pragmas
 

@@ -85,10 +85,9 @@ grafial/
 │   ├── grafial-examples/      # Example programs demonstrating features
 │   └── grafial-vscode/        # VSCode extension with LSP client
 ├── documentation/
-│   ├── ROADMAP.md            # Development roadmap (Phases 0-14)
 │   ├── LANGUAGE_GUIDE.md     # Complete language reference
 │   ├── ENGINE_ARCHITECTURE.md # Runtime internals
-│   └── MIGRATION_GUIDE.md    # Version migration guide
+│   └── BUILDING.md           # Build and development setup
 ├── benches/                   # Performance benchmarks
 ├── Cargo.toml                # Workspace configuration
 └── README.md                 # This file
@@ -371,8 +370,6 @@ Features:
 
 - **[LANGUAGE_GUIDE.md](documentation/LANGUAGE_GUIDE.md)** - Complete language reference and tutorial
 - **[ENGINE_ARCHITECTURE.md](documentation/ENGINE_ARCHITECTURE.md)** - Runtime internals and optimization details
-- **[ROADMAP.md](documentation/ROADMAP.md)** - Development roadmap with completed and planned phases
-- **[MIGRATION_GUIDE.md](documentation/MIGRATION_GUIDE.md)** - Upgrading between versions
 - **[BUILDING.md](documentation/BUILDING.md)** - Detailed build instructions
 - **[API Documentation](https://docs.rs/grafial-core)** - Rust API reference
 
@@ -391,15 +388,13 @@ Areas of interest:
 
 ---
 
-## 📊 Roadmap Progress
+## 📊 Milestone Progress
 
-Grafial development follows a phased roadmap:
+Grafial development follows phased milestones:
 
 - ✅ **Phase 0-14**: Core language, optimizations, parallel execution, and numeric kernels (COMPLETE)
 - ✅ **Phase 15**: Accelerator dispatch and GPU-staged parity/benchmark gates (COMPLETE)
 - 📋 **Next**: Concrete GPU runtime backend integration
-
-See [ROADMAP.md](documentation/ROADMAP.md) for detailed phase descriptions.
 
 ---
 

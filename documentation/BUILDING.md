@@ -294,6 +294,5 @@ See `crates/grafial-python/README.md` for detailed documentation.
 
 - See `LANGUAGE_GUIDE.md` for Grafial syntax and semantics
 - See `ENGINE_ARCHITECTURE.md` for engine internals
-- See `ROADMAP.md` for roadmap status and future phases
 - See `crates/grafial-python/README.md` for Python bindings documentation
 - Check `crates/grafial-examples/` for sample Grafial programs

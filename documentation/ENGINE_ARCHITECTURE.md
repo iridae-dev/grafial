@@ -59,7 +59,7 @@ baygraph/
 
 **Purpose:** Canonical lowered representation designed to decouple frontend from engine.
 
-**Status:** IR lowering and IR-native execution paths are implemented, with compatibility wrappers preserved for AST-facing entrypoints. See `ROADMAP.md` for roadmap status and future compiler/runtime work.
+**Status:** IR lowering and IR-native execution paths are implemented, with compatibility wrappers preserved for AST-facing entrypoints.
 
 ### grafial-core
 
@@ -369,7 +369,7 @@ pub trait MetricFn: Send + Sync + 'static {
 - Copy-on-write semantics (reduce cloning)
 - Iterator optimizations (unstable sort, pre-allocated capacity)
 
-**Future:** See `ROADMAP.md` for planned optimizations including parallelization, algorithmic improvements, memory/indexing improvements, and backend acceleration.
+**Future:** Planned work includes backend acceleration, memory/indexing improvements, and further algorithmic optimization.
 
 ---
 
@@ -401,6 +401,5 @@ pub trait MetricFn: Send + Sync + 'static {
 ## References
 
 - **Language Guide**: `LANGUAGE_GUIDE.md` - User-facing language documentation
-- **Roadmap**: `ROADMAP.md` - Canonical roadmap and future work
 - **Python Bindings**: `crates/grafial-python/README.md` - Python bindings documentation
 - **Building**: `BUILDING.md` - Build and development setup
