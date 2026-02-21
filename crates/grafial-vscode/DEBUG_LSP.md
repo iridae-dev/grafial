@@ -1,5 +1,7 @@
 # Debugging Grafial LSP in Cursor
 
+Replace `<repo-root>` with the absolute path to your local `baygraph` checkout.
+
 ## Step 1: Verify Extension is Loaded
 
 1. **Open Command Palette** (`Cmd+Shift+P`)
@@ -18,19 +20,19 @@
 
 ## Step 3: Verify Server Binary Path
 
-The extension is configured to use:
+Expected local build path:
 ```
-/Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp
+<repo-root>/target/release/grafial-lsp
 ```
 
 Check if this file exists:
 ```bash
-ls -lh /Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp
+ls -lh <repo-root>/target/release/grafial-lsp
 ```
 
 If it doesn't exist, rebuild:
 ```bash
-cd /Users/charleshinshaw/Desktop/baygraph
+cd <repo-root>
 cargo build -p grafial-lsp --release
 ```
 
@@ -39,21 +41,21 @@ cargo build -p grafial-lsp --release
 Test that the server binary works:
 
 ```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' | /Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' | <repo-root>/target/release/grafial-lsp
 ```
 
 Should see JSON response. If not, the binary might have issues.
 
 ## Step 5: Set Server Path in Settings
 
-Since the extension is installed, you can set it in settings:
+Only needed if you want to force a specific binary path:
 
 1. **Command Palette** (`Cmd+Shift+P`)
 2. Type: `Preferences: Open User Settings (JSON)`
 3. Add:
    ```json
    {
-     "grafial.serverPath": "/Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp"
+     "grafial.serverPath": "<repo-root>/target/release/grafial-lsp"
    }
    ```
 4. **Reload Cursor** (or reload window: `Cmd+Shift+P` → "Developer: Reload Window")
@@ -73,10 +75,9 @@ Since the extension is installed, you can set it in settings:
 **Server not starting:**
 - Check Output panel for "Grafial Language Server"
 - Verify binary path is correct and executable
-- Try absolute path in settings
+- Try absolute path in `grafial.serverPath` settings
 
 **Hover not working:**
 - Make sure you're hovering over actual tokens (not whitespace)
 - Check if diagnostics are working (errors should show red squiggles)
 - Verify LSP server is connected (check Output panel)
-

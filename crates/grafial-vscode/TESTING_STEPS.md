@@ -1,13 +1,15 @@
 # Testing Grafial LSP in Cursor - Step by Step
 
+Replace `<repo-root>` with the absolute path to your local `baygraph` checkout.
+
 ## Step 1: Reinstall Updated Extension
 
-The VSIX has been rebuilt with the hardcoded server path. Reinstall it:
+The VSIX has been rebuilt with the updated launcher behavior. Reinstall it:
 
 1. **Open Extensions view** in Cursor (`Cmd+Shift+X`)
 2. **Click the "..." menu** (top right)
 3. **Select "Install from VSIX..."**
-4. **Choose**: `/Users/charleshinshaw/Desktop/baygraph/crates/grafial-vscode/grafial-0.1.0.vsix`
+4. **Choose**: `<repo-root>/crates/grafial-vscode/grafial-0.1.0.vsix`
 5. **Reload Cursor** when prompted (or `Cmd+Shift+P` → "Developer: Reload Window")
 
 ## Step 2: Verify Extension is Active
@@ -28,21 +30,21 @@ The VSIX has been rebuilt with the hardcoded server path. Reinstall it:
 1. In your `.grafial` file, hover over:
    - `prob` - should show hover docs
    - `E` - should show hover docs  
-   - `GaussianPosterior` - should show hover docs
+   - `Gaussian` - should show hover docs
    - Any schema/model/rule/flow name from your file
 
 ## Step 5: If It's Not Working
 
 ### Check Server Path (if needed)
 
-Even though it's hardcoded, you can override in settings:
+`grafial.serverPath` is optional. Set it only if you want to force a specific binary:
 
 1. **Command Palette** (`Cmd+Shift+P`)
 2. **Type**: `Preferences: Open User Settings (JSON)`
 3. **Add**:
    ```json
    {
-     "grafial.serverPath": "/Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp"
+     "grafial.serverPath": "<repo-root>/target/release/grafial-lsp"
    }
    ```
 
@@ -57,7 +59,7 @@ Even though it's hardcoded, you can override in settings:
 
 ```bash
 # Test server manually
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' | /Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' | <repo-root>/target/release/grafial-lsp
 ```
 
 Should see JSON response. If not, there's a binary issue.
@@ -66,7 +68,7 @@ Should see JSON response. If not, there's a binary issue.
 
 - ✅ Syntax highlighting (already working)
 - ✅ Hover over built-ins (`prob`, `E`, `winner`, `entropy`, `degree`)
-- ✅ Hover over posterior types
+- ✅ Hover over posterior types (`Gaussian`, `Bernoulli`, `Categorical`; legacy aliases also supported)
 - ✅ Hover over schema/model/rule/flow names
 - ✅ Error diagnostics (red squiggles on syntax errors)
 
@@ -76,4 +78,3 @@ Once hover is working, you can test:
 - Open a file with errors - should see red squiggles
 - Hover over different tokens
 - Check the Output panel to see LSP messages
-

@@ -1,5 +1,7 @@
 // Minimal VSCode extension entry to start the Grafial LSP server.
-// Expects a `grafial-lsp` binary on PATH or a configured absolute path.
+// Supports either:
+// - `grafial.serverPath` as a command name on PATH (e.g. grafial-lsp)
+// - `grafial.serverPath` as an absolute/relative executable path
 
 const vscode = require('vscode');
 const { LanguageClient, TransportKind } = require('vscode-languageclient/node');
@@ -7,23 +9,68 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
-function resolveServerPath(configuredPath) {
+function workspaceRoot() {
+  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+}
+
+function defaultCommandName() {
+  return process.platform === 'win32' ? 'grafial-lsp.exe' : 'grafial-lsp';
+}
+
+function isPathLike(candidate) {
+  return (
+    path.isAbsolute(candidate) ||
+    candidate.startsWith('~') ||
+    candidate.startsWith('.') ||
+    candidate.includes('/') ||
+    candidate.includes('\\')
+  );
+}
+
+function resolveServerCommand(configuredPath) {
   if (!configuredPath || configuredPath.trim() === '') {
     return null;
   }
 
   let candidate = configuredPath.trim();
 
-  if (candidate.startsWith('~')) {
+  if (!isPathLike(candidate)) {
+    // Bare command name (e.g. "grafial-lsp"): resolve via PATH.
+    return candidate;
+  }
+
+  if (candidate.startsWith('~') && !path.isAbsolute(candidate)) {
     candidate = path.join(os.homedir(), candidate.slice(1));
   }
 
   if (!path.isAbsolute(candidate)) {
-    const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    candidate = workspacePath ? path.resolve(workspacePath, candidate) : path.resolve(candidate);
+    candidate = path.resolve(workspaceRoot(), candidate);
   }
 
   return candidate;
+}
+
+function validateExecutablePath(serverPath) {
+  if (!fs.existsSync(serverPath)) {
+    return `Server binary not found at ${serverPath}`;
+  }
+
+  if (process.platform === 'win32') {
+    return null;
+  }
+
+  try {
+    fs.accessSync(serverPath, fs.constants.X_OK);
+  } catch (err) {
+    return `Server binary is not executable: ${serverPath}`;
+  }
+
+  return null;
+}
+
+function maybeWorkspaceBuild() {
+  const candidate = path.join(workspaceRoot(), 'target', 'release', defaultCommandName());
+  return validateExecutablePath(candidate) ? null : candidate;
 }
 
 /** @type {LanguageClient | null} */
@@ -34,40 +81,46 @@ function activate(context) {
   
   try {
     const config = vscode.workspace.getConfiguration('grafial');
-    const defaultPath = '/Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp';
-    const configuredPath = config.get('serverPath');
-    const serverPath = resolveServerPath(configuredPath) || defaultPath;
-    
-    console.log('[Grafial] Server path:', serverPath);
-    
-    // Check if binary exists
-    if (!fs.existsSync(serverPath)) {
-      const errorMsg = `[Grafial] ERROR: Server binary not found at ${serverPath}`;
-      console.error(errorMsg);
-      vscode.window.showErrorMessage(errorMsg);
-      return;
+    const configuredValue = config.get('serverPath');
+    const configuredCommand = resolveServerCommand(configuredValue);
+    const workspaceBuild = maybeWorkspaceBuild();
+
+    let serverCommand = configuredCommand || workspaceBuild || defaultCommandName();
+    let commandSource = configuredCommand
+      ? 'grafial.serverPath'
+      : workspaceBuild
+      ? 'workspace target/release build'
+      : 'PATH';
+
+    // If config is left at default command name and a local build exists, prefer local build.
+    if (configuredCommand === defaultCommandName() && workspaceBuild) {
+      serverCommand = workspaceBuild;
+      commandSource = 'workspace target/release build';
     }
-    
-    // Check if binary is executable
-    try {
-      fs.accessSync(serverPath, fs.constants.X_OK);
-    } catch (err) {
-      const errorMsg = `[Grafial] ERROR: Server binary is not executable: ${serverPath}`;
-      console.error(errorMsg);
-      vscode.window.showErrorMessage(errorMsg);
-      return;
+
+    if (path.isAbsolute(serverCommand)) {
+      const validationError = validateExecutablePath(serverCommand);
+      if (validationError) {
+        const errorMsg = `[Grafial] ERROR: ${validationError}`;
+        console.error(errorMsg);
+        vscode.window.showErrorMessage(errorMsg);
+        return;
+      }
     }
+
+    console.log('[Grafial] Server command:', serverCommand, `(source: ${commandSource})`);
 
     // Create output channel first
     const outputChannel = vscode.window.createOutputChannel('Grafial Language Server');
     outputChannel.appendLine('[Grafial] Extension activating...');
-    outputChannel.appendLine(`[Grafial] Server path: ${serverPath}`);
+    outputChannel.appendLine(`[Grafial] Server command: ${serverCommand}`);
+    outputChannel.appendLine(`[Grafial] Command source: ${commandSource}`);
 
     const serverOptions = {
-      command: serverPath,
+      command: serverCommand,
       args: [],
       options: { 
-        cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd(),
+        cwd: workspaceRoot(),
         env: process.env
       },
       transport: TransportKind.stdio,
@@ -96,7 +149,7 @@ function activate(context) {
       outputChannel.appendLine('[Grafial] Client started successfully');
     }).catch(err => {
       const errorMsg = `[Grafial] Failed to start client: ${err.message}`;
-      console.error(errorMsg, err);
+      console.error(errorMsg);
       outputChannel.appendLine(`ERROR: ${errorMsg}`);
       outputChannel.appendLine(err.stack || err.toString());
       outputChannel.show(true);
@@ -119,4 +172,3 @@ function deactivate() {
 }
 
 module.exports = { activate, deactivate };
-

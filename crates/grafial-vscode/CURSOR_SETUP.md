@@ -1,15 +1,17 @@
 # Setting Up Grafial LSP in Cursor
 
+Replace `<repo-root>` with the absolute path to your local `baygraph` checkout.
+
 ## Step 1: Build the LSP Server
 
-The LSP server binary is already built at:
+Expected local build path:
 ```
-/Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp
+<repo-root>/target/release/grafial-lsp
 ```
 
 If you need to rebuild:
 ```bash
-cd /Users/charleshinshaw/Desktop/baygraph
+cd <repo-root>
 cargo build -p grafial-lsp --release
 ```
 
@@ -18,11 +20,11 @@ cargo build -p grafial-lsp --release
 If you haven't already, install the extension dependencies:
 
 ```bash
-cd /Users/charleshinshaw/Desktop/baygraph/crates/grafial-vscode
+cd <repo-root>/crates/grafial-vscode
 npm install
 ```
 
-This will install `vscode-languageclient` and other required dependencies.
+This installs `vscode-languageclient` and related dependencies.
 
 ## Step 3: Configure Cursor to Use the LSP Server
 
@@ -35,7 +37,7 @@ Add the binary to your PATH so Cursor can find it:
 **macOS/Linux:**
 ```bash
 # Add to your ~/.zshrc or ~/.bashrc
-export PATH="/Users/charleshinshaw/Desktop/baygraph/target/release:$PATH"
+export PATH="<repo-root>/target/release:$PATH"
 ```
 
 Then restart Cursor.
@@ -47,15 +49,19 @@ Then restart Cursor.
 3. Find "Grafial: Server Path"
 4. Set it to the absolute path:
    ```
-   /Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp
+   <repo-root>/target/release/grafial-lsp
    ```
 
 Or add to your Cursor settings JSON:
 ```json
 {
-  "grafial.serverPath": "/Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp"
+  "grafial.serverPath": "<repo-root>/target/release/grafial-lsp"
 }
 ```
+
+If you leave `grafial.serverPath` unset, the extension will try:
+1. local workspace build (`target/release/grafial-lsp`)
+2. `grafial-lsp` on `PATH`
 
 ## Step 4: Load the Extension in Cursor
 
@@ -64,7 +70,7 @@ Since you're developing the extension, you have a few options:
 ### Option A: Package and Install (For Testing)
 
 ```bash
-cd /Users/charleshinshaw/Desktop/baygraph/crates/grafial-vscode
+cd <repo-root>/crates/grafial-vscode
 npm install -g vsce  # If you don't have vsce installed
 vsce package
 ```
@@ -88,7 +94,7 @@ Copy the extension folder to Cursor's extensions directory:
 
 ```bash
 # macOS
-cp -r /Users/charleshinshaw/Desktop/baygraph/crates/grafial-vscode ~/.cursor/extensions/grafial-0.1.0/
+cp -r <repo-root>/crates/grafial-vscode ~/.cursor/extensions/grafial-0.1.0/
 
 # Then install dependencies
 cd ~/.cursor/extensions/grafial-0.1.0
@@ -102,7 +108,7 @@ Restart Cursor.
 1. Open a `.grafial` file in Cursor
 2. Hover over:
    - Built-in functions: `prob`, `E`, `winner`, `entropy`, `degree`
-   - Posterior types: `GaussianPosterior`, `BernoulliPosterior`, `CategoricalPosterior`
+   - Posterior types: `Gaussian`, `Bernoulli`, `Categorical` (legacy aliases also supported)
    - Schema/model/rule/flow names defined in your file
 3. You should see hover tooltips with documentation
 
@@ -122,7 +128,7 @@ Open Cursor's Output panel (View → Output), select "Grafial Language Server" f
 
 Test the server directly:
 ```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' | /Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' | <repo-root>/target/release/grafial-lsp
 ```
 
 You should see a JSON response (the server will exit after receiving EOF).
@@ -130,4 +136,3 @@ You should see a JSON response (the server will exit after receiving EOF).
 ### Check Server Path Configuration
 
 In Cursor, open Settings and verify `grafial.serverPath` points to the correct binary path.
-

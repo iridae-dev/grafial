@@ -56,7 +56,7 @@
         },
         {
           "name": "keyword.other.grafial",
-          "match": "\\b(node|edge|on|pattern|where|action|observe|graph|metric|export|import_metric|export_metric|as|let|non_bayesian_nudge|to|variance|delete|suppress|mode|from_evidence|from_graph|apply_rule|apply_ruleset|snapshot|prune_edges|exists|exist)\\b"
+          "match": "\\b(node|edge|on|for|pattern|where|action|observe|choose|unchoose|graph|metric|nodes|sum|count|avg|order_by|fold|export|import_metric|export_metric|as|let|non_bayesian_nudge|to|variance|preserve|increase|decrease|delete|suppress|mode|from_evidence|from_graph|apply_rule|apply_ruleset|snapshot|prune_edges|exists|exist)\\b"
         },
         {
           "name": "keyword.operator.logical.grafial",
@@ -142,7 +142,7 @@
       "patterns": [
         {
           "name": "meta.posterior-call.grafial",
-          "begin": "\\b(GaussianPosterior|BernoulliPosterior|CategoricalPosterior)\\s*\\(",
+          "begin": "\\b(GaussianPosterior|Gaussian|BernoulliPosterior|Bernoulli|CategoricalPosterior|Categorical)\\s*\\(",
           "end": "\\)",
           "beginCaptures": {
             "1": { "name": "support.type.posterior.grafial" },

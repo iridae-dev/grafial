@@ -646,10 +646,15 @@ fn builtin_hover(token: &str) -> Option<lsp::HoverContents> {
         "winner" => Some(("winner(C) -> String", "Maximum a posteriori category label for categorical posterior C.")),
         "entropy" => Some(("entropy(X) -> Real", "Shannon entropy of a discrete distribution X (in nats).")),
         "degree" => Some(("degree(node) -> Int", "Node degree. Variants: in_degree(node), out_degree(node).")),
+        "prob_vector" => Some(("prob_vector(node, edge_type) -> [Real]", "Returns posterior probabilities for a competing edge group.")),
+        "count_nodes" => Some(("count_nodes(label=..., where=...) -> Int", "Counts nodes in a metric expression, optionally filtered by `where`.")),
+        "sum_nodes" => Some(("sum_nodes(label=..., where=..., contrib=...) -> Real", "Sums `contrib` over matching nodes in a metric expression.")),
+        "fold_nodes" => Some(("fold_nodes(label=..., init=..., step=..., order_by=...) -> Real", "Deterministic fold over matching nodes in a metric expression.")),
+        "avg_degree" => Some(("avg_degree(label=..., edge_type=..., min_prob=0.0) -> Real", "Average out-degree for matching nodes.")),
         // Posterior types
-        "GaussianPosterior" => Some(("GaussianPosterior(params)", "Posterior for continuous attributes. Params include prior_mean, prior_var, noise.")),
-        "BernoulliPosterior" => Some(("BernoulliPosterior(params)", "Beta-Bernoulli posterior for independent edges. Params include prior and pseudo_count.")),
-        "CategoricalPosterior" => Some(("CategoricalPosterior(group_by, prior, categories)", "Dirichlet-Categorical posterior for competing edges. group_by in {source,destination}. prior: uniform{pseudo_count} or explicit[α...].")),
+        "Gaussian" | "GaussianPosterior" => Some(("Gaussian(mean=..., precision=...)", "Posterior for continuous attributes.\n\nLegacy alias: `GaussianPosterior(prior_mean=..., prior_precision=...)`.")),
+        "Bernoulli" | "BernoulliPosterior" => Some(("Bernoulli(prior=..., weight=...)", "Beta-Bernoulli posterior for independent edges.\n\nLegacy alias: `BernoulliPosterior(prior=..., pseudo_count=...)`.")),
+        "Categorical" | "CategoricalPosterior" => Some(("Categorical(group_by=source, prior=uniform, pseudo_count=1.0)", "Dirichlet-Categorical posterior for competing edges.\n\nLegacy alias: `CategoricalPosterior(...)`. `group_by` accepts `source` or `destination`.")),
         // Keywords
         "schema" => Some(("schema Name { ... }", "Defines node and edge types for a graph schema.")),
         "belief_model" => Some(("belief_model Name on Schema { ... }", "Associates posterior models with a schema (nodes, edges).")),
@@ -748,6 +753,24 @@ fn md(value: String) -> lsp::HoverContents {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hover_docs_cover_modern_and_legacy_posteriors() {
+        let modern = builtin_hover("Gaussian").expect("hover for modern posterior");
+        let legacy = builtin_hover("GaussianPosterior").expect("hover for legacy posterior");
+
+        let modern_text = match modern {
+            lsp::HoverContents::Markup(markup) => markup.value,
+            _ => panic!("expected markdown hover for modern posterior"),
+        };
+        let legacy_text = match legacy {
+            lsp::HoverContents::Markup(markup) => markup.value,
+            _ => panic!("expected markdown hover for legacy posterior"),
+        };
+
+        assert!(modern_text.contains("Gaussian(mean=..., precision=...)"));
+        assert!(legacy_text.contains("Legacy alias"));
+    }
 
     #[test]
     fn style_lint_diagnostic_carries_quick_fix_payload() {

@@ -6,9 +6,9 @@ Syntax highlighting and Language Server (LSP) features for the Grafial Bayesian 
 
 - **Syntax Highlighting**: Full support for Grafial syntax including:
   - Keywords (`schema`, `belief_model`, `rule`, `flow`, etc.)
-  - Posterior types (`GaussianPosterior`, `BernoulliPosterior`, `CategoricalPosterior`)
+  - Posterior types (`Gaussian`, `Bernoulli`, `Categorical`; legacy aliases also highlighted)
   - Evidence modes (`present`, `absent`, `chosen`, etc.)
-  - Built-in functions (`prob`, `degree`, `E[]`, `winner`, `entropy`, etc.)
+  - Built-in functions (`prob`, `prob_correlated`, `credible`, `degree`, `E[]`, `winner`, `entropy`, etc.)
   - Pattern matching syntax
   - Expressions and operators
 
@@ -39,12 +39,17 @@ The LSP server is a Rust binary (`grafial-lsp`). Build it, then point the extens
 # in repo root
 cargo build -p grafial-lsp --release
 
-# ensure the path to the server binary
+# server binary location
 # macOS/Linux: target/release/grafial-lsp
 # Windows:     target\\release\\grafial-lsp.exe
 ```
 
-In VS Code settings, set `grafial.serverPath` to the absolute path of the binary, or ensure `grafial-lsp` is on your PATH.
+Server resolution order:
+- `grafial.serverPath` (if set)
+- local workspace build (`target/release/grafial-lsp`)
+- `grafial-lsp` on `PATH`
+
+Set `grafial.serverPath` only when you want to override that default behavior.
 
 Note: This extension uses `vscode-languageclient`. For packaging, install dev dependencies and package as usual (requires internet to fetch npm packages):
 
@@ -60,7 +65,7 @@ To create a `.vsix` package:
 
 ```bash
 npm install -g vsce
-cd grafial-vscode
+cd crates/grafial-vscode
 vsce package
 ```
 
@@ -73,12 +78,7 @@ Then install the `.vsix` file:
 **Cursor:**
 - **Method 1**: Open Extensions view (`Cmd+Shift+X`), click `...` menu (top right), select "Install from VSIX..."
 - **Method 2**: Command Palette (`Cmd+Shift+P`) → type "Install from VSIX" and select it
-- **Method 3** (Easiest - macOS/Linux): Run the install script:
-  ```bash
-  cd grafial-vscode
-  ./install-cursor.sh
-  ```
-- **Method 4** (Manual): Copy the `grafial-vscode` folder to:
+- **Method 3** (Manual): Copy the `grafial-vscode` folder to:
   - macOS/Linux: `~/.cursor/extensions/grafial-0.1.0/`
   - Windows: `%USERPROFILE%\.cursor\extensions\grafial-0.1.0\`
   Then restart Cursor

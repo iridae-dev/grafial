@@ -1,5 +1,7 @@
 # Troubleshooting "Activating..." Issue
 
+Replace `<repo-root>` with the absolute path to your local `baygraph` checkout.
+
 If the extension is stuck in "Activating..." state:
 
 ## Step 1: Check Developer Console
@@ -20,7 +22,7 @@ If the extension is stuck in "Activating..." state:
 
 ```bash
 # Test if server starts (should hang waiting for input, that's normal)
-/Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp
+<repo-root>/target/release/grafial-lsp
 ```
 
 Press `Ctrl+C` to stop it. If it crashes immediately, that's the problem.
@@ -39,17 +41,17 @@ Press `Ctrl+C` to stop it. If it crashes immediately, that's the problem.
 3. **Uninstall** it
 4. **Install from VSIX** again:
    - Click `...` menu → "Install from VSIX..."
-   - Select: `/Users/charleshinshaw/Desktop/baygraph/crates/grafial-vscode/grafial-0.1.0.vsix`
+   - Select: `<repo-root>/crates/grafial-vscode/grafial-0.1.0.vsix`
 5. **Reload Window** (`Cmd+Shift+P` → "Developer: Reload Window")
 
 ## Common Issues
 
 **Binary not found:**
-- Check: `ls -lh /Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp`
+- Check: `ls -lh <repo-root>/target/release/grafial-lsp`
 - Rebuild: `cargo build -p grafial-lsp --release`
 
 **Binary not executable:**
-- Fix: `chmod +x /Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp`
+- Fix: `chmod +x <repo-root>/target/release/grafial-lsp`
 
 **Server crashes on start:**
 - Check Developer Console for error messages
@@ -58,4 +60,3 @@ Press `Ctrl+C` to stop it. If it crashes immediately, that's the problem.
 **Extension hangs:**
 - Usually means `client.start()` is waiting for the server
 - Server might be blocked or waiting for input incorrectly
-

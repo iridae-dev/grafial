@@ -1,10 +1,12 @@
 # Quick Test Guide for Grafial LSP in Cursor
 
+Replace `<repo-root>` with the absolute path to your local `baygraph` checkout.
+
 ## Method 1: Extension Development Host (Easiest - No Settings Needed)
 
 1. **Open the extension folder in Cursor:**
    ```bash
-   cd /Users/charleshinshaw/Desktop/baygraph/crates/grafial-vscode
+   cd <repo-root>/crates/grafial-vscode
    cursor .
    ```
 
@@ -12,10 +14,10 @@
 
 3. **In the new window:**
    - Open any `.grafial` file (e.g., `crates/grafial-examples/minimal.grafial`)
-   - Hover over `prob`, `E`, `GaussianPosterior`, etc.
+   - Hover over `prob`, `E`, `Gaussian`, `Bernoulli`, etc.
    - You should see hover tooltips!
 
-   The server path will be read from settings, but you can also edit it in the dev host.
+   By default, the extension will try local `target/release/grafial-lsp` first and then `grafial-lsp` on `PATH`.
 
 ## Method 2: Set Server Path via Settings JSON
 
@@ -26,7 +28,7 @@ If you want to configure it manually in Cursor:
 3. Add this line:
    ```json
    {
-     "grafial.serverPath": "/Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp"
+     "grafial.serverPath": "<repo-root>/target/release/grafial-lsp"
    }
    ```
 
@@ -42,7 +44,7 @@ Test that the server binary responds:
 
 ```bash
 # Quick test - should show JSON response
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' | /Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}' | <repo-root>/target/release/grafial-lsp
 ```
 
 If you see JSON output, the server is working.
@@ -56,6 +58,5 @@ If you see JSON output, the server is working.
 
 **If hover doesn't work:**
 - Check Cursor's Output panel for errors
-- Verify the binary exists: `ls -lh /Users/charleshinshaw/Desktop/baygraph/target/release/grafial-lsp`
+- Verify the binary exists: `ls -lh <repo-root>/target/release/grafial-lsp`
 - Make sure you're hovering over valid tokens (not whitespace)
-

@@ -4,7 +4,7 @@
 
 1. **Open the extension folder**:
    ```bash
-   cd grafial-vscode
+   cd crates/grafial-vscode
    code .  # or `cursor .` for Cursor
    ```
 
@@ -44,10 +44,10 @@ To install the extension in your main VS Code / Cursor instance:
    - **Method 3** (If VSIX doesn't work): Manually copy the extension folder:
      ```bash
      # macOS/Linux
-     cp -r grafial-vscode ~/.cursor/extensions/grafial-0.1.0
+     cp -r crates/grafial-vscode ~/.cursor/extensions/grafial-0.1.0
      
      # Windows (PowerShell)
-     Copy-Item -Recurse grafial-vscode "$env:USERPROFILE\.cursor\extensions\grafial-0.1.0"
+     Copy-Item -Recurse crates/grafial-vscode "$env:USERPROFILE\.cursor\extensions\grafial-0.1.0"
      ```
      Then restart Cursor
 
@@ -58,7 +58,7 @@ To install the extension in your main VS Code / Cursor instance:
 ## File Structure
 
 ```
-grafial-vscode/
+crates/grafial-vscode/
 ├── package.json              # Extension manifest
 ├── language-configuration.json  # Editor features (comments, brackets, etc.)
 ├── syntaxes/
@@ -75,4 +75,3 @@ Edit `syntaxes/grafial.tmLanguage.json` to:
 - Adjust pattern matching
 
 The grammar uses TextMate syntax. See [TextMate Language Grammars](https://macromates.com/manual/en/language_grammars) for reference.
-
