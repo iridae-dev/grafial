@@ -179,16 +179,33 @@ Ensure you have:
 
 `grafial-core` supports optional features:
 
-- `serde`: Enable serialization support in `grafial-core`
-- `tracing`: Enable structured logging
-- `rayon`: Enable parallel execution (experimental)
-- `bincode`: Enable binary serialization
+- Runtime/acceleration:
+  - `parallel`: enable parallel evidence/metric/rule execution paths
+  - `jit`: enable Cranelift JIT backend
+  - `aot`: enable AOT compilation support
+  - `vectorized`: enable vectorized evidence update paths
+  - `simd-kernels`: enable SIMD numeric-kernel dispatch
+  - `gpu-kernels`: enable GPU-staged numeric-kernel dispatch baseline
+- Serialization/observability:
+  - `serde`: enable serde support
+  - `bincode`: enable bincode serialization (implies `serde`)
+  - `tracing`: enable tracing instrumentation
+- Storage experiments:
+  - `storage-experimental`
+  - `storage-dense-index` (implies `storage-experimental`)
+  - `storage-soa` (implies `storage-experimental`)
 
 Build with features:
 
 ```bash
-# Build core with all features
-cargo build -p grafial-core --release --features serde,tracing,rayon,bincode
+# Parallel + JIT
+cargo build -p grafial-core --release --features parallel,jit
+
+# Numeric kernel paths
+cargo build -p grafial-core --release --features simd-kernels,gpu-kernels
+
+# Full core feature set
+cargo build -p grafial-core --release --all-features
 ```
 
 `grafial-cli` already depends on `grafial-core` with `serde` enabled, so normal CLI builds include JSON output support by default.
@@ -292,6 +309,7 @@ See `crates/grafial-python/README.md` for detailed documentation.
 
 ## Next Steps
 
+- See `documentation/README.md` for the documentation map
 - See `LANGUAGE_GUIDE.md` for Grafial syntax and semantics
 - See `ENGINE_ARCHITECTURE.md` for engine internals
 - See `crates/grafial-python/README.md` for Python bindings documentation

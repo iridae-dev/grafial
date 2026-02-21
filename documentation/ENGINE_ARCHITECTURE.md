@@ -73,8 +73,15 @@ baygraph/
 - **`engine/expr_eval.rs`**: Expression evaluation core
 - **`engine/expr_utils.rs`**: Expression utility functions
 - **`engine/query_plan.rs`**: Query plan optimization and caching
+- **`engine/adjacency_index.rs`**: Incremental adjacency indexes and neighborhood query accelerators
+- **`engine/arena_allocator.rs`**: Arena-backed temporary allocations for hot rule-matching paths
+- **`engine/numeric_kernels.rs`**: Backend-dispatched numeric kernels (scalar/SIMD/GPU-staged)
 - **`engine/snapshot.rs`**: Graph snapshot serialization
 - **`engine/errors.rs`**: Error types (`ExecError`)
+- **`engine/parallel_*`** (feature `parallel`): Parallel evidence, metric, flow, graph, and rule paths
+- **`engine/rule_kernels.rs`** (feature `jit`): JIT kernel cache and compiled predicate/action support
+- **`engine/aot_*`** (feature `aot`): Ahead-of-time flow compilation and integration
+- **`engine/vectorized.rs`** (feature `vectorized`): Vectorized evidence update kernels
 - **`metrics/mod.rs`**: Metric function registry
 - **`storage/mod.rs`**: Storage utilities (currently minimal)
 
@@ -182,14 +189,14 @@ pub enum EdgePosterior {
 
 ### Parallelism Strategy
 
-- **Optional parallelism**: Use `rayon` behind `#[cfg(feature = "rayon")]`
+- **Optional parallelism**: Use Rayon-backed paths behind `#[cfg(feature = "parallel")]`
 - **Thread safety**: All shared state is `Send + Sync`
 - **Immutable references**: Pass `&BeliefGraph` (immutable) to parallel workers
 - **No globals**: Pass `Arc` handles through execution contexts
 
 **Example (metrics):**
 ```rust
-#[cfg(feature = "rayon")]
+#[cfg(feature = "parallel")]
 {
     let nodes: Vec<_> = nodes_sorted_by_id(graph.nodes())  // Stable order
         .into_iter()
