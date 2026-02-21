@@ -58,6 +58,9 @@ aot = [
     "dep:cranelift-object",
     "dep:lazy_static",
 ]
+storage-experimental = []
+storage-dense-index = ["storage-experimental"]
+storage-soa = ["storage-experimental"]
 
 [[bench]]
 name = "vectorized_evidence"

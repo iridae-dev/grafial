@@ -40,6 +40,9 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
+#[cfg(feature = "storage-dense-index")]
+use crate::engine::adjacency_index::DenseAdjacencyIndex;
+use crate::engine::adjacency_index::EnhancedAdjacencyIndex;
 use crate::engine::errors::ExecError;
 
 // Bayesian inference constants
@@ -792,6 +795,111 @@ impl AdjacencyIndex {
     }
 }
 
+/// Optional SoA edge index experiment (Phase 13).
+///
+/// Stores edge columns in separate vectors to improve cache locality for
+/// edge-heavy query patterns while preserving deterministic ordering.
+#[cfg(feature = "storage-soa")]
+#[derive(Debug, Clone)]
+pub struct EdgeSoAIndex {
+    edge_ids: Vec<EdgeId>,
+    dst_ids: Vec<NodeId>,
+    ranges: HashMap<(NodeId, Arc<str>), (usize, usize)>,
+    src_ranges: HashMap<NodeId, SmallVec<[(usize, usize); 4]>>,
+}
+
+#[cfg(feature = "storage-soa")]
+impl EdgeSoAIndex {
+    pub fn from_edges(edges: &[EdgeData]) -> Self {
+        let mut rows: Vec<(NodeId, Arc<str>, EdgeId, NodeId)> = edges
+            .iter()
+            .map(|edge| (edge.src, edge.ty.clone(), edge.id, edge.dst))
+            .collect();
+
+        rows.sort_unstable_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.as_ref().cmp(b.1.as_ref()))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+
+        let mut edge_ids = Vec::with_capacity(rows.len());
+        let mut dst_ids = Vec::with_capacity(rows.len());
+        let mut ranges: HashMap<(NodeId, Arc<str>), (usize, usize)> = HashMap::new();
+        let mut src_ranges: HashMap<NodeId, SmallVec<[(usize, usize); 4]>> = HashMap::new();
+
+        let mut current_key: Option<(NodeId, Arc<str>, usize)> = None;
+        for (idx, (src, ty, edge_id, dst)) in rows.into_iter().enumerate() {
+            match &current_key {
+                Some((current_src, current_ty, _))
+                    if *current_src == src && current_ty.as_ref() == ty.as_ref() => {}
+                Some((current_src, current_ty, start)) => {
+                    ranges.insert((*current_src, current_ty.clone()), (*start, idx));
+                    src_ranges
+                        .entry(*current_src)
+                        .or_default()
+                        .push((*start, idx));
+                    current_key = Some((src, ty.clone(), idx));
+                }
+                None => {
+                    current_key = Some((src, ty.clone(), idx));
+                }
+            }
+
+            edge_ids.push(edge_id);
+            dst_ids.push(dst);
+        }
+
+        if let Some((src, ty, start)) = current_key {
+            let end = edge_ids.len();
+            ranges.insert((src, ty), (start, end));
+            src_ranges.entry(src).or_default().push((start, end));
+        }
+
+        Self {
+            edge_ids,
+            dst_ids,
+            ranges,
+            src_ranges,
+        }
+    }
+
+    pub fn get_edges(&self, node: NodeId, edge_type: &str) -> Vec<EdgeId> {
+        let key = (node, Arc::from(edge_type));
+        self.ranges.get(&key).map_or_else(Vec::new, |(start, end)| {
+            self.edge_ids[*start..*end].to_vec()
+        })
+    }
+
+    pub fn get_all_edges(&self, node: NodeId) -> Vec<EdgeId> {
+        let mut edges = Vec::new();
+        if let Some(ranges) = self.src_ranges.get(&node) {
+            for (start, end) in ranges {
+                edges.extend_from_slice(&self.edge_ids[*start..*end]);
+            }
+        }
+        edges.sort_unstable();
+        edges
+    }
+
+    pub fn out_degree(&self, node: NodeId) -> usize {
+        self.src_ranges.get(&node).map_or(0, |ranges| {
+            ranges.iter().map(|(start, end)| end - start).sum()
+        })
+    }
+
+    pub fn neighbors(&self, node: NodeId) -> Vec<NodeId> {
+        let mut neighbors = Vec::new();
+        if let Some(ranges) = self.src_ranges.get(&node) {
+            for (start, end) in ranges {
+                neighbors.extend_from_slice(&self.dst_ids[*start..*end]);
+            }
+        }
+        neighbors.sort_unstable();
+        neighbors.dedup();
+        neighbors
+    }
+}
+
 /// A belief graph with Bayesian inference over nodes and edges.
 ///
 /// This is the core data structure for Grafial, maintaining:
@@ -825,6 +933,17 @@ pub(crate) struct BeliefGraphInner {
     pub(crate) edge_index: FxHashMap<EdgeId, usize>,
     /// Cached adjacency index for fast neighborhood queries (Phase 7)
     pub(crate) adjacency: Option<AdjacencyIndex>,
+    /// Incrementally maintained adjacency index with lazy invalidation (Phase 13)
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub(crate) enhanced_adjacency: Option<EnhancedAdjacencyIndex>,
+    /// Optional SoA edge index experiment.
+    #[cfg(feature = "storage-soa")]
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub(crate) edge_soa: Option<EdgeSoAIndex>,
+    /// Optional dense adjacency representation for workload-specialized experiments.
+    #[cfg(feature = "storage-dense-index")]
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub(crate) dense_adjacency: Option<DenseAdjacencyIndex>,
 }
 
 /// Delta entry for tracking modifications in a graph view.
@@ -1024,6 +1143,11 @@ impl BeliefGraphInner {
             node_index: FxHashMap::default(),
             edge_index: FxHashMap::default(),
             adjacency: None,
+            enhanced_adjacency: None,
+            #[cfg(feature = "storage-soa")]
+            edge_soa: None,
+            #[cfg(feature = "storage-dense-index")]
+            dense_adjacency: None,
         }
     }
 }
@@ -1083,6 +1207,7 @@ impl BeliefGraph {
 
         // Get mutable access to inner (we know we have exclusive ownership)
         let inner = Arc::get_mut(&mut self.inner).expect("ensure_owned should have been called");
+        let mut structural_update = false;
 
         for change in self.delta.drain(..) {
             match change {
@@ -1117,6 +1242,7 @@ impl BeliefGraph {
 
                 // Full variants (for structural changes - insertions, or when multiple fields change)
                 GraphDelta::NodeChange { id, node } => {
+                    structural_update = true;
                     if let Some(idx) = inner.node_index.get(&id).copied() {
                         inner.nodes[idx] = node;
                     } else {
@@ -1124,8 +1250,19 @@ impl BeliefGraph {
                         inner.nodes.push(node);
                         inner.node_index.insert(id, idx);
                     }
+                    if let Some(index) = inner.enhanced_adjacency.as_mut() {
+                        index.invalidate_node(id);
+                    }
                 }
                 GraphDelta::EdgeChange { id, edge } => {
+                    structural_update = true;
+                    let previous_edge = inner
+                        .edge_index
+                        .get(&id)
+                        .and_then(|&idx| inner.edges.get(idx))
+                        .cloned();
+                    let edge_for_index = edge.clone();
+
                     if let Some(idx) = inner.edge_index.get(&id).copied() {
                         inner.edges[idx] = edge;
                     } else {
@@ -1133,11 +1270,21 @@ impl BeliefGraph {
                         inner.edges.push(edge);
                         inner.edge_index.insert(id, idx);
                     }
+
+                    if let Some(index) = inner.enhanced_adjacency.as_mut() {
+                        if let Some(prev_edge) = previous_edge {
+                            index.remove_edge(id);
+                            index.invalidate_node(prev_edge.src);
+                        }
+                        index.add_edge(id, &edge_for_index);
+                        index.invalidate_node(edge_for_index.src);
+                    }
                 }
                 GraphDelta::CompetingGroupChange { id, group } => {
                     inner.competing_groups.insert(id, group);
                 }
                 GraphDelta::NodeRemoved { id } => {
+                    structural_update = true;
                     if let Some(idx) = inner.node_index.remove(&id) {
                         inner.nodes.swap_remove(idx);
                         // Update index for swapped node
@@ -1145,8 +1292,17 @@ impl BeliefGraph {
                             inner.node_index.insert(inner.nodes[idx].id, idx);
                         }
                     }
+                    if let Some(index) = inner.enhanced_adjacency.as_mut() {
+                        index.invalidate_node(id);
+                    }
                 }
                 GraphDelta::EdgeRemoved { id } => {
+                    structural_update = true;
+                    let removed_edge = inner
+                        .edge_index
+                        .get(&id)
+                        .and_then(|&idx| inner.edges.get(idx))
+                        .cloned();
                     if let Some(idx) = inner.edge_index.remove(&id) {
                         inner.edges.swap_remove(idx);
                         // Update index for swapped edge
@@ -1154,7 +1310,39 @@ impl BeliefGraph {
                             inner.edge_index.insert(inner.edges[idx].id, idx);
                         }
                     }
+                    if let Some(index) = inner.enhanced_adjacency.as_mut() {
+                        if index.remove_edge(id) {
+                            if let Some(edge) = removed_edge {
+                                index.invalidate_node(edge.src);
+                            }
+                        }
+                    }
                 }
+            }
+        }
+
+        // Legacy index remains rebuild-only; mark stale after structural updates.
+        if structural_update {
+            inner.adjacency = None;
+            #[cfg(feature = "storage-soa")]
+            {
+                inner.edge_soa = None;
+            }
+            #[cfg(feature = "storage-dense-index")]
+            {
+                inner.dense_adjacency = None;
+            }
+        }
+
+        // Rebuild heuristic for large incremental batches.
+        let should_rebuild = inner
+            .enhanced_adjacency
+            .as_ref()
+            .is_some_and(|index| index.rebuild_recommended());
+        if should_rebuild {
+            let edge_refs: Vec<_> = inner.edges.iter().map(|edge| (edge.id, edge)).collect();
+            if let Some(index) = inner.enhanced_adjacency.as_mut() {
+                index.force_rebuild(&edge_refs);
             }
         }
     }
@@ -1850,16 +2038,31 @@ impl BeliefGraph {
     ///
     /// Number of outgoing edges meeting the probability threshold
     pub fn degree_outgoing(&self, node: NodeId, min_prob: f64) -> usize {
-        // Optimization: If adjacency is built and delta is empty, use fast path
-        if let Some(adj) = &self.inner.adjacency {
-            if self.delta.is_empty() {
-                // Fast path: use adjacency index to get only this node's edges
-                // O(neighbors) instead of O(E) - much better for sparse graphs
+        // Fast path: use cached adjacency indexes when delta is empty.
+        if self.delta.is_empty() {
+            if let Some(index) = &self.inner.enhanced_adjacency {
+                let edge_ids = index.get_all_edges(node);
+                let mut count = 0;
+                for edge_id in edge_ids {
+                    if let Some(edge) = self.edge(edge_id) {
+                        let prob = edge
+                            .exist
+                            .mean_probability(&self.inner.competing_groups)
+                            .unwrap_or(0.0);
+                        if prob >= min_prob {
+                            count += 1;
+                        }
+                    }
+                }
+                return count;
+            }
+
+            if let Some(adj) = &self.inner.adjacency {
                 let edge_ids = adj.get_all_edges(node);
                 let mut count = 0;
-                for &eid in &edge_ids {
-                    if let Some(e) = self.edge(eid) {
-                        let prob = e
+                for &edge_id in &edge_ids {
+                    if let Some(edge) = self.edge(edge_id) {
+                        let prob = edge
                             .exist
                             .mean_probability(&self.inner.competing_groups)
                             .unwrap_or(0.0);
@@ -2094,7 +2297,7 @@ impl BeliefGraph {
         self.ensure_owned(); // Applies delta
         let inner =
             Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
-        inner.adjacency = Some(AdjacencyIndex::from_edges(&inner.edges));
+        Self::rebuild_adjacency_indexes(inner);
     }
 
     /// Ensures adjacency index is built, building it lazily if needed.
@@ -2103,8 +2306,11 @@ impl BeliefGraph {
         self.ensure_owned(); // Applies delta
         let inner =
             Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
-        if inner.adjacency.is_none() {
-            inner.adjacency = Some(AdjacencyIndex::from_edges(&inner.edges));
+        let needs_rebuild = inner.adjacency.is_none() || inner.enhanced_adjacency.is_none();
+        #[cfg(feature = "storage-soa")]
+        let needs_rebuild = needs_rebuild || inner.edge_soa.is_none();
+        if needs_rebuild {
+            Self::rebuild_adjacency_indexes(inner);
         }
     }
 
@@ -2114,12 +2320,122 @@ impl BeliefGraph {
     /// in deterministic sorted order.
     pub fn get_outgoing_edges(&mut self, node: NodeId, edge_type: &str) -> Vec<EdgeId> {
         self.ensure_adjacency();
+        #[cfg(feature = "storage-soa")]
+        if let Some(index) = &self.inner.edge_soa {
+            return index.get_edges(node, edge_type);
+        }
+
+        if let Some(index) = &self.inner.enhanced_adjacency {
+            return index.get_edges(node, edge_type);
+        }
         self.inner
             .adjacency
             .as_ref()
-            .unwrap()
-            .get_edges(node, edge_type)
-            .to_vec()
+            .map_or_else(Vec::new, |adj| adj.get_edges(node, edge_type).to_vec())
+    }
+
+    /// Returns outgoing degree using adjacency indexes (unthresholded).
+    ///
+    /// Applies pending deltas before querying to ensure index consistency.
+    pub fn out_degree(&mut self, node: NodeId) -> usize {
+        self.ensure_adjacency();
+        #[cfg(feature = "storage-soa")]
+        if let Some(index) = &self.inner.edge_soa {
+            return index.out_degree(node);
+        }
+
+        if let Some(index) = &self.inner.enhanced_adjacency {
+            return index.out_degree(node);
+        }
+        self.inner
+            .adjacency
+            .as_ref()
+            .map_or(0, |adj| adj.get_all_edges(node).len())
+    }
+
+    /// Returns sorted unique outgoing neighbors of a node.
+    ///
+    /// Applies pending deltas before querying to ensure index consistency.
+    pub fn neighbors(&mut self, node: NodeId) -> Vec<NodeId> {
+        self.ensure_adjacency();
+        #[cfg(feature = "storage-soa")]
+        if let Some(index) = &self.inner.edge_soa {
+            return index.neighbors(node);
+        }
+
+        if let Some(index) = &self.inner.enhanced_adjacency {
+            let mut neighbors: Vec<_> = index.get_neighbors(node).into_iter().collect();
+            neighbors.sort_unstable();
+            return neighbors;
+        }
+
+        // Fallback path when only legacy adjacency is available.
+        let mut neighbors = Vec::new();
+        if let Some(adj) = &self.inner.adjacency {
+            for edge_id in adj.get_all_edges(node) {
+                if let Some(edge) = self.edge(edge_id) {
+                    neighbors.push(edge.dst);
+                }
+            }
+        }
+        neighbors.sort_unstable();
+        neighbors.dedup();
+        neighbors
+    }
+
+    /// Optional dense-index experiment hook.
+    ///
+    /// Returns `None` when the dense index experiment is enabled but the
+    /// current graph shape does not trigger dense index construction.
+    #[cfg(feature = "storage-dense-index")]
+    pub fn dense_has_edge(&mut self, src: NodeId, dst: NodeId) -> Option<bool> {
+        self.ensure_adjacency();
+        self.inner
+            .dense_adjacency
+            .as_ref()
+            .map(|dense| dense.has_edge(src, dst))
+    }
+
+    fn rebuild_adjacency_indexes(inner: &mut BeliefGraphInner) {
+        inner.adjacency = Some(AdjacencyIndex::from_edges(&inner.edges));
+
+        let mut enhanced = EnhancedAdjacencyIndex::new();
+        let edge_refs: Vec<_> = inner.edges.iter().map(|edge| (edge.id, edge)).collect();
+        enhanced.build_from_edges(&edge_refs);
+        inner.enhanced_adjacency = Some(enhanced);
+
+        #[cfg(feature = "storage-soa")]
+        {
+            inner.edge_soa = Some(EdgeSoAIndex::from_edges(&inner.edges));
+        }
+
+        #[cfg(feature = "storage-dense-index")]
+        Self::maybe_build_dense_index(inner);
+    }
+
+    #[cfg(feature = "storage-dense-index")]
+    fn maybe_build_dense_index(inner: &mut BeliefGraphInner) {
+        let node_count = inner.nodes.len();
+        if node_count == 0 {
+            inner.dense_adjacency = None;
+            return;
+        }
+
+        let max_edges = node_count.saturating_mul(node_count).max(1);
+        let density = inner.edges.len() as f64 / max_edges as f64;
+
+        // Dense index is only beneficial for compact, highly connected graphs.
+        if density < 0.15 || node_count > 4096 {
+            inner.dense_adjacency = None;
+            return;
+        }
+
+        let node_ids: Vec<_> = inner.nodes.iter().map(|node| node.id).collect();
+        let mut dense = DenseAdjacencyIndex::new(&node_ids);
+        for edge in &inner.edges {
+            dense.add_edge(edge.src, edge.dst, edge.ty.as_ref());
+        }
+        inner.dense_adjacency = Some(dense);
     }
 
     pub fn adjacency_outgoing_by_type(

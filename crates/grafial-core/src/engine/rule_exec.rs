@@ -41,6 +41,7 @@ use std::collections::HashMap;
 #[cfg(feature = "jit")]
 use std::sync::Mutex;
 
+use crate::engine::arena_allocator::{Arena, ArenaMatchBindings};
 use crate::engine::errors::ExecError;
 use crate::engine::expr_eval::{eval_binary_op, eval_expr_core, eval_unary_op, ExprContext};
 use crate::engine::expr_utils::inv_norm_cdf;
@@ -1256,10 +1257,24 @@ pub fn run_rule_for_each_with_globals_audit(
         .map(|&idx| rule.patterns[idx].clone())
         .collect();
 
-    // First pass: collect all matches (read-only, no clone needed)
+    // First pass: collect all matches (read-only, no clone needed).
+    // Use arena-backed temporary bindings to reduce allocation pressure during recursive joins.
     let mut matches = Vec::new();
-    let initial_bindings = MatchBindings::with_capacity(&rule.patterns);
-    find_multi_pattern_matches(input, &ordered_patterns, 0, &initial_bindings, &mut matches)?;
+    let arena = Arena::get_cached();
+    let match_result = {
+        let initial_bindings =
+            ArenaMatchBindings::with_capacity(&arena, rule.patterns.len() * 2, rule.patterns.len());
+        find_multi_pattern_matches_arena(
+            input,
+            &ordered_patterns,
+            0,
+            &initial_bindings,
+            &arena,
+            &mut matches,
+        )
+    };
+    arena.return_to_cache();
+    match_result?;
 
     // Deterministic ordering: sort by EdgeId tuples for reproducibility
     // Use unstable sort (faster) since EdgeId ordering is stable and deterministic
@@ -1276,9 +1291,9 @@ pub fn run_rule_for_each_with_globals_audit(
     // Debug logging removed for clean output
 
     let mut filtered_matches = Vec::new();
-    for bindings in &matches {
-        if evaluate_where_clause(&rule.where_expr, bindings, globals, input)? {
-            filtered_matches.push(bindings.clone());
+    for bindings in matches {
+        if evaluate_where_clause(&rule.where_expr, &bindings, globals, input)? {
+            filtered_matches.push(bindings);
         }
     }
 
@@ -1370,64 +1385,64 @@ fn matches_node_labels(
         && dst.label.as_ref() == pattern.dst.label.as_str())
 }
 
-/// Attempts to extend bindings with a pattern match, validating variable compatibility.
+/// Attempts to extend arena-backed bindings with a pattern match.
 ///
-/// Returns `Some(new_bindings)` if the edge matches and all variables are compatible,
-/// `None` if variables conflict (e.g., shared variable bound to different node).
-///
-/// Shared variables across patterns must bind to the same graph element - this
-/// enforces the join semantics in multi-pattern rules.
-fn try_extend_bindings(
-    current_bindings: &MatchBindings,
+/// Returns `Some(new_bindings)` if the edge matches and all shared variables are
+/// compatible, `None` if variables conflict.
+fn try_extend_bindings_arena<'a>(
+    current_bindings: &ArenaMatchBindings<'a>,
     pattern: &PatternItem,
     edge: &crate::engine::graph::EdgeData,
-) -> Option<MatchBindings> {
-    let mut new_bindings = current_bindings.clone();
-
+    arena: &'a Arena,
+) -> Option<ArenaMatchBindings<'a>> {
     // Validate source node variable compatibility
-    if let Some(&existing) = current_bindings.node_vars.get(&pattern.src.var) {
+    if let Some(existing) = current_bindings.get_node(&pattern.src.var) {
         if existing != edge.src {
             return None;
         }
     }
-    new_bindings
-        .node_vars
-        .insert(pattern.src.var.clone(), edge.src);
 
     // Validate destination node variable compatibility
-    if let Some(&existing) = current_bindings.node_vars.get(&pattern.dst.var) {
+    if let Some(existing) = current_bindings.get_node(&pattern.dst.var) {
         if existing != edge.dst {
             return None;
         }
     }
-    new_bindings
-        .node_vars
-        .insert(pattern.dst.var.clone(), edge.dst);
 
-    // Edge variables must be unique per pattern (no conflicts possible in well-formed rules)
-    if current_bindings.edge_vars.contains_key(&pattern.edge.var) {
+    // Edge variables must be unique per pattern
+    if current_bindings.get_edge(&pattern.edge.var).is_some() {
         return None;
     }
-    new_bindings
-        .edge_vars
-        .insert(pattern.edge.var.clone(), edge.id);
 
+    let mut new_bindings = current_bindings.clone_to(arena);
+    new_bindings.insert_node(&pattern.src.var, edge.src);
+    new_bindings.insert_node(&pattern.dst.var, edge.dst);
+    new_bindings.insert_edge(&pattern.edge.var, edge.id);
     Some(new_bindings)
 }
 
-/// Recursively finds all matches for multi-pattern rules.
+fn arena_bindings_to_match(bindings: &ArenaMatchBindings<'_>) -> MatchBindings {
+    let (node_vars, edge_vars) = bindings.to_hashmap();
+    MatchBindings {
+        node_vars,
+        edge_vars,
+    }
+}
+
+/// Recursively finds all matches for multi-pattern rules using arena-backed temporary bindings.
 ///
-/// Builds up bindings pattern-by-pattern, ensuring shared variables (from previous
-/// patterns) match consistently. This implements the join semantics for multi-pattern rules.
-fn find_multi_pattern_matches(
+/// This keeps recursive binding expansion allocation-light while preserving deterministic
+/// matching semantics and final `MatchBindings` output.
+fn find_multi_pattern_matches_arena<'a>(
     graph: &BeliefGraph,
     patterns: &[PatternItem],
     pattern_idx: usize,
-    current_bindings: &MatchBindings,
+    current_bindings: &ArenaMatchBindings<'a>,
+    arena: &'a Arena,
     matches: &mut Vec<MatchBindings>,
 ) -> Result<(), ExecError> {
     if pattern_idx >= patterns.len() {
-        matches.push(current_bindings.clone());
+        matches.push(arena_bindings_to_match(current_bindings));
         return Ok(());
     }
 
@@ -1439,11 +1454,19 @@ fn find_multi_pattern_matches(
             continue;
         }
 
-        let Some(new_bindings) = try_extend_bindings(current_bindings, pat, edge) else {
+        let Some(new_bindings) = try_extend_bindings_arena(current_bindings, pat, edge, arena)
+        else {
             continue;
         };
 
-        find_multi_pattern_matches(graph, patterns, pattern_idx + 1, &new_bindings, matches)?;
+        find_multi_pattern_matches_arena(
+            graph,
+            patterns,
+            pattern_idx + 1,
+            &new_bindings,
+            arena,
+            matches,
+        )?;
     }
 
     Ok(())

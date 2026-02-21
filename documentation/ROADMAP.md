@@ -17,7 +17,7 @@ This is the canonical compiler/runtime roadmap for Grafial.
 - Phase 10: Completed
 - Phase 11: Completed
 - Phase 12: Completed ✅ (Fully integrated with parallel evidence, metrics, and rules)
-- Phase 13: Future
+- Phase 13: Completed ✅ (Storage/indexing optimizations integrated with experimental storage models)
 - Phase 14: Future
 
 ## Execution Order
@@ -425,6 +425,23 @@ Completion notes (this change):
 - Evaluate optional storage-model experiments behind feature flags:
   - deeper SoA layouts,
   - workload-specialized graph representations.
+
+Completion notes (this change):
+- Integrated incremental adjacency maintenance into `BeliefGraph` with lazy invalidation and rebuild heuristics:
+  - enhanced index updates are applied during `apply_delta` structural commits,
+  - legacy adjacency cache is invalidated on structural changes and rebuilt lazily.
+- Added adjacency query surfaces backed by incremental indexes:
+  - `get_outgoing_edges(...)` now prefers the enhanced index,
+  - added `out_degree(...)` and `neighbors(...)` index-backed helpers.
+- Reduced rule-matching allocation pressure in hot multi-pattern joins:
+  - switched recursive temporary match expansion to arena-backed bindings (`Arena`/`ArenaMatchBindings`),
+  - conversion to `MatchBindings` now happens only at terminal match emission.
+- Added opt-in storage experiment feature flags in `grafial-core`:
+  - `storage-experimental`
+  - `storage-dense-index` (includes optional dense adjacency construction for high-density graphs),
+  - `storage-soa` (adds an SoA edge-index representation for adjacency query evaluation).
+
+### All Phase 13 objectives completed!
 
 ## Phase 14 - Numeric Kernels + Equivalence
 

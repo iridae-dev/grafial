@@ -56,9 +56,9 @@ pub struct EnhancedAdjacencyIndex {
 #[derive(Debug, Clone, Default)]
 struct NodeDelta {
     /// Edges added since last rebuild
-    _added: SmallVec<[(Arc<str>, EdgeId); 4]>,
+    added: SmallVec<[(Arc<str>, EdgeId); 4]>,
     /// Edges removed since last rebuild
-    removed: SmallVec<[(Arc<str>, EdgeId); 4]>,
+    removed: SmallVec<[(Arc<str>, EdgeId, NodeId); 4]>,
     /// Version when delta was created
     version: Version,
 }
@@ -106,6 +106,11 @@ impl EnhancedAdjacencyIndex {
                 .insert(*edge_id, (edge_data.src, edge_data.dst));
         }
 
+        // Keep deterministic ordering for outgoing edge queries.
+        for edge_ids in self.primary.values_mut() {
+            edge_ids.sort_unstable();
+        }
+
         // Update version and stats
         self.version += 1;
         self.pending_delta_count = 0;
@@ -121,17 +126,22 @@ impl EnhancedAdjacencyIndex {
     pub fn add_edge(&mut self, edge_id: EdgeId, edge_data: &EdgeData) {
         // Add to primary index immediately for fast queries
         let key = (edge_data.src, edge_data.ty.clone());
-        self.primary.entry(key.clone()).or_default().push(edge_id);
+        let entry = self.primary.entry(key.clone()).or_default();
+        entry.push(edge_id);
+        entry.sort_unstable();
 
         // Add to reverse index
         self.reverse.insert(edge_id, (edge_data.src, edge_data.dst));
 
-        // Don't record in delta since we've already updated the primary index
-        // Delta is only for tracking pending changes not yet in primary
+        // Record per-node delta for diagnostics/rebuild heuristics.
+        let delta = self.node_deltas.entry(edge_data.src).or_default();
+        delta.added.push((edge_data.ty.clone(), edge_id));
+        delta.version = self.version;
 
         // Update counters
         self.pending_delta_count += 1;
         self.stats.incremental_updates += 1;
+        self.node_versions.insert(edge_data.src, self.version);
 
         // Check if rebuild is needed
         if self.pending_delta_count > DELTA_REBUILD_THRESHOLD {
@@ -142,23 +152,29 @@ impl EnhancedAdjacencyIndex {
     /// Incrementally removes an edge from the index.
     pub fn remove_edge(&mut self, edge_id: EdgeId) -> bool {
         // Look up edge info from reverse index
-        let Some((src, _dst)) = self.reverse.remove(&edge_id) else {
+        let Some((src, dst)) = self.reverse.remove(&edge_id) else {
             return false;
         };
 
         // Find and remove from primary index
         // This is O(n) for the edge list, but lists are typically small
         let mut removed = false;
-        self.primary.retain(|(node, _edge_type), edges| {
+        let mut removed_edge_type: Option<Arc<str>> = None;
+        self.primary.retain(|(node, edge_type), edges| {
             if *node == src {
                 let old_len = edges.len();
                 edges.retain(|e| *e != edge_id);
                 if edges.len() < old_len {
                     removed = true;
+                    removed_edge_type = Some(edge_type.clone());
 
                     // Record in delta
                     let delta = self.node_deltas.entry(src).or_default();
-                    delta.removed.push((Arc::from(""), edge_id)); // Edge type not critical for removal
+                    delta.removed.push((
+                        removed_edge_type.clone().unwrap_or_else(|| Arc::from("")),
+                        edge_id,
+                        dst,
+                    ));
                     delta.version = self.version;
                 }
             }
@@ -181,26 +197,23 @@ impl EnhancedAdjacencyIndex {
     /// Gets edges for a node and edge type, applying deltas if needed.
     pub fn get_edges(&self, node: NodeId, edge_type: &str) -> Vec<EdgeId> {
         let key = (node, Arc::from(edge_type));
-
-        // Get base edges
         let mut edges = self
             .primary
             .get(&key)
-            .map(|v| v.to_vec())
-            .unwrap_or_default();
+            .map_or_else(Vec::new, |edge_ids| edge_ids.to_vec());
+        edges.sort_unstable();
+        edges
+    }
 
-        // Apply delta if exists - only remove deleted edges since added are already in primary
-        if let Some(delta) = self.node_deltas.get(&node) {
-            // Remove edges marked for deletion
-            let removed: HashSet<EdgeId> = delta
-                .removed
-                .iter()
-                .filter(|(et, _)| et.is_empty() || &**et == edge_type)
-                .map(|(_, e)| *e)
-                .collect();
-            edges.retain(|e| !removed.contains(e));
+    /// Gets all outgoing edge IDs for a node across all edge types.
+    pub fn get_all_edges(&self, node: NodeId) -> Vec<EdgeId> {
+        let mut edges = Vec::new();
+        for ((src, _), edge_ids) in &self.primary {
+            if *src == node {
+                edges.extend(edge_ids.iter().copied());
+            }
         }
-
+        edges.sort_unstable();
         edges
     }
 
@@ -222,6 +235,18 @@ impl EnhancedAdjacencyIndex {
     /// Gets the number of pending delta operations.
     pub fn pending_deltas(&self) -> usize {
         self.pending_delta_count
+    }
+
+    /// Returns true when heuristic threshold suggests a full rebuild.
+    pub fn rebuild_recommended(&self) -> bool {
+        self.pending_delta_count > DELTA_REBUILD_THRESHOLD
+    }
+
+    /// Returns sparse per-node delta size (added + removed edge entries).
+    pub fn node_delta_size(&self, node: NodeId) -> usize {
+        self.node_deltas
+            .get(&node)
+            .map_or(0, |delta| delta.added.len() + delta.removed.len())
     }
 
     /// Forces a full rebuild of the index.
@@ -260,21 +285,13 @@ impl EnhancedAdjacencyIndex {
 
     /// Gets the degree of a node (number of outgoing edges).
     pub fn out_degree(&self, node: NodeId) -> usize {
-        let mut degree = 0;
-
-        // Count edges in primary index
-        for ((n, _), edges) in &self.primary {
-            if *n == node {
-                degree += edges.len();
+        let mut out_degree = 0;
+        for ((src, _), edges) in &self.primary {
+            if *src == node {
+                out_degree += edges.len();
             }
         }
-
-        // Apply deltas - only subtract removed edges since added are already in primary
-        if let Some(delta) = self.node_deltas.get(&node) {
-            degree = degree.saturating_sub(delta.removed.len());
-        }
-
-        degree
+        out_degree
     }
 
     /// Gets all neighbors of a node (targets of outgoing edges).
@@ -292,16 +309,6 @@ impl EnhancedAdjacencyIndex {
             }
         }
 
-        // Apply deltas - only remove deleted edges since added are already in primary
-        if let Some(delta) = self.node_deltas.get(&node) {
-            // Remove neighbors from deleted edges
-            for (_, edge_id) in &delta.removed {
-                if let Some((_, dst)) = self.reverse.get(edge_id) {
-                    neighbors.remove(dst);
-                }
-            }
-        }
-
         neighbors
     }
 }
@@ -315,6 +322,7 @@ impl Default for EnhancedAdjacencyIndex {
 /// Specialized adjacency structure for dense graphs.
 ///
 /// Uses a more compact representation for graphs with high edge density.
+#[derive(Debug, Clone)]
 pub struct DenseAdjacencyIndex {
     /// Bit matrix representation for edge existence
     /// Row = source node, Column = destination node
