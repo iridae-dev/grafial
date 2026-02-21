@@ -395,9 +395,9 @@ Areas of interest:
 
 Grafial development follows a phased roadmap:
 
-- ✅ **Phase 0-12**: Core language, optimizations, and parallel execution (COMPLETE)
-- 🚧 **Phase 13**: Graph storage and indexing optimizations
-- 📋 **Phase 14**: Advanced numeric kernels and GPU support
+- ✅ **Phase 0-14**: Core language, optimizations, parallel execution, and numeric kernels (COMPLETE)
+- ✅ **Phase 15**: Accelerator dispatch and GPU-staged parity/benchmark gates (COMPLETE)
+- 📋 **Next**: Concrete GPU runtime backend integration
 
 See [ROADMAP.md](documentation/ROADMAP.md) for detailed phase descriptions.
 

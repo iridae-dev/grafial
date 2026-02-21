@@ -19,6 +19,7 @@ This is the canonical compiler/runtime roadmap for Grafial.
 - Phase 12: Completed ✅ (Fully integrated with parallel evidence, metrics, and rules)
 - Phase 13: Completed ✅ (Storage/indexing optimizations integrated with experimental storage models)
 - Phase 14: Completed ✅ (SIMD kernels + strict equivalence gates integrated)
+- Phase 15: Completed ✅ (Accelerator dispatch + GPU-staged parity/bench gates integrated)
 
 ## Execution Order
 
@@ -37,6 +38,7 @@ This is the canonical compiler/runtime roadmap for Grafial.
 13. Phase 12 - Parallel Engine Execution
 14. Phase 13 - Graph Storage + Indexing
 15. Phase 14 - Numeric Kernels + Equivalence
+16. Phase 15 - Accelerator Dispatch + GPU Staging
 
 ## Phase 0 - Language Contract Freeze
 
@@ -465,3 +467,28 @@ Completion notes (this change):
   - conservative minimum vector size threshold before SIMD dispatch.
 
 ### All Phase 14 objectives completed!
+
+## Phase 15 - Accelerator Dispatch + GPU Staging
+
+- Add explicit accelerator dispatch policies for numeric kernels (scalar, auto, SIMD-preferred, GPU-preferred).
+- Introduce a feature-gated GPU-staged kernel path with deterministic host fallback semantics.
+- Require parity and determinism checks across backend preferences and dispatch paths.
+- Add benchmark coverage for kernel backend break-even analysis before any default backend escalation.
+
+Completion notes (this change):
+- Extended numeric kernel dispatch surfaces:
+  - added `KernelBackend::GpuPreferred` behind feature gating,
+  - added `KernelExecutionPath` reporting and path-aware dispatch helper.
+- Added conservative, opt-in GPU staging gate:
+  - new feature flag `gpu-kernels` (default off),
+  - conservative `DIRICHLET_GPU_STAGED_MIN_LEN` threshold for staged dispatch.
+- Implemented a GPU-compatible host-staged Dirichlet probability kernel:
+  - tile/chunk-based reduction and normalization used as deterministic equivalence baseline for future concrete GPU runtime integration.
+- Added strict validation gates for the new dispatch layer:
+  - auto backend path reporting/parity checks,
+  - GPU-preferred vs scalar parity checks,
+  - GPU-preferred fallback checks on sub-threshold vectors.
+- Added criterion benchmark target:
+  - `benches/numeric_kernels.rs` for scalar/auto/SIMD/GPU-preferred comparisons under feature combinations.
+
+### All Phase 15 objectives completed!

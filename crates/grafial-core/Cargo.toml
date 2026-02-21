@@ -62,6 +62,7 @@ storage-experimental = []
 storage-dense-index = ["storage-experimental"]
 storage-soa = ["storage-experimental"]
 simd-kernels = []
+gpu-kernels = []
 
 [[bench]]
 name = "vectorized_evidence"
@@ -69,4 +70,8 @@ harness = false
 
 [[bench]]
 name = "parallel_execution"
+harness = false
+
+[[bench]]
+name = "numeric_kernels"
 harness = false

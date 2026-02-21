@@ -9,6 +9,14 @@
 /// benchmark data before any default enablement.
 pub const DIRICHLET_SIMD_MIN_LEN: usize = 64;
 
+/// Minimum vector length before attempting GPU-staged kernel dispatch.
+///
+/// The current GPU path is a host-staged fallback that mirrors GPU-style
+/// chunked reductions. This enables deterministic parity testing before wiring
+/// a concrete runtime backend.
+#[cfg(feature = "gpu-kernels")]
+pub const DIRICHLET_GPU_STAGED_MIN_LEN: usize = 1024;
+
 /// Equivalence epsilon for optimized-vs-reference numerical checks.
 pub const KERNEL_EQUIVALENCE_EPSILON: f64 = 1e-12;
 
@@ -22,6 +30,22 @@ pub enum KernelBackend {
     /// Prefer optimized implementation even below thresholds, fallback to scalar.
     #[cfg(feature = "simd-kernels")]
     SimdPreferred,
+    /// Prefer GPU-staged implementation, fallback to SIMD/scalar.
+    #[cfg(feature = "gpu-kernels")]
+    GpuPreferred,
+}
+
+/// Resolved execution path used by a numeric kernel call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KernelExecutionPath {
+    /// Scalar reference path.
+    Scalar,
+    /// AVX2 SIMD path on x86_64.
+    #[cfg(feature = "simd-kernels")]
+    SimdAvx2,
+    /// Host-staged GPU-compatible path.
+    #[cfg(feature = "gpu-kernels")]
+    GpuStagedHost,
 }
 
 /// Public entrypoint for Dirichlet mean probability vector kernel.
@@ -37,31 +61,87 @@ pub fn dirichlet_mean_probabilities_with_backend(
     min_param: f64,
     backend: KernelBackend,
 ) -> Vec<f64> {
+    dirichlet_mean_probabilities_with_backend_and_path(concentrations, min_param, backend).0
+}
+
+/// Dirichlet mean probability vector with backend selection and execution path.
+pub fn dirichlet_mean_probabilities_with_backend_and_path(
+    concentrations: &[f64],
+    min_param: f64,
+    backend: KernelBackend,
+) -> (Vec<f64>, KernelExecutionPath) {
     if concentrations.is_empty() {
-        return Vec::new();
+        return (Vec::new(), KernelExecutionPath::Scalar);
     }
 
     match backend {
-        KernelBackend::Scalar => dirichlet_mean_probabilities_scalar(concentrations, min_param),
+        KernelBackend::Scalar => (
+            dirichlet_mean_probabilities_scalar(concentrations, min_param),
+            KernelExecutionPath::Scalar,
+        ),
         KernelBackend::Auto => {
+            #[cfg(feature = "gpu-kernels")]
+            {
+                if let Some(gpu_probs) =
+                    dirichlet_mean_probabilities_gpu_staged(concentrations, min_param)
+                {
+                    return (gpu_probs, KernelExecutionPath::GpuStagedHost);
+                }
+            }
             #[cfg(feature = "simd-kernels")]
             {
                 if concentrations.len() >= DIRICHLET_SIMD_MIN_LEN {
                     if let Some(simd_probs) =
                         dirichlet_mean_probabilities_simd(concentrations, min_param)
                     {
-                        return simd_probs;
+                        return (simd_probs, KernelExecutionPath::SimdAvx2);
                     }
                 }
             }
-            dirichlet_mean_probabilities_scalar(concentrations, min_param)
+            (
+                dirichlet_mean_probabilities_scalar(concentrations, min_param),
+                KernelExecutionPath::Scalar,
+            )
         }
         #[cfg(feature = "simd-kernels")]
         KernelBackend::SimdPreferred => {
             if let Some(simd_probs) = dirichlet_mean_probabilities_simd(concentrations, min_param) {
-                return simd_probs;
+                return (simd_probs, KernelExecutionPath::SimdAvx2);
             }
-            dirichlet_mean_probabilities_scalar(concentrations, min_param)
+            #[cfg(feature = "gpu-kernels")]
+            {
+                if let Some(gpu_probs) =
+                    dirichlet_mean_probabilities_gpu_staged(concentrations, min_param)
+                {
+                    return (gpu_probs, KernelExecutionPath::GpuStagedHost);
+                }
+            }
+            (
+                dirichlet_mean_probabilities_scalar(concentrations, min_param),
+                KernelExecutionPath::Scalar,
+            )
+        }
+        #[cfg(feature = "gpu-kernels")]
+        KernelBackend::GpuPreferred => {
+            if let Some(gpu_probs) =
+                dirichlet_mean_probabilities_gpu_staged(concentrations, min_param)
+            {
+                return (gpu_probs, KernelExecutionPath::GpuStagedHost);
+            }
+            #[cfg(feature = "simd-kernels")]
+            {
+                if concentrations.len() >= DIRICHLET_SIMD_MIN_LEN {
+                    if let Some(simd_probs) =
+                        dirichlet_mean_probabilities_simd(concentrations, min_param)
+                    {
+                        return (simd_probs, KernelExecutionPath::SimdAvx2);
+                    }
+                }
+            }
+            (
+                dirichlet_mean_probabilities_scalar(concentrations, min_param),
+                KernelExecutionPath::Scalar,
+            )
         }
     }
 }
@@ -87,6 +167,44 @@ fn dirichlet_mean_probabilities_simd(concentrations: &[f64], min_param: f64) -> 
 #[cfg(all(feature = "simd-kernels", not(target_arch = "x86_64")))]
 fn dirichlet_mean_probabilities_simd(_: &[f64], _: f64) -> Option<Vec<f64>> {
     None
+}
+
+#[cfg(feature = "gpu-kernels")]
+fn dirichlet_mean_probabilities_gpu_staged(
+    concentrations: &[f64],
+    min_param: f64,
+) -> Option<Vec<f64>> {
+    if concentrations.len() < DIRICHLET_GPU_STAGED_MIN_LEN {
+        return None;
+    }
+    Some(dirichlet_mean_probabilities_gpu_staged_host(
+        concentrations,
+        min_param,
+    ))
+}
+
+#[cfg(feature = "gpu-kernels")]
+fn dirichlet_mean_probabilities_gpu_staged_host(
+    concentrations: &[f64],
+    min_param: f64,
+) -> Vec<f64> {
+    const TILE_SIZE: usize = 256;
+    let mut clipped = Vec::with_capacity(concentrations.len());
+    let mut sum_alpha = 0.0_f64;
+
+    for tile in concentrations.chunks(TILE_SIZE) {
+        for &a in tile {
+            let value = a.max(min_param);
+            clipped.push(value);
+            sum_alpha += value;
+        }
+    }
+
+    let inv_sum = 1.0 / sum_alpha;
+    for value in &mut clipped {
+        *value *= inv_sum;
+    }
+    clipped
 }
 
 #[cfg(all(feature = "simd-kernels", target_arch = "x86_64"))]
@@ -225,5 +343,64 @@ mod tests {
             KernelBackend::SimdPreferred,
         );
         assert_close_vec(&scalar, &simd, KERNEL_EQUIVALENCE_EPSILON);
+    }
+
+    #[test]
+    fn dirichlet_auto_reports_valid_execution_path() {
+        let concentrations = make_concentrations(256, 9001);
+        let (auto_probs, path) = dirichlet_mean_probabilities_with_backend_and_path(
+            &concentrations,
+            0.01,
+            KernelBackend::Auto,
+        );
+        let scalar_probs =
+            dirichlet_mean_probabilities_with_backend(&concentrations, 0.01, KernelBackend::Scalar);
+        assert_close_vec(&scalar_probs, &auto_probs, KERNEL_EQUIVALENCE_EPSILON);
+
+        match path {
+            KernelExecutionPath::Scalar => {}
+            #[cfg(feature = "simd-kernels")]
+            KernelExecutionPath::SimdAvx2 => {}
+            #[cfg(feature = "gpu-kernels")]
+            KernelExecutionPath::GpuStagedHost => {}
+        }
+    }
+
+    #[cfg(feature = "gpu-kernels")]
+    #[test]
+    fn dirichlet_gpu_preferred_matches_scalar_reference() {
+        let concentrations = make_concentrations(DIRICHLET_GPU_STAGED_MIN_LEN + 128, 77);
+        let scalar =
+            dirichlet_mean_probabilities_with_backend(&concentrations, 0.01, KernelBackend::Scalar);
+        let gpu = dirichlet_mean_probabilities_with_backend(
+            &concentrations,
+            0.01,
+            KernelBackend::GpuPreferred,
+        );
+        assert_close_vec(&scalar, &gpu, KERNEL_EQUIVALENCE_EPSILON);
+    }
+
+    #[cfg(feature = "gpu-kernels")]
+    #[test]
+    fn dirichlet_gpu_preferred_small_vector_falls_back_to_scalar_path() {
+        let concentrations = make_concentrations(DIRICHLET_SIMD_MIN_LEN - 1, 2024);
+        let (_, path) = dirichlet_mean_probabilities_with_backend_and_path(
+            &concentrations,
+            0.01,
+            KernelBackend::GpuPreferred,
+        );
+        assert_eq!(path, KernelExecutionPath::Scalar);
+    }
+
+    #[cfg(all(feature = "gpu-kernels", feature = "simd-kernels"))]
+    #[test]
+    fn dirichlet_gpu_preferred_uses_gpu_staged_path_for_large_vectors() {
+        let concentrations = make_concentrations(DIRICHLET_GPU_STAGED_MIN_LEN + 64, 404);
+        let (_, path) = dirichlet_mean_probabilities_with_backend_and_path(
+            &concentrations,
+            0.01,
+            KernelBackend::GpuPreferred,
+        );
+        assert_eq!(path, KernelExecutionPath::GpuStagedHost);
     }
 }
