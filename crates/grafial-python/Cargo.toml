@@ -13,7 +13,8 @@ test = false
 [dependencies]
 grafial-core = { path = "../grafial-core" }
 grafial-frontend = { path = "../grafial-frontend" }
-pyo3 = { workspace = true, features = ["auto-initialize"] }
+pyo3 = { workspace = true }
 
 [features]
 default = []
+extension-module = ["pyo3/extension-module"]

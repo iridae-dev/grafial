@@ -60,7 +60,7 @@ maturin develop --release
 pip install pytest
 
 # Run tests
-pytest tests/ -v
+.venv/bin/pytest tests/ -v
 ```
 
 ## Building for Distribution
@@ -291,7 +291,7 @@ jobs:
         cd crates/grafial-python
         pip install dist/grafial-*.whl
         pip install pytest
-        pytest tests/
+        .venv/bin/pytest tests/
 ```
 
 ## Troubleshooting
@@ -314,4 +314,3 @@ jobs:
 - [PyO3 User Guide](https://pyo3.rs/)
 - [Python Packaging Guide](https://packaging.python.org/)
 - [PyPI Publishing Guide](https://packaging.python.org/guides/distributing-packages-using-setuptools/#uploading-your-project-to-pypi)
-

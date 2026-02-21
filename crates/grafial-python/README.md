@@ -19,7 +19,7 @@ Python bindings for Grafial using PyO3 and maturin.
 cd crates/grafial-python
 
 # Create virtual environment
-uv venv
+uv venv --python 3.11
 
 # Activate virtual environment
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
@@ -63,17 +63,17 @@ After installation, you can run Python tests:
 
 ```bash
 # From crates/grafial-python directory
-pytest tests/
+.venv/bin/pytest tests/
 
 # Or run specific test file
-pytest tests/test_basic.py -v
+.venv/bin/pytest tests/test_basic.py -v
 ```
 
-You can also run Rust unit tests (these test the bindings from Rust side):
+You can also run Rust lint checks for the bindings crate:
 
 ```bash
 # From project root
-cargo test -p grafial-python
+cargo clippy -p grafial-python --all-targets -- -D warnings
 ```
 
 ### Using in Python
@@ -90,7 +90,7 @@ schema Test {
     edge KNOWS { }
 }
 belief_model TestBeliefs on Test {
-    edge KNOWS { exist ~ BernoulliPosterior(prior=0.5, pseudo_count=2.0) }
+    edge KNOWS { exist ~ Bernoulli(prior=0.5, weight=2.0) }
 }
 """
 program = grafial.compile(source)
@@ -238,7 +238,7 @@ This installs in "editable" mode, so changes to the Rust code will be reflected 
 
 1. Edit Rust code in `src/lib.rs`
 2. Rebuild: `maturin develop --release` (or `uv pip install -e .`)
-3. Test: `pytest tests/`
+3. Test: `.venv/bin/pytest tests/`
 4. Iterate
 
 ### Debugging
@@ -283,4 +283,3 @@ crates/grafial-python/
 - [Maturin Documentation](https://maturin.rs/)
 - [PyO3 User Guide](https://pyo3.rs/latest/)
 - [Python Packaging Guide](https://packaging.python.org/)
-

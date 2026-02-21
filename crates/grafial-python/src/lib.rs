@@ -15,6 +15,26 @@ use std::collections::HashMap;
 /// Used to detect forced present/absent edges by checking Beta parameters
 const FORCE_PRECISION: f64 = 1_000_000.0;
 
+/// Classify near-deterministic independent edge states.
+///
+/// Core can encode these states via force APIs (1e6) or high-confidence delete
+/// paths (1e9). We treat both as forced when one parameter is near 1 and the
+/// opposite parameter is at least FORCE_PRECISION.
+fn classify_forced_state(
+    beta: &grafial_core::engine::graph::BetaPosterior,
+) -> Option<&'static str> {
+    const UNIT_EPS: f64 = 1e-9;
+    let alpha = beta.alpha;
+    let beta_param = beta.beta;
+    if alpha <= 1.0 + UNIT_EPS && beta_param >= FORCE_PRECISION {
+        Some("absent")
+    } else if beta_param <= 1.0 + UNIT_EPS && alpha >= FORCE_PRECISION {
+        Some("present")
+    } else {
+        None
+    }
+}
+
 /// Python-visible Program wrapper holding an immutable AST.
 ///
 /// Methods provide discovery of flow names, schema names, and belief models.
@@ -203,7 +223,7 @@ impl PyBeliefGraph {
     /// Iterate competing edge groups, optionally filtered by edge type.
     pub fn competing_groups(&self, edge_type: Option<&str>) -> PyResult<Vec<PyCompetingGroup>> {
         let mut out = Vec::new();
-        for (_gid, group) in self.inner.competing_groups() {
+        for group in self.inner.competing_groups().values() {
             if let Some(t) = edge_type {
                 if group.edge_type.as_str() != t {
                     continue;
@@ -270,25 +290,12 @@ impl PyBeliefGraph {
             rec.set_item("src", e.src.0.to_string())?;
             rec.set_item("dst", e.dst.0.to_string())?;
             rec.set_item("type", e.ty.as_ref())?;
-            let prob = self
-                .inner
-                .prob_mean(e.id)
-                .map_err(|err| map_exec_error(err))?;
+            let prob = self.inner.prob_mean(e.id).map_err(map_exec_error)?;
             rec.set_item("prob", prob)?;
             // forced_state for independent edges
             let forced = match &e.exist {
                 grafial_core::engine::graph::EdgePosterior::Independent(beta) => {
-                    if (beta.alpha - FORCE_PRECISION).abs() < f64::EPSILON
-                        && (beta.beta - 1.0).abs() < f64::EPSILON
-                    {
-                        Some("present")
-                    } else if (beta.alpha - 1.0).abs() < f64::EPSILON
-                        && (beta.beta - FORCE_PRECISION).abs() < f64::EPSILON
-                    {
-                        Some("absent")
-                    } else {
-                        None
-                    }
+                    classify_forced_state(beta)
                 }
                 _ => None,
             };
@@ -330,10 +337,7 @@ impl PyBeliefGraph {
 
         // Add edges with attributes if prob >= threshold
         for e in self.inner.edges() {
-            let prob = self
-                .inner
-                .prob_mean(e.id)
-                .map_err(|err| map_exec_error(err))?;
+            let prob = self.inner.prob_mean(e.id).map_err(map_exec_error)?;
             if prob < threshold {
                 continue;
             }
@@ -342,17 +346,7 @@ impl PyBeliefGraph {
             attrs.set_item("prob", prob)?;
             let forced = match &e.exist {
                 grafial_core::engine::graph::EdgePosterior::Independent(beta) => {
-                    if (beta.alpha - FORCE_PRECISION).abs() < f64::EPSILON
-                        && (beta.beta - 1.0).abs() < f64::EPSILON
-                    {
-                        Some("present")
-                    } else if (beta.alpha - 1.0).abs() < f64::EPSILON
-                        && (beta.beta - FORCE_PRECISION).abs() < f64::EPSILON
-                    {
-                        Some("absent")
-                    } else {
-                        None
-                    }
+                    classify_forced_state(beta)
                 }
                 _ => None,
             };
@@ -446,7 +440,7 @@ impl PyEdgeView {
     #[getter]
     pub fn prob(&self) -> PyResult<f64> {
         let eid = grafial_core::engine::graph::EdgeId(self.edge_id);
-        self.graph.prob_mean(eid).map_err(|e| map_exec_error(e))
+        self.graph.prob_mean(eid).map_err(map_exec_error)
     }
 
     #[getter]
@@ -455,18 +449,7 @@ impl PyEdgeView {
         if let Some(e) = self.graph.edge(eid) {
             match &e.exist {
                 grafial_core::engine::graph::EdgePosterior::Independent(beta) => {
-                    // Heuristic: detect forced params
-                    if (beta.alpha - FORCE_PRECISION).abs() < f64::EPSILON
-                        && (beta.beta - 1.0).abs() < f64::EPSILON
-                    {
-                        Some("present".to_string())
-                    } else if (beta.alpha - 1.0).abs() < f64::EPSILON
-                        && (beta.beta - FORCE_PRECISION).abs() < f64::EPSILON
-                    {
-                        Some("absent".to_string())
-                    } else {
-                        None
-                    }
+                    classify_forced_state(beta).map(|s| s.to_string())
                 }
                 _ => None,
             }
@@ -697,9 +680,10 @@ pub fn run_flow_with_context(
     ctx: &PyContext,
 ) -> PyResult<PyContext> {
     // Reconstruct a FlowResult with metric exports and exported graphs to pass as prior
-    let mut prior = grafial_core::engine::flow_exec::FlowResult::default();
-    // Restore metric exports
-    prior.metric_exports = ctx.metrics.clone();
+    let mut prior = grafial_core::engine::flow_exec::FlowResult {
+        metric_exports: ctx.metrics.clone(),
+        ..Default::default()
+    };
     // Restore exported graphs
     for (alias, pygraph) in &ctx.graphs {
         // Extract Arc<BeliefGraph> from wrapper (clone for sharing)
@@ -728,8 +712,10 @@ pub fn run_flow_with_evidence(
 ) -> PyResult<PyContext> {
     // Build optional prior from Context
     let prior = if let Some(ctx) = ctx {
-        let mut p = grafial_core::engine::flow_exec::FlowResult::default();
-        p.metric_exports = ctx.metrics.clone();
+        let mut p = grafial_core::engine::flow_exec::FlowResult {
+            metric_exports: ctx.metrics.clone(),
+            ..Default::default()
+        };
         for (alias, pygraph) in &ctx.graphs {
             let g = pygraph.borrow(py).inner.as_ref().clone();
             p.exports.insert(alias.clone(), g);

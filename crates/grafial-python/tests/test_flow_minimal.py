@@ -1,14 +1,5 @@
 import grafial
-from pathlib import Path
-
-
-def load_example(path: str) -> str:
-    # Find project root: tests/ is in crates/grafial-python/, so go up 2 levels
-    test_dir = Path(__file__).parent
-    project_root = test_dir.parent.parent.parent
-    example_path = project_root / path
-    with open(example_path, "r", encoding="utf-8") as f:
-        return f.read()
+from _helpers import load_example
 
 
 def test_minimal_flow_exports_graph(tmp_path):
@@ -64,4 +55,3 @@ def test_minimal_pandas_and_networkx_exports_if_installed():
         assert hasattr(G, "nodes")
         assert G.number_of_nodes() >= 1
         assert G.number_of_edges() >= 1
-

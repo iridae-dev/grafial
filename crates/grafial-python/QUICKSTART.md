@@ -84,10 +84,10 @@ If you see "Grafial imported successfully!" without errors, you're good to go!
 pip install pytest
 
 # Run all tests
-pytest tests/ -v
+.venv/bin/pytest tests/ -v
 
 # Run a specific test file
-pytest tests/test_basic.py -v
+.venv/bin/pytest tests/test_basic.py -v
 ```
 
 ## Step 5: Try It Out
@@ -105,7 +105,7 @@ schema Test {
 }
 
 belief_model TestBeliefs on Test {
-    edge KNOWS { exist ~ BernoulliPosterior(prior=0.5, pseudo_count=2.0) }
+    edge KNOWS { exist ~ Bernoulli(prior=0.5, weight=2.0) }
 }
 """
 
@@ -244,4 +244,3 @@ maturin develop --release --python python3.11
 - Read `README.md` for detailed documentation
 - Check `tests/` directory for more examples
 - See `../grafial-examples/` for Grafial program examples
-

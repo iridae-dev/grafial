@@ -24,6 +24,5 @@ dev = [
 ]
 
 [tool.maturin]
-features = []
+features = ["extension-module"]
 module-name = "grafial"
-

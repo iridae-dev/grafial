@@ -35,7 +35,7 @@ rayon = "1"
 crossbeam-channel = "0.5"
 parking_lot = "0.12"
 num_cpus = "1"
-pyo3 = { version = "0.21", features = ["auto-initialize"] }
+pyo3 = "0.21"
 cranelift-codegen = "0.125"
 cranelift-frontend = "0.125"
 cranelift-jit = "0.125"
