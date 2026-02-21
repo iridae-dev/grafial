@@ -18,7 +18,7 @@ This is the canonical compiler/runtime roadmap for Grafial.
 - Phase 11: Completed
 - Phase 12: Completed ✅ (Fully integrated with parallel evidence, metrics, and rules)
 - Phase 13: Completed ✅ (Storage/indexing optimizations integrated with experimental storage models)
-- Phase 14: Future
+- Phase 14: Completed ✅ (SIMD kernels + strict equivalence gates integrated)
 
 ## Execution Order
 
@@ -450,3 +450,18 @@ Completion notes (this change):
   - posterior parity vs reference implementation (within documented epsilon),
   - deterministic parity across repeated runs and backend selections.
 - Gate risky optimizations behind feature flags and benchmark thresholds before default enablement.
+
+Completion notes (this change):
+- Added `numeric_kernels` module with backend-selected Dirichlet probability kernels:
+  - scalar reference implementation,
+  - AVX2 SIMD implementation for larger vectors.
+- Integrated kernel dispatch into `DirichletPosterior::mean_probabilities()` so probability vectors use the optimized path only when explicitly enabled.
+- Added strict equivalence and determinism gates:
+  - scalar vs auto backend parity checks over varied vector sizes,
+  - repeated-run deterministic parity checks,
+  - SIMD-preferred vs scalar parity checks when SIMD feature is enabled.
+- Added conservative feature/threshold gating for risky optimizations:
+  - new opt-in feature `simd-kernels` (default off),
+  - conservative minimum vector size threshold before SIMD dispatch.
+
+### All Phase 14 objectives completed!

@@ -61,6 +61,7 @@ aot = [
 storage-experimental = []
 storage-dense-index = ["storage-experimental"]
 storage-soa = ["storage-experimental"]
+simd-kernels = []
 
 [[bench]]
 name = "vectorized_evidence"

@@ -447,15 +447,10 @@ impl DirichletPosterior {
     ///
     /// Returns [E[π_1], E[π_2], ..., E[π_K]] for all categories.
     pub fn mean_probabilities(&self) -> Vec<f64> {
-        let sum_alpha: f64 = self
-            .concentrations
-            .iter()
-            .map(|&a| a.max(MIN_DIRICHLET_PARAM))
-            .sum();
-        self.concentrations
-            .iter()
-            .map(|&a| a.max(MIN_DIRICHLET_PARAM) / sum_alpha)
-            .collect()
+        crate::engine::numeric_kernels::dirichlet_mean_probabilities(
+            &self.concentrations,
+            MIN_DIRICHLET_PARAM,
+        )
     }
 
     /// Computes the Shannon entropy of the distribution.
