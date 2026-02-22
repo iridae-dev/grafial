@@ -45,7 +45,8 @@ After a comprehensive Bayesian and graph-theoretic review of the Grafial project
 
 ### Mathematical/Statistical
 1. **Force operations create inconsistent states** - Forced edge existence/absence breaks probabilistic coherence
-2. **No validation against improper priors** - System accepts invalid prior parameters
+2. **No validation against improper priors ✅ COMPLETED (2026-02-22)** - System accepts invalid prior parameters
+Resolution implemented: belief-model validation now rejects improper/unknown Gaussian and Bernoulli parameters (including non-positive Gaussian precision, Bernoulli priors outside `(0,1)`, non-positive pseudo-counts, duplicate parameters, and non-Gaussian node-attribute posteriors).
 3. **Missing multivariate support** - No correlation modeling between variables
 4. **No model selection** - Cannot compare alternative graph structures
 

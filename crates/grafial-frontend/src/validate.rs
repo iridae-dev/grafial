@@ -311,6 +311,62 @@ fn validate_belief_model(
             )
         })?;
 
+    // Validate node belief declarations.
+    for node_decl in &model.nodes {
+        let schema_node = schema
+            .nodes
+            .iter()
+            .find(|n| n.name == node_decl.node_type)
+            .ok_or_else(|| {
+                validation_error(
+                    format!(
+                        "Node type '{}' not found in schema '{}'",
+                        node_decl.node_type, model.on_schema
+                    ),
+                    Some(&context),
+                    range,
+                )
+            })?;
+
+        let mut attrs_seen = HashSet::new();
+        for (attr_name, posterior) in &node_decl.attrs {
+            if !schema_node.attrs.iter().any(|a| a.name == *attr_name) {
+                return Err(validation_error(
+                    format!(
+                        "Attribute '{}.{}' not found in schema '{}'",
+                        node_decl.node_type, attr_name, model.on_schema
+                    ),
+                    Some(&context),
+                    range,
+                ));
+            }
+            if !attrs_seen.insert(attr_name.as_str()) {
+                return Err(validation_error(
+                    format!(
+                        "Attribute '{}.{}' declared multiple times in belief model '{}'",
+                        node_decl.node_type, attr_name, model.name
+                    ),
+                    Some(&context),
+                    range,
+                ));
+            }
+
+            let target = format!("node attribute '{}.{}'", node_decl.node_type, attr_name);
+            match posterior {
+                PosteriorType::Gaussian { params } => {
+                    validate_gaussian_params(params, &target, &context, range)?;
+                }
+                other => {
+                    return Err(validation_error(
+                        format!("{} must use GaussianPosterior, got {:?}", target, other),
+                        Some(&context),
+                        range,
+                    ));
+                }
+            }
+        }
+    }
+
     // Track edge types to ensure uniqueness (independent vs competing)
     let mut edge_types_seen = std::collections::HashMap::new();
 
@@ -333,7 +389,7 @@ fn validate_belief_model(
             PosteriorType::Categorical {
                 group_by,
                 prior,
-                categories: _,
+                categories,
             } => {
                 // Check group_by is valid
                 if group_by != "source" && group_by != "destination" {
@@ -350,10 +406,10 @@ fn validate_belief_model(
                 // Check prior specification
                 match prior {
                     CategoricalPrior::Uniform { pseudo_count } => {
-                        if *pseudo_count <= 0.0 {
+                        if !pseudo_count.is_finite() || *pseudo_count <= 0.0 {
                             return Err(validation_error(
                                 format!(
-                                    "CategoricalPosterior 'pseudo_count' must be > 0, got {}",
+                                    "CategoricalPosterior 'pseudo_count' must be finite and > 0, got {}",
                                     pseudo_count
                                 ),
                                 Some(&context),
@@ -370,10 +426,10 @@ fn validate_belief_model(
                             ));
                         }
                         for (i, &alpha) in concentrations.iter().enumerate() {
-                            if alpha <= 0.0 {
+                            if !alpha.is_finite() || alpha <= 0.0 {
                                 return Err(validation_error(
                                     format!(
-                                        "CategoricalPosterior prior array element {} must be > 0, got {}",
+                                        "CategoricalPosterior prior array element {} must be finite and > 0, got {}",
                                         i, alpha
                                     ),
                                     Some(&context),
@@ -384,36 +440,54 @@ fn validate_belief_model(
                     }
                 }
 
+                if let Some(category_names) = categories {
+                    if category_names.is_empty() {
+                        return Err(validation_error(
+                            "CategoricalPosterior 'categories' cannot be empty when provided",
+                            Some(&context),
+                            range,
+                        ));
+                    }
+                    let mut seen = HashSet::new();
+                    for category in category_names {
+                        if category.trim().is_empty() {
+                            return Err(validation_error(
+                                "CategoricalPosterior 'categories' cannot contain empty names",
+                                Some(&context),
+                                range,
+                            ));
+                        }
+                        if !seen.insert(category.as_str()) {
+                            return Err(validation_error(
+                                format!(
+                                    "CategoricalPosterior 'categories' contains duplicate '{}'",
+                                    category
+                                ),
+                                Some(&context),
+                                range,
+                            ));
+                        }
+                    }
+                }
+
                 // Note: categories validation against schema would require knowing all possible destinations
                 // This is deferred to runtime when edges are actually created
             }
             PosteriorType::Bernoulli { params } => {
-                // Validate Bernoulli parameters if needed
-                let prior = params.iter().find(|(name, _)| name == "prior");
-                let pseudo_count = params.iter().find(|(name, _)| name == "pseudo_count");
-
-                if let Some((_, val)) = prior {
-                    if !(0.0..=1.0).contains(val) {
-                        return Err(validation_error(
-                            format!("BernoulliPosterior 'prior' must be in [0, 1], got {}", val),
-                            Some(&context),
-                            range,
-                        ));
-                    }
-                }
-
-                if let Some((_, val)) = pseudo_count {
-                    if *val <= 0.0 {
-                        return Err(validation_error(
-                            format!("BernoulliPosterior 'pseudo_count' must be > 0, got {}", val),
-                            Some(&context),
-                            range,
-                        ));
-                    }
-                }
+                let target = format!("edge '{}.exist'", edge_decl.edge_type);
+                validate_bernoulli_params(params, &target, &context, range)?;
             }
-            PosteriorType::Gaussian { .. } => {
-                // Gaussian validation would go here if needed
+            PosteriorType::Gaussian { params } => {
+                let target = format!("edge '{}.exist'", edge_decl.edge_type);
+                validate_gaussian_params(params, &target, &context, range)?;
+                return Err(validation_error(
+                    format!(
+                        "{} must use BernoulliPosterior or CategoricalPosterior for edge existence",
+                        target
+                    ),
+                    Some(&context),
+                    range,
+                ));
             }
         }
 
@@ -429,6 +503,164 @@ fn validate_belief_model(
             ));
         }
         edge_types_seen.insert(edge_decl.edge_type.clone(), &edge_decl.exist);
+    }
+
+    Ok(())
+}
+
+fn validate_gaussian_params(
+    params: &[(String, f64)],
+    target: &str,
+    context: &ValidationContext,
+    range: Option<SourceRange>,
+) -> Result<(), FrontendError> {
+    let mut seen_prior_mean = false;
+    let mut seen_prior_precision = false;
+
+    for (name, val) in params {
+        if !val.is_finite() {
+            return Err(validation_error(
+                format!(
+                    "{} GaussianPosterior parameter '{}' must be finite, got {}",
+                    target, name, val
+                ),
+                Some(context),
+                range,
+            ));
+        }
+
+        match name.as_str() {
+            "prior_mean" => {
+                if seen_prior_mean {
+                    return Err(validation_error(
+                        format!(
+                            "{} GaussianPosterior parameter 'prior_mean' declared multiple times",
+                            target
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+                seen_prior_mean = true;
+            }
+            "prior_precision" => {
+                if seen_prior_precision {
+                    return Err(validation_error(
+                        format!(
+                            "{} GaussianPosterior parameter 'prior_precision' declared multiple times",
+                            target
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+                if *val <= 0.0 {
+                    return Err(validation_error(
+                        format!(
+                            "{} GaussianPosterior 'prior_precision' must be > 0, got {}",
+                            target, val
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+                seen_prior_precision = true;
+            }
+            other => {
+                return Err(validation_error(
+                    format!(
+                        "{} GaussianPosterior has unknown parameter '{}'",
+                        target, other
+                    ),
+                    Some(context),
+                    range,
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_bernoulli_params(
+    params: &[(String, f64)],
+    target: &str,
+    context: &ValidationContext,
+    range: Option<SourceRange>,
+) -> Result<(), FrontendError> {
+    let mut seen_prior = false;
+    let mut seen_pseudo_count = false;
+
+    for (name, val) in params {
+        if !val.is_finite() {
+            return Err(validation_error(
+                format!(
+                    "{} BernoulliPosterior parameter '{}' must be finite, got {}",
+                    target, name, val
+                ),
+                Some(context),
+                range,
+            ));
+        }
+
+        match name.as_str() {
+            "prior" => {
+                if seen_prior {
+                    return Err(validation_error(
+                        format!(
+                            "{} BernoulliPosterior parameter 'prior' declared multiple times",
+                            target
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+                if !(*val > 0.0 && *val < 1.0) {
+                    return Err(validation_error(
+                        format!(
+                            "{} BernoulliPosterior 'prior' must be in (0, 1), got {}",
+                            target, val
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+                seen_prior = true;
+            }
+            "pseudo_count" => {
+                if seen_pseudo_count {
+                    return Err(validation_error(
+                        format!(
+                            "{} BernoulliPosterior parameter 'pseudo_count' declared multiple times",
+                            target
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+                if *val <= 0.0 {
+                    return Err(validation_error(
+                        format!(
+                            "{} BernoulliPosterior 'pseudo_count' must be > 0, got {}",
+                            target, val
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+                seen_pseudo_count = true;
+            }
+            other => {
+                return Err(validation_error(
+                    format!(
+                        "{} BernoulliPosterior has unknown parameter '{}'",
+                        target, other
+                    ),
+                    Some(context),
+                    range,
+                ));
+            }
+        }
     }
 
     Ok(())
@@ -2507,6 +2739,60 @@ mod tests {
 
         let result = validate_program(&ast);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_belief_model_rejects_non_positive_gaussian_prior_precision() {
+        let src = r#"
+schema S { node N { x: Real } edge E {} }
+belief_model M on S {
+  node N { x ~ Gaussian(prior_mean=0.0, prior_precision=0.0) }
+  edge E { exist ~ Bernoulli(prior=0.5, pseudo_count=2.0) }
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        let err = validate_program(&ast).expect_err("should reject improper Gaussian prior");
+        assert!(err.to_string().contains("prior_precision"));
+    }
+
+    #[test]
+    fn validate_belief_model_rejects_boundary_bernoulli_prior() {
+        let src = r#"
+schema S { node N { x: Real } edge E {} }
+belief_model M on S {
+  edge E { exist ~ Bernoulli(prior=1.0, pseudo_count=2.0) }
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        let err = validate_program(&ast).expect_err("should reject boundary Bernoulli prior");
+        assert!(err.to_string().contains("must be in (0, 1)"));
+    }
+
+    #[test]
+    fn validate_belief_model_rejects_unknown_bernoulli_parameter() {
+        let src = r#"
+schema S { node N { x: Real } edge E {} }
+belief_model M on S {
+  edge E { exist ~ Bernoulli(prior=0.5, mystery=2.0) }
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        let err = validate_program(&ast).expect_err("should reject unknown Bernoulli parameter");
+        assert!(err.to_string().contains("unknown parameter"));
+    }
+
+    #[test]
+    fn validate_belief_model_rejects_non_gaussian_node_attribute_posterior() {
+        let src = r#"
+schema S { node N { x: Real } edge E {} }
+belief_model M on S {
+  node N { x ~ Bernoulli(prior=0.5, pseudo_count=2.0) }
+  edge E { exist ~ Bernoulli(prior=0.5, pseudo_count=2.0) }
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        let err = validate_program(&ast).expect_err("should reject non-Gaussian node posterior");
+        assert!(err.to_string().contains("must use GaussianPosterior"));
     }
 
     #[test]

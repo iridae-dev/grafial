@@ -3049,7 +3049,10 @@ mod tests {
         g.update(base + 1.0e-3, 1.0e307);
 
         let expected = base + 5.0e-4;
-        assert!(g.mean.is_finite(), "mean should stay finite under high precision");
+        assert!(
+            g.mean.is_finite(),
+            "mean should stay finite under high precision"
+        );
         assert!(
             (g.mean - expected).abs() < 1.0e-6,
             "mean should track precision-weighted delta stably"
@@ -3616,7 +3619,10 @@ mod tests {
             .unwrap();
 
         let mean = g.expectation(NodeId(1), "x").unwrap();
-        assert!(mean.is_finite(), "high-precision update should remain finite");
+        assert!(
+            mean.is_finite(),
+            "high-precision update should remain finite"
+        );
         assert!(
             (mean - (base + 5.0e-4)).abs() < 1.0e-6,
             "delta-aware graph update should preserve small shifts"
