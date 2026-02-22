@@ -34,11 +34,12 @@ After a comprehensive Bayesian and graph-theoretic review of the Grafial project
 **Fix Required**: Implement at least one belief propagation algorithm for connected graphs.
 **Resolution Implemented**: Added a first-class `infer_beliefs` flow transform and deterministic loopy sum-product belief propagation for independent edges in `/crates/grafial-core/src/engine/belief_propagation.rs`, with frontend/IR/runtime wiring and parser + integration coverage.
 
-### 5. Numerical Precision Loss
+### 5. Numerical Precision Loss ✅ COMPLETED (2026-02-22)
 **Location**: `/crates/grafial-core/src/engine/graph.rs:184-191`
 **Severity**: CRITICAL
 **Issue**: Gaussian posterior updates suffer from catastrophic cancellation at high precisions.
 **Fix Required**: Use numerically stable formulations (Welford's algorithm or precision-weighted updates).
+**Resolution Implemented**: Replaced unstable weighted-sum mean updates with numerically stable delta-form updates (`μ += (τ_obs/τ_new) * (x - μ)`) in `GaussianPosterior::update`, and routed `observe_attr`/`soft_update` through this path. Added high-precision regression tests that previously overflowed the numerator path.
 
 ## High Priority Issues
 
@@ -62,7 +63,7 @@ After a comprehensive Bayesian and graph-theoretic review of the Grafial project
 
 ### Well-Implemented Features
 - ✅ Clean, modular architecture with good separation of concerns
-- ✅ Correct implementation of Gaussian conjugate updates (modulo numerical issues)
+- ✅ Correct and numerically stable implementation of Gaussian conjugate updates
 - ✅ Correct Beta posterior updates for independent edges
 - ✅ Strong type safety with Rust's type system
 - ✅ Good performance optimizations (Arc, SmallVec, incremental indexing)
@@ -80,7 +81,7 @@ After a comprehensive Bayesian and graph-theoretic review of the Grafial project
 1. Fix Dirichlet update mathematics
 2. Add comprehensive test coverage for all posteriors
 3. ✅ Implemented basic belief propagation (sum-product algorithm) via `infer_beliefs`
-4. Fix numerical stability issues
+4. ✅ Fixed Gaussian numerical stability issues (high-precision cancellation/overflow path)
 5. Lock category sets at model definition
 
 ### Secondary Priority (2-4 months)

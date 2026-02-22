@@ -173,6 +173,10 @@ impl GaussianPosterior {
     /// μ_new = (τ_old * μ_old + τ_obs * x) / τ_new
     /// ```
     ///
+    /// Implementation note: the mean update is computed in numerically stable
+    /// delta form `μ_new = μ_old + (τ_obs / τ_new) * (x - μ_old)` to reduce
+    /// catastrophic cancellation when precisions are large.
+    ///
     /// # Arguments
     ///
     /// * `x` - The observed value
@@ -182,12 +186,11 @@ impl GaussianPosterior {
     /// - τ_new = τ_old + τ_obs
     /// - μ_new = (τ_old × μ_old + τ_obs × x) / τ_new
     pub fn update(&mut self, x: f64, tau_obs: f64) {
-        let tau_old = self.precision;
+        let tau_old = self.precision.max(MIN_PRECISION);
         let tau_obs = tau_obs.max(MIN_OBS_PRECISION);
-        let tau_new = (tau_old + tau_obs).max(MIN_PRECISION);
-        let mu_num = tau_old * self.mean + tau_obs * x;
-        let mu_new = mu_num / tau_new;
-        self.mean = mu_new;
+        let tau_new = tau_old + tau_obs;
+        let weight = tau_obs / tau_new;
+        self.mean += weight * (x - self.mean);
         self.precision = tau_new;
     }
 
@@ -1909,16 +1912,16 @@ impl BeliefGraph {
             .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
 
         let tau_obs_eff = (obs_precision.max(MIN_OBS_PRECISION)) * count.max(1.0);
-        let tau_new = (old.precision + tau_obs_eff).max(MIN_PRECISION);
-        let mu_new = (old.precision * old.mean + tau_obs_eff * value) / tau_new;
+        let mut updated = old;
+        updated.update(value, tau_obs_eff);
 
         self.delta.push(GraphDelta::NodeAttributeChange {
             node,
             attr: Arc::from(attr),
             old_mean: old.mean,
             old_precision: old.precision,
-            new_mean: mu_new,
-            new_precision: tau_new,
+            new_mean: updated.mean,
+            new_precision: updated.precision,
         });
         Ok(())
     }
@@ -2676,10 +2679,8 @@ impl BeliefGraph {
             .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
 
         // Compute new mean and precision after Bayesian update
-        let tau_old = old_posterior.precision;
-        let tau_obs = tau_obs.max(MIN_OBS_PRECISION);
-        let tau_new = tau_old + tau_obs;
-        let mu_new = (tau_old * old_posterior.mean + tau_obs * x) / tau_new;
+        let mut updated = old_posterior;
+        updated.update(x, tau_obs);
 
         // Store fine-grained delta
         self.delta.push(GraphDelta::NodeAttributeChange {
@@ -2687,8 +2688,8 @@ impl BeliefGraph {
             attr: Arc::from(attr),
             old_mean: old_posterior.mean,
             old_precision: old_posterior.precision,
-            new_mean: mu_new,
-            new_precision: tau_new,
+            new_mean: updated.mean,
+            new_precision: updated.precision,
         });
         Ok(())
     }
@@ -3036,6 +3037,24 @@ mod tests {
 
         // Should clip tau_obs to 1e-12
         assert!(g.precision >= 1.0, "should handle negative tau_obs");
+    }
+
+    #[test]
+    fn gaussian_update_high_precision_avoids_overflow_in_mean() {
+        let base = 1.0e10;
+        let mut g = GaussianPosterior {
+            mean: base,
+            precision: 1.0e307,
+        };
+        g.update(base + 1.0e-3, 1.0e307);
+
+        let expected = base + 5.0e-4;
+        assert!(g.mean.is_finite(), "mean should stay finite under high precision");
+        assert!(
+            (g.mean - expected).abs() < 1.0e-6,
+            "mean should track precision-weighted delta stably"
+        );
+        assert!(g.precision.is_finite(), "precision should stay finite");
     }
 
     #[test]
@@ -3575,6 +3594,33 @@ mod tests {
 
         let mean = g.expectation(NodeId(1), "x").unwrap();
         assert!((mean - 5.0).abs() < 1e-9); // posterior mean should be 5.0
+    }
+
+    #[test]
+    fn belief_graph_observe_attr_high_precision_update_is_stable() {
+        let base = 1.0e10;
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData {
+            id: NodeId(1),
+            label: "N".into(),
+            attrs: HashMap::from([(
+                "x".into(),
+                GaussianPosterior {
+                    mean: base,
+                    precision: 1.0e307,
+                },
+            )]),
+        });
+
+        g.observe_attr(NodeId(1), "x", base + 1.0e-3, 1.0e307)
+            .unwrap();
+
+        let mean = g.expectation(NodeId(1), "x").unwrap();
+        assert!(mean.is_finite(), "high-precision update should remain finite");
+        assert!(
+            (mean - (base + 5.0e-4)).abs() < 1.0e-6,
+            "delta-aware graph update should preserve small shifts"
+        );
     }
 
     #[test]
