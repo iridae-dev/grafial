@@ -190,7 +190,7 @@ cargo bench -p grafial-core --bench numeric_kernels --features simd-kernels,gpu-
 
 ## Contributing
 
-See `AGENTS.md` and `CONTRIBUTING.md` (if present) for contribution and coding guidelines.
+See `CONTRIBUTING.md` (if present) for contribution and coding guidelines.
 
 ## License
 
