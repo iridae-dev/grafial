@@ -39,6 +39,7 @@ fn create_test_program() -> ProgramAst {
                 exist: PosteriorType::Bernoulli {
                     params: vec![("prior".into(), 0.5), ("pseudo_count".into(), 2.0)],
                 },
+                weight: None,
             }],
             body_src: "".into(),
         }],
@@ -114,6 +115,45 @@ fn build_graph_from_evidence_creates_edges() {
         "Expected prob > 0.5 after observing present, got {}",
         prob
     );
+}
+
+#[test]
+fn build_graph_from_evidence_updates_edge_weight_posterior() {
+    let mut program = create_test_program();
+    program.belief_models[0].edges[0].weight = Some(PosteriorType::Gaussian {
+        params: vec![
+            ("prior_mean".into(), 1.0),
+            ("prior_precision".into(), 1.0),
+            ("observation_precision".into(), 2.0),
+        ],
+    });
+
+    let evidence = EvidenceDef {
+        name: "TestEvidence".into(),
+        on_model: "SocialBeliefs".into(),
+        observations: vec![
+            ObserveStmt::Edge {
+                edge_type: "KNOWS".into(),
+                src: ("Person".into(), "Alice".into()),
+                dst: ("Person".into(), "Bob".into()),
+                mode: EvidenceMode::Present,
+            },
+            ObserveStmt::EdgeWeight {
+                edge_type: "KNOWS".into(),
+                src: ("Person".into(), "Alice".into()),
+                dst: ("Person".into(), "Bob".into()),
+                value: 3.0,
+                precision: None,
+            },
+        ],
+        body_src: "".into(),
+    };
+
+    let graph = build_graph_from_evidence(&evidence, &program).unwrap();
+    let edge_id = graph.edges()[0].id;
+    let weight_mean = graph.edge_weight_expectation(edge_id).unwrap();
+    // prior_mean=1.0, prior_precision=1.0, observed=3.0 with tau=2.0 => mean = 7/3
+    assert!((weight_mean - (7.0 / 3.0)).abs() < 1e-12);
 }
 
 #[test]
@@ -234,6 +274,7 @@ fn build_graph_from_evidence_initializes_fixed_attr_correlations() {
                 exist: PosteriorType::Bernoulli {
                     params: vec![("prior".into(), 0.5), ("pseudo_count".into(), 2.0)],
                 },
+                weight: None,
             }],
             body_src: "".into(),
         }],

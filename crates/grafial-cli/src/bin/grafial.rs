@@ -224,6 +224,27 @@ fn print_summary(flow_name: &str, result: &grafial_core::engine::flow_exec::Flow
             );
         }
     }
+
+    if !result.inference_diagnostics.is_empty() {
+        println!(
+            "\nInference Diagnostics ({}):",
+            result.inference_diagnostics.len()
+        );
+        for event in &result.inference_diagnostics {
+            println!(
+                "  [{}:{}] alg={} converged={} iterations={}/{} final_delta={:.3e} vars={} connected={}",
+                event.graph,
+                event.transform,
+                event.algorithm,
+                event.converged,
+                event.iterations_run,
+                event.max_iterations,
+                event.final_max_message_delta,
+                event.variable_count,
+                event.connected_variable_count
+            );
+        }
+    }
 }
 
 /// Format FlowResult for JSON serialization
@@ -301,6 +322,29 @@ fn format_flow_result(
         })
         .collect();
     output.insert("intervention_audit".to_string(), json!(intervention_audit));
+
+    let inference_diagnostics: Vec<serde_json::Value> = result
+        .inference_diagnostics
+        .iter()
+        .map(|event| {
+            json!({
+                "flow": event.flow,
+                "graph": event.graph,
+                "transform": event.transform,
+                "algorithm": event.algorithm,
+                "iterations_run": event.iterations_run,
+                "max_iterations": event.max_iterations,
+                "converged": event.converged,
+                "final_max_message_delta": event.final_max_message_delta,
+                "variable_count": event.variable_count,
+                "connected_variable_count": event.connected_variable_count,
+            })
+        })
+        .collect();
+    output.insert(
+        "inference_diagnostics".to_string(),
+        json!(inference_diagnostics),
+    );
 
     output
 }

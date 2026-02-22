@@ -125,6 +125,8 @@ pub struct EdgeBeliefDecl {
     pub edge_type: String,
     /// Posterior type for edge existence
     pub exist: PosteriorType,
+    /// Optional posterior type for continuous edge weight
+    pub weight: Option<PosteriorType>,
 }
 
 /// A belief model associates inference parameters with a schema.
@@ -170,6 +172,19 @@ pub enum ObserveStmt {
         dst: (String, String),
         /// Evidence mode
         mode: EvidenceMode,
+    },
+    /// Observe a continuous edge weight value
+    EdgeWeight {
+        /// Edge type name
+        edge_type: String,
+        /// Source node reference (type and label)
+        src: (String, String),
+        /// Destination node reference (type and label)
+        dst: (String, String),
+        /// Observed edge weight value
+        value: f64,
+        /// Optional per-observation precision (tau_obs)
+        precision: Option<f64>,
     },
     /// Observe a node attribute value
     Attribute {

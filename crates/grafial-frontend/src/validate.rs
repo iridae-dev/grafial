@@ -2,7 +2,7 @@
 //!
 //! This module performs semantic validation on the parsed AST, checking:
 //!
-//! - **Rule validation**: Ensures `prob()` is only used on edge variables,
+//! - **Rule validation**: Ensures `prob()`/`weight()` are only used on edge variables,
 //!   `prob_correlated()` is used on supported comparison forms,
 //!   `E[]` is used on node attributes, and expressions are well-formed
 //!
@@ -14,7 +14,7 @@
 //!
 //! ## Validation Rules
 //!
-//! - `prob(var)` requires `var` to be an edge variable from pattern
+//! - `prob(var)`/`weight(var)` require `var` to be an edge variable from pattern
 //! - `prob_correlated(lhs <op> rhs, rho=...)` requires node-attribute comparison operands
 //! - `credible(event, p=...)` supports edge-variable or comparison events
 //! - `E[node.attr]` requires `node` to be a node variable from pattern
@@ -547,6 +547,25 @@ fn validate_belief_model(
             }
         }
 
+        if let Some(weight_posterior) = &edge_decl.weight {
+            let target = format!("edge '{}.weight'", edge_decl.edge_type);
+            match weight_posterior {
+                PosteriorType::Gaussian { params } => {
+                    validate_gaussian_params(params, &target, &context, range)?;
+                }
+                other => {
+                    return Err(validation_error(
+                        format!(
+                            "{} must use GaussianPosterior, got {:?}",
+                            target, other
+                        ),
+                        Some(&context),
+                        range,
+                    ));
+                }
+            }
+        }
+
         // Check for duplicate edge type declarations
         if let Some(prev_type) = edge_types_seen.get(&edge_decl.edge_type) {
             return Err(validation_error(
@@ -851,6 +870,60 @@ fn validate_evidence(
                     // For now, we'll allow it (could be validated later when building the graph)
                 }
             }
+            ObserveStmt::EdgeWeight {
+                edge_type,
+                precision,
+                ..
+            } => {
+                let edge_decl = model.edges.iter().find(|e| e.edge_type == *edge_type);
+                let edge_decl = edge_decl.ok_or_else(|| {
+                    validation_error(
+                        format!(
+                            "Edge '{}' is not declared in belief model '{}'",
+                            edge_type, model.name
+                        ),
+                        Some(&context),
+                        range,
+                    )
+                })?;
+
+                match &edge_decl.weight {
+                    Some(PosteriorType::Gaussian { .. }) => {}
+                    Some(other) => {
+                        return Err(validation_error(
+                            format!(
+                                "Edge '{}.weight' must use GaussianPosterior, got {:?}",
+                                edge_type, other
+                            ),
+                            Some(&context),
+                            range,
+                        ));
+                    }
+                    None => {
+                        return Err(validation_error(
+                            format!(
+                                "Edge '{}' does not declare a weight posterior but evidence observes weight",
+                                edge_type
+                            ),
+                            Some(&context),
+                            range,
+                        ));
+                    }
+                }
+
+                if let Some(tau) = precision {
+                    if !tau.is_finite() || *tau <= 0.0 {
+                        return Err(validation_error(
+                            format!(
+                                "Edge weight precision must be finite and > 0, got {}",
+                                tau
+                            ),
+                            Some(&context),
+                            range,
+                        ));
+                    }
+                }
+            }
             ObserveStmt::Attribute { .. } => {
                 // Attribute observations are validated when building the graph
             }
@@ -1062,6 +1135,23 @@ fn validate_rule_call(
                 )),
                 _ => Err(validation_error(
                     "prob(): argument must be an edge variable",
+                    Some(context),
+                    range,
+                )),
+            }
+        }
+        "weight" => {
+            if !named.map.is_empty() || pos.len() != 1 {
+                return Err(validation_error(
+                    "weight(): expected single positional edge variable argument",
+                    Some(context),
+                    range,
+                ));
+            }
+            match pos[0] {
+                ExprAst::Var(v) if scope.edge_vars.contains(v) => Ok(()),
+                _ => Err(validation_error(
+                    "weight(): argument must be an edge variable",
                     Some(context),
                     range,
                 )),
@@ -1604,14 +1694,14 @@ fn validate_prune_predicate_with_ctx(
     context: Option<&ValidationContext>,
     range: Option<SourceRange>,
 ) -> Result<(), FrontendError> {
-    // Ensure any prob(...) refers to 'edge'
+    // Ensure any supported edge function refers to 'edge'
     walk_expr(expr, &mut |e| {
         if let ExprAst::Call { name, args } = e {
-            if name == "prob" {
+            if name == "prob" || name == "weight" {
                 let (pos, named) = split_args(args);
                 if !named.map.is_empty() || pos.len() != 1 {
                     return Err(validation_error(
-                        "prob(): expected single positional argument",
+                        format!("{}(): expected single positional argument", name),
                         context,
                         range,
                     ));
@@ -1619,7 +1709,10 @@ fn validate_prune_predicate_with_ctx(
                 match pos[0] {
                     ExprAst::Var(v) if v == "edge" => Ok(()),
                     _ => Err(validation_error(
-                        "prob(): argument must be 'edge' in prune_edges predicate",
+                        format!(
+                            "{}(): argument must be 'edge' in prune_edges predicate",
+                            name
+                        ),
                         context,
                         range,
                     )),
@@ -3116,5 +3209,39 @@ rule R on M {
         };
         let err = validate_rule(&rule).expect_err("should fail");
         assert!(err.to_string().contains("unknown variable"));
+    }
+
+    #[test]
+    fn validate_accepts_edge_weight_evidence_when_declared() {
+        let src = r#"
+schema S { node N {} edge E {} }
+belief_model M on S {
+  edge E {
+    exist ~ Bernoulli(prior=0.5, pseudo_count=2.0)
+    weight ~ Gaussian(prior_mean=1.0, prior_precision=1.0, observation_precision=2.0)
+  }
+}
+evidence Ev on M {
+  observe edge E(N["a"], N["b"]) weight=2.5
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        validate_program(&ast).expect("edge weight evidence should validate");
+    }
+
+    #[test]
+    fn validate_rejects_edge_weight_evidence_without_weight_posterior() {
+        let src = r#"
+schema S { node N {} edge E {} }
+belief_model M on S {
+  edge E { exist ~ Bernoulli(prior=0.5, pseudo_count=2.0) }
+}
+evidence Ev on M {
+  observe edge E(N["a"], N["b"]) weight=2.5
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        let err = validate_program(&ast).expect_err("should reject missing edge weight posterior");
+        assert!(err.to_string().contains("does not declare a weight posterior"));
     }
 }

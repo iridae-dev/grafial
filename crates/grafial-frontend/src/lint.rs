@@ -681,6 +681,30 @@ fn emit_prior_data_conflict_lints(
                         }
                     }
                 }
+                ObserveStmt::EdgeWeight {
+                    edge_type,
+                    precision,
+                    ..
+                } => {
+                    if let Some(obs_precision) = precision {
+                        if !obs_precision.is_finite()
+                            || *obs_precision <= 0.0
+                            || *obs_precision < 1e-9
+                            || *obs_precision > 1e9
+                        {
+                            push_lint(
+                                out,
+                                LINT_STAT_NUMERICAL_INSTABILITY,
+                                format!(
+                                    "Edge weight observation precision={} for edge '{}' in evidence '{}' may cause numerical instability",
+                                    obs_precision, edge_type, evidence.name
+                                ),
+                                evidence_range,
+                                LintSeverity::Warning,
+                            );
+                        }
+                    }
+                }
             }
         }
     }

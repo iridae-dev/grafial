@@ -32,6 +32,8 @@ use pest_derive::Parser;
 #[grammar = "../grammar.pest"]
 pub struct BayGraphParser;
 
+type ParsedEdgeObserveTarget = (String, (String, String), (String, String));
+
 /// Parses Grafial DSL source into an Abstract Syntax Tree.
 ///
 /// This is a pure syntactic parser that does not perform semantic validation.
@@ -280,6 +282,7 @@ fn build_node_belief(pair: pest::iterators::Pair<Rule>) -> Result<NodeBeliefDecl
 fn build_edge_belief(pair: pest::iterators::Pair<Rule>) -> Result<EdgeBeliefDecl, FrontendError> {
     let mut edge_type = String::new();
     let mut exist: Option<PosteriorType> = None;
+    let mut weight: Option<PosteriorType> = None;
 
     for p in pair.into_inner() {
         match p.as_rule() {
@@ -300,6 +303,21 @@ fn build_edge_belief(pair: pest::iterators::Pair<Rule>) -> Result<EdgeBeliefDecl
                     exist = Some(build_posterior_type(pp)?);
                 }
             }
+            Rule::edge_weight_belief_decl => {
+                let mut wi = p.into_inner();
+                let posterior_pair = wi.find(|e| {
+                    matches!(
+                        e.as_rule(),
+                        Rule::posterior_type
+                            | Rule::gaussian_posterior
+                            | Rule::bernoulli_posterior
+                            | Rule::categorical_posterior
+                    )
+                });
+                if let Some(pp) = posterior_pair {
+                    weight = Some(build_posterior_type(pp)?);
+                }
+            }
             _ => {}
         }
     }
@@ -309,6 +327,7 @@ fn build_edge_belief(pair: pest::iterators::Pair<Rule>) -> Result<EdgeBeliefDecl
     Ok(EdgeBeliefDecl {
         edge_type,
         exist: exist_posterior,
+        weight,
     })
 }
 
@@ -846,12 +865,12 @@ fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, 
     // Handle observe_stmt parent rule - get the inner rule
     let actual_pair = match pair.as_rule() {
         Rule::observe_stmt => {
-            // Get the inner rule (observe_edge_stmt or observe_attr_stmt)
+            // Get the inner rule (observe_edge_stmt, observe_edge_weight_stmt, or observe_attr_stmt)
             pair.into_inner()
                 .next()
                 .ok_or_else(|| FrontendError::ParseError("Empty observe_stmt".to_string()))?
         }
-        Rule::observe_edge_stmt | Rule::observe_attr_stmt => pair,
+        Rule::observe_edge_stmt | Rule::observe_edge_weight_stmt | Rule::observe_attr_stmt => pair,
         _ => {
             return Err(FrontendError::ParseError(format!(
                 "Invalid observe statement rule: {:?}",
@@ -876,28 +895,7 @@ fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, 
             let target = target_pair.ok_or_else(|| {
                 FrontendError::ParseError("Missing edge observe target".to_string())
             })?;
-            let mut edge_type = String::new();
-            let mut src: Option<(String, String)> = None;
-            let mut dst: Option<(String, String)> = None;
-
-            for e in target.into_inner() {
-                match e.as_rule() {
-                    Rule::ident if edge_type.is_empty() => edge_type = e.as_str().to_string(),
-                    Rule::node_ref => {
-                        if src.is_none() {
-                            src = Some(build_node_ref(e)?);
-                        } else if dst.is_none() {
-                            dst = Some(build_node_ref(e)?);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            let src_val =
-                src.ok_or_else(|| FrontendError::ParseError("Missing source node".to_string()))?;
-            let dst_val = dst
-                .ok_or_else(|| FrontendError::ParseError("Missing destination node".to_string()))?;
+            let (edge_type, src_val, dst_val) = parse_edge_observe_target(target)?;
             let mode =
                 build_evidence_mode(mode_pair.ok_or_else(|| {
                     FrontendError::ParseError("Missing evidence mode".to_string())
@@ -908,6 +906,67 @@ fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, 
                 src: src_val,
                 dst: dst_val,
                 mode,
+            })
+        }
+        Rule::observe_edge_weight_stmt => {
+            let mut target_pair = None;
+            let mut value: Option<f64> = None;
+            let mut precision: Option<f64> = None;
+
+            for p in actual_pair.into_inner() {
+                match p.as_rule() {
+                    Rule::edge_observe => target_pair = Some(p),
+                    Rule::number => {
+                        if value.is_none() {
+                            value = Some(p.as_str().parse::<f64>().map_err(|e| {
+                                FrontendError::ParseError(format!("Invalid number: {}", e))
+                            })?);
+                        }
+                    }
+                    Rule::precision_annot => {
+                        let mut pit = p.into_inner();
+                        let pname = pit
+                            .next()
+                            .ok_or_else(|| {
+                                FrontendError::ParseError("Missing precision name".to_string())
+                            })?
+                            .as_str()
+                            .to_string();
+                        let pval = pit
+                            .next()
+                            .ok_or_else(|| {
+                                FrontendError::ParseError("Missing precision value".to_string())
+                            })?
+                            .as_str()
+                            .parse::<f64>()
+                            .map_err(|e| {
+                                FrontendError::ParseError(format!("Invalid number: {}", e))
+                            })?;
+                        if pname != "precision" {
+                            return Err(FrontendError::ParseError(
+                                "Only precision=... is supported in edge weight observation"
+                                    .to_string(),
+                            ));
+                        }
+                        precision = Some(pval);
+                    }
+                    _ => {}
+                }
+            }
+
+            let target = target_pair.ok_or_else(|| {
+                FrontendError::ParseError("Missing edge observe target".to_string())
+            })?;
+            let (edge_type, src, dst) = parse_edge_observe_target(target)?;
+            let value = value
+                .ok_or_else(|| FrontendError::ParseError("Missing edge weight value".to_string()))?;
+
+            Ok(ObserveStmt::EdgeWeight {
+                edge_type,
+                src,
+                dst,
+                value,
+                precision,
             })
         }
         Rule::observe_attr_stmt => {
@@ -985,6 +1044,32 @@ fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, 
             actual_pair.as_rule()
         ))),
     }
+}
+
+fn parse_edge_observe_target(
+    pair: pest::iterators::Pair<Rule>,
+) -> Result<ParsedEdgeObserveTarget, FrontendError> {
+    let mut edge_type = String::new();
+    let mut src: Option<(String, String)> = None;
+    let mut dst: Option<(String, String)> = None;
+
+    for e in pair.into_inner() {
+        match e.as_rule() {
+            Rule::ident if edge_type.is_empty() => edge_type = e.as_str().to_string(),
+            Rule::node_ref => {
+                if src.is_none() {
+                    src = Some(build_node_ref(e)?);
+                } else if dst.is_none() {
+                    dst = Some(build_node_ref(e)?);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let src = src.ok_or_else(|| FrontendError::ParseError("Missing source node".to_string()))?;
+    let dst = dst.ok_or_else(|| FrontendError::ParseError("Missing destination node".to_string()))?;
+    Ok((edge_type, src, dst))
 }
 
 fn build_node_ref(pair: pest::iterators::Pair<Rule>) -> Result<(String, String), FrontendError> {
@@ -3124,6 +3209,60 @@ mod tests {
         match &bm.edges[0].exist {
             PosteriorType::Categorical { group_by, .. } => assert_eq!(group_by, "source"),
             _ => panic!("expected Categorical posterior"),
+        }
+    }
+
+    #[test]
+    fn parse_edge_weight_posterior_declaration() {
+        let src = r#"
+            schema S { node N {} edge E {} }
+            belief_model M on S {
+              edge E {
+                exist ~ Bernoulli(prior=0.5, pseudo_count=2.0)
+                weight ~ Gaussian(prior_mean=1.0, prior_precision=0.5, observation_precision=2.0)
+              }
+            }
+        "#;
+
+        let ast = parse_program(src).unwrap();
+        let edge_decl = &ast.belief_models[0].edges[0];
+        match edge_decl.weight.as_ref().expect("weight posterior present") {
+            PosteriorType::Gaussian { params } => {
+                assert!(params.iter().any(|(k, v)| k == "prior_mean" && (*v - 1.0).abs() < 1e-12));
+                assert!(params.iter().any(|(k, v)| {
+                    k == "prior_precision" && (*v - 0.5).abs() < 1e-12
+                }));
+            }
+            other => panic!("expected Gaussian edge weight posterior, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_edge_weight_observation() {
+        let src = r#"
+            schema S { node N {} edge E {} }
+            belief_model M on S { edge E { exist ~ Bernoulli(prior=0.5, pseudo_count=2.0) } }
+            evidence Ev on M {
+              observe edge E(N["a"], N["b"]) weight = 2.5 (precision=3.0)
+            }
+        "#;
+
+        let ast = parse_program(src).unwrap();
+        match &ast.evidences[0].observations[0] {
+            ObserveStmt::EdgeWeight {
+                edge_type,
+                src,
+                dst,
+                value,
+                precision,
+            } => {
+                assert_eq!(edge_type, "E");
+                assert_eq!(src, &("N".to_string(), "a".to_string()));
+                assert_eq!(dst, &("N".to_string(), "b".to_string()));
+                assert!((*value - 2.5).abs() < 1e-12);
+                assert_eq!(*precision, Some(3.0));
+            }
+            other => panic!("expected edge weight observation, got {:?}", other),
         }
     }
 }

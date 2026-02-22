@@ -42,6 +42,10 @@ pub enum ObservationData {
         value: f64,
         precision: f64,
     },
+    EdgeWeight {
+        value: f64,
+        precision: f64,
+    },
     EdgePresent,
     EdgeAbsent,
     EdgeChosen,
@@ -173,6 +177,40 @@ fn partition_observations(
 
                 ObservationTarget::Edge(edge_id)
             }
+            ObserveStmt::EdgeWeight {
+                src,
+                dst,
+                edge_type,
+                ..
+            } => {
+                let src_id = *node_map
+                    .get(&(src.0.clone(), src.1.clone()))
+                    .ok_or_else(|| {
+                        ExecError::ValidationError(format!(
+                            "Source node {}:{} not found",
+                            src.0, src.1
+                        ))
+                    })?;
+                let dst_id = *node_map
+                    .get(&(dst.0.clone(), dst.1.clone()))
+                    .ok_or_else(|| {
+                        ExecError::ValidationError(format!(
+                            "Destination node {}:{} not found",
+                            dst.0, dst.1
+                        ))
+                    })?;
+
+                let edge_id = *edge_map
+                    .get(&(src_id, dst_id, edge_type.clone()))
+                    .ok_or_else(|| {
+                        ExecError::ValidationError(format!(
+                            "Edge {} not found between nodes",
+                            edge_type
+                        ))
+                    })?;
+
+                ObservationTarget::Edge(edge_id)
+            }
             ObserveStmt::Attribute { node, .. } => {
                 let node_id =
                     *node_map
@@ -224,6 +262,15 @@ fn process_partition(
                     EvidenceMode::ForcedChoice => ObservationData::EdgeForcedChoice,
                 };
                 obs_data.push(mode_data);
+            }
+            ObserveStmt::EdgeWeight {
+                value, precision, ..
+            } => {
+                let tau = precision.unwrap_or(1.0);
+                obs_data.push(ObservationData::EdgeWeight {
+                    value: *value,
+                    precision: tau,
+                });
             }
             ObserveStmt::Attribute {
                 attr,
@@ -313,6 +360,9 @@ pub fn apply_parallel_results(
     for (edge_id, observations) in results.edge_observations {
         for obs in observations {
             match obs {
+                ObservationData::EdgeWeight { value, precision } => {
+                    graph.observe_edge_weight(edge_id, value, precision)?
+                }
                 ObservationData::EdgePresent => graph.observe_edge(edge_id, true)?,
                 ObservationData::EdgeAbsent => graph.observe_edge(edge_id, false)?,
                 ObservationData::EdgeChosen => graph.observe_edge_chosen(edge_id)?,

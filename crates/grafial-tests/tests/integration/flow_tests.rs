@@ -564,6 +564,14 @@ fn run_flow_infer_beliefs_transform_smooths_connected_edges() {
 
     assert!(inferred_high < base_high);
     assert!(inferred_low > base_low);
+
+    assert_eq!(result.inference_diagnostics.len(), 1);
+    let diag = &result.inference_diagnostics[0];
+    assert_eq!(diag.graph, "inferred");
+    assert_eq!(diag.algorithm, "loopy_sum_product");
+    assert!(diag.iterations_run > 0);
+    assert!(diag.iterations_run <= diag.max_iterations);
+    assert!(diag.final_max_message_delta.is_finite());
 }
 
 #[test]

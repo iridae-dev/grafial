@@ -39,13 +39,23 @@ struct EdgeBuildInput {
 #[cfg(not(feature = "parallel"))]
 type EdgeObservation = (EdgeId, EvidenceMode);
 #[cfg(not(feature = "parallel"))]
+type EdgeWeightObservationEntry = (EdgeId, f64, f64);
+#[cfg(not(feature = "parallel"))]
 type AttrObservationEntry = (NodeId, String, f64, f64);
 #[cfg(not(feature = "parallel"))]
 type AttrObservation = (f64, f64);
 #[cfg(not(feature = "parallel"))]
 type AttrObservationGroup = ((NodeId, String), Vec<AttrObservation>);
 #[cfg(not(feature = "parallel"))]
-type PreparedObservationSplit = (Vec<EdgeObservation>, Vec<AttrObservationEntry>);
+type EdgeWeightObservation = (f64, f64);
+#[cfg(not(feature = "parallel"))]
+type EdgeWeightObservationGroup = (EdgeId, Vec<EdgeWeightObservation>);
+#[cfg(not(feature = "parallel"))]
+type PreparedObservationSplit = (
+    Vec<EdgeObservation>,
+    Vec<EdgeWeightObservationEntry>,
+    Vec<AttrObservationEntry>,
+);
 
 #[derive(Debug, Clone)]
 enum PreparedObservation {
@@ -55,6 +65,14 @@ enum PreparedObservation {
         src: (String, String),
         dst: (String, String),
         mode: EvidenceMode,
+    },
+    EdgeWeight {
+        edge_id: EdgeId,
+        edge_type: String,
+        src: (String, String),
+        dst: (String, String),
+        value: f64,
+        precision: f64,
     },
     Attribute {
         node_id: NodeId,
@@ -152,6 +170,10 @@ fn build_graph_from_evidence_with_context(
                 nodes_to_create.push((src.0.clone(), src.1.clone()));
                 nodes_to_create.push((dst.0.clone(), dst.1.clone()));
             }
+            ObserveStmt::EdgeWeight { src, dst, .. } => {
+                nodes_to_create.push((src.0.clone(), src.1.clone()));
+                nodes_to_create.push((dst.0.clone(), dst.1.clone()));
+            }
             ObserveStmt::Attribute { node, .. } => {
                 nodes_to_create.push((node.0.clone(), node.1.clone()));
             }
@@ -242,6 +264,93 @@ fn build_graph_from_evidence_with_context(
                     mode: mode.clone(),
                 });
             }
+            ObserveStmt::EdgeWeight {
+                edge_type,
+                src,
+                dst,
+                value,
+                precision,
+            } => {
+                let src_id = node_map
+                    .get(&(src.0.clone(), src.1.clone()))
+                    .ok_or_else(|| {
+                        ExecError::Internal(format!(
+                            "Missing source node: {}[\"{}\"]",
+                            src.0, src.1
+                        ))
+                    })?;
+                let dst_id = node_map
+                    .get(&(dst.0.clone(), dst.1.clone()))
+                    .ok_or_else(|| {
+                        ExecError::Internal(format!(
+                            "Missing destination node: {}[\"{}\"]",
+                            dst.0, dst.1
+                        ))
+                    })?;
+
+                let edge_decl = model
+                    .edges
+                    .iter()
+                    .find(|e| e.edge_type == *edge_type)
+                    .ok_or_else(|| {
+                        ExecError::ValidationError(format!(
+                            "Edge type '{}' not declared in belief model '{}'",
+                            edge_type, model.name
+                        ))
+                    })?;
+
+                let edge_id =
+                    if let Some(eid) = edge_map.get(&(*src_id, *dst_id, edge_type.clone())) {
+                        *eid
+                    } else {
+                        create_edge_with_posterior(
+                            &mut graph,
+                            &mut edge_map,
+                            &mut competing_group_map,
+                            EdgeBuildInput {
+                                src: *src_id,
+                                dst: *dst_id,
+                                edge_type: edge_type.clone(),
+                            },
+                            edge_decl,
+                            schema,
+                            &planned_competing_categories,
+                        )?
+                    };
+
+                let tau_obs = if let Some(tau) = precision {
+                    *tau
+                } else {
+                    let weight_decl = edge_decl.weight.as_ref().ok_or_else(|| {
+                        ExecError::ValidationError(format!(
+                            "Edge '{}' does not declare weight posterior but evidence observes weight",
+                            edge_type
+                        ))
+                    })?;
+                    match weight_decl {
+                        PosteriorType::Gaussian { params } => params
+                            .iter()
+                            .find(|(name, _)| name == "observation_precision")
+                            .map(|(_, v)| *v)
+                            .unwrap_or(1.0),
+                        other => {
+                            return Err(ExecError::ValidationError(format!(
+                                "Edge '{}.weight' must use GaussianPosterior, got {:?}",
+                                edge_type, other
+                            )));
+                        }
+                    }
+                };
+
+                prepared_observations.push(PreparedObservation::EdgeWeight {
+                    edge_id,
+                    edge_type: edge_type.clone(),
+                    src: src.clone(),
+                    dst: dst.clone(),
+                    value: *value,
+                    precision: tau_obs,
+                });
+            }
             ObserveStmt::Attribute {
                 node,
                 attr,
@@ -317,10 +426,15 @@ fn build_graph_from_evidence_with_context(
 
     #[cfg(not(feature = "parallel"))]
     {
-        let (edge_observations, attr_observations) =
+        let (edge_observations, edge_weight_observations, attr_observations) =
             split_prepared_observations(prepared_observations);
         // Sequential fallback: group by target for deterministic ordering
-        apply_observations_sequential(&mut graph, edge_observations, attr_observations)?;
+        apply_observations_sequential(
+            &mut graph,
+            edge_observations,
+            edge_weight_observations,
+            attr_observations,
+        )?;
     }
 
     // Apply any pending deltas before returning to ensure nodes() and edges() work correctly
@@ -337,20 +451,26 @@ fn plan_competing_group_categories(
     let mut planned: HashMap<(NodeId, String), Vec<NodeId>> = HashMap::new();
 
     for obs in &evidence.observations {
-        let ObserveStmt::Edge {
-            edge_type,
-            src,
-            dst,
-            ..
-        } = obs
-        else {
-            continue;
+        let (edge_type, src, dst) = match obs {
+            ObserveStmt::Edge {
+                edge_type,
+                src,
+                dst,
+                ..
+            }
+            | ObserveStmt::EdgeWeight {
+                edge_type,
+                src,
+                dst,
+                ..
+            } => (edge_type, src, dst),
+            _ => continue,
         };
 
         let edge_decl = model
             .edges
             .iter()
-            .find(|e| e.edge_type == *edge_type)
+            .find(|e| e.edge_type == edge_type.as_str())
             .ok_or_else(|| {
                 ExecError::ValidationError(format!(
                     "Edge type '{}' not declared in belief model '{}'",
@@ -421,6 +541,23 @@ fn prepared_to_parallel_observations(
                     mode: mode.clone(),
                 }
             }
+            PreparedObservation::EdgeWeight {
+                edge_id,
+                edge_type,
+                src,
+                dst,
+                value,
+                precision,
+            } => {
+                let _ = edge_id;
+                ObserveStmt::EdgeWeight {
+                    edge_type: edge_type.clone(),
+                    src: src.clone(),
+                    dst: dst.clone(),
+                    value: *value,
+                    precision: Some(*precision),
+                }
+            }
             PreparedObservation::Attribute {
                 node_id,
                 node,
@@ -445,6 +582,7 @@ fn split_prepared_observations(
     prepared_observations: Vec<PreparedObservation>,
 ) -> PreparedObservationSplit {
     let mut edge_observations = Vec::new();
+    let mut edge_weight_observations = Vec::new();
     let mut attr_observations = Vec::new();
 
     for obs in prepared_observations {
@@ -459,6 +597,17 @@ fn split_prepared_observations(
                 let _ = (edge_type, src, dst);
                 edge_observations.push((edge_id, mode));
             }
+            PreparedObservation::EdgeWeight {
+                edge_id,
+                edge_type,
+                src,
+                dst,
+                value,
+                precision,
+            } => {
+                let _ = (edge_type, src, dst);
+                edge_weight_observations.push((edge_id, value, precision));
+            }
             PreparedObservation::Attribute {
                 node_id,
                 node,
@@ -472,7 +621,7 @@ fn split_prepared_observations(
         }
     }
 
-    (edge_observations, attr_observations)
+    (edge_observations, edge_weight_observations, attr_observations)
 }
 
 /// Creates a node if it doesn't exist, initializing attributes from the belief model.
@@ -638,6 +787,37 @@ fn extract_fixed_gaussian_correlations(
     Ok(correlations)
 }
 
+fn edge_weight_prior_from_decl(
+    edge_decl: &EdgeBeliefDecl,
+) -> Result<Option<GaussianPosterior>, ExecError> {
+    let Some(weight_decl) = &edge_decl.weight else {
+        return Ok(None);
+    };
+
+    match weight_decl {
+        PosteriorType::Gaussian { params } => {
+            let prior_mean = params
+                .iter()
+                .find(|(name, _)| name == "prior_mean")
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0);
+            let prior_precision = params
+                .iter()
+                .find(|(name, _)| name == "prior_precision")
+                .map(|(_, v)| *v)
+                .unwrap_or(0.01);
+            Ok(Some(GaussianPosterior {
+                mean: prior_mean,
+                precision: prior_precision,
+            }))
+        }
+        other => Err(ExecError::ValidationError(format!(
+            "Edge '{}.weight' must use GaussianPosterior, got {:?}",
+            edge_decl.edge_type, other
+        ))),
+    }
+}
+
 /// Creates an edge with the appropriate posterior type from the belief model.
 fn create_edge_with_posterior(
     graph: &mut BeliefGraph,
@@ -686,6 +866,9 @@ fn create_edge_with_posterior(
 
             let beta_posterior = BetaPosterior { alpha, beta };
             let edge_id = graph.add_edge(src, dst, edge_type.clone(), beta_posterior);
+            if let Some(weight_prior) = edge_weight_prior_from_decl(edge_decl)? {
+                graph.set_edge_weight_prior(edge_id, weight_prior)?;
+            }
             edge_map.insert((src, dst, edge_type), edge_id);
             Ok(edge_id)
         }
@@ -787,6 +970,9 @@ fn create_edge_with_posterior(
                 },
             };
             graph.insert_edge(edge);
+            if let Some(weight_prior) = edge_weight_prior_from_decl(edge_decl)? {
+                graph.set_edge_weight_prior(edge_id, weight_prior)?;
+            }
             edge_map.insert((src, dst, edge_type), edge_id);
             Ok(edge_id)
         }
@@ -805,6 +991,7 @@ fn create_edge_with_posterior(
 fn apply_observations_sequential(
     graph: &mut BeliefGraph,
     edge_observations: Vec<(EdgeId, EvidenceMode)>,
+    edge_weight_observations: Vec<EdgeWeightObservationEntry>,
     attr_observations: Vec<(NodeId, String, f64, f64)>,
 ) -> Result<(), ExecError> {
     // Group edge observations by EdgeId for deterministic ordering
@@ -812,6 +999,14 @@ fn apply_observations_sequential(
     let mut edge_groups: HashMap<EdgeId, Vec<EvidenceMode>> = HashMap::new();
     for (edge_id, mode) in edge_observations {
         edge_groups.entry(edge_id).or_default().push(mode);
+    }
+
+    let mut edge_weight_groups: HashMap<EdgeId, Vec<EdgeWeightObservation>> = HashMap::new();
+    for (edge_id, value, tau_obs) in edge_weight_observations {
+        edge_weight_groups
+            .entry(edge_id)
+            .or_default()
+            .push((value, tau_obs));
     }
 
     // Group attribute observations by (NodeId, attr) for deterministic ordering
@@ -827,6 +1022,10 @@ fn apply_observations_sequential(
     // Convert to sorted vectors for deterministic processing
     let mut edge_groups_vec: Vec<(EdgeId, Vec<EvidenceMode>)> = edge_groups.into_iter().collect();
     edge_groups_vec.sort_by_key(|(edge_id, _)| *edge_id);
+
+    let mut edge_weight_groups_vec: Vec<EdgeWeightObservationGroup> =
+        edge_weight_groups.into_iter().collect();
+    edge_weight_groups_vec.sort_by_key(|(edge_id, _)| *edge_id);
 
     let mut attr_groups_vec: Vec<AttrObservationGroup> = attr_groups.into_iter().collect();
     attr_groups_vec.sort_by_key(|((node_id, attr), _)| (*node_id, attr.clone()));
@@ -864,6 +1063,12 @@ fn apply_observations_sequential(
             }
         }
 
+        for (edge_id, values) in edge_weight_groups_vec {
+            for (value, tau_obs) in values {
+                graph.observe_edge_weight(edge_id, value, tau_obs)?;
+            }
+        }
+
         // Batch attribute observations for Gaussian updates
         for ((node_id, attr), values) in attr_groups_vec {
             graph.observe_attr_batch(node_id, &attr, &values)?;
@@ -891,6 +1096,16 @@ fn apply_observations_sequential(
                 Ok(())
             })?;
 
+        edge_weight_groups_vec.par_iter().try_for_each(
+            |(edge_id, values)| -> Result<(), ExecError> {
+                let mut graph_guard = graph_mutex.lock().unwrap();
+                for (value, tau_obs) in values {
+                    graph_guard.observe_edge_weight(*edge_id, *value, *tau_obs)?;
+                }
+                Ok(())
+            },
+        )?;
+
         // Process attribute observations in parallel batches
         attr_groups_vec.par_iter().try_for_each(
             |((node_id, attr), values)| -> Result<(), ExecError> {
@@ -913,6 +1128,12 @@ fn apply_observations_sequential(
         for (edge_id, modes) in edge_groups_vec {
             for mode in modes {
                 apply_edge_observation_single(graph, edge_id, mode)?;
+            }
+        }
+
+        for (edge_id, values) in edge_weight_groups_vec {
+            for (value, tau_obs) in values {
+                graph.observe_edge_weight(edge_id, value, tau_obs)?;
             }
         }
 

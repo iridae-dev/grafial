@@ -948,6 +948,10 @@ pub(crate) struct BeliefGraphInner {
     ///
     /// Keys are `(node_id, "attr_a|attr_b")` with lexicographically normalized pair order.
     pub(crate) node_attr_correlations: FxHashMap<(NodeId, String), f64>,
+    /// Optional Gaussian posteriors for continuous edge weights.
+    ///
+    /// Keys are edge IDs. Missing entry means the edge type does not model weight.
+    pub(crate) edge_weight_posteriors: FxHashMap<EdgeId, GaussianPosterior>,
     /// Index mapping NodeId to position in nodes vector
     pub(crate) node_index: FxHashMap<NodeId, usize>,
     /// Index mapping EdgeId to position in edges vector
@@ -1162,6 +1166,7 @@ impl BeliefGraphInner {
             edges: Vec::new(),
             competing_groups: FxHashMap::default(),
             node_attr_correlations: FxHashMap::default(),
+            edge_weight_posteriors: FxHashMap::default(),
             node_index: FxHashMap::default(),
             edge_index: FxHashMap::default(),
             adjacency: None,
@@ -1345,6 +1350,7 @@ impl BeliefGraph {
                             }
                         }
                     }
+                    inner.edge_weight_posteriors.remove(&id);
                 }
             }
         }
@@ -1823,14 +1829,23 @@ impl BeliefGraph {
         }
         // Apply delta to ensure all items are in base for consistency
         rebuilt.ensure_owned();
-        if !self.inner.node_attr_correlations.is_empty() {
+        if !self.inner.node_attr_correlations.is_empty() || !self.inner.edge_weight_posteriors.is_empty() {
             let rebuilt_inner =
                 Arc::get_mut(&mut rebuilt.inner).expect("ensure_owned guarantees ownership");
-            for ((node_id, pair_key), rho) in &self.inner.node_attr_correlations {
-                if node_ids.contains(node_id) {
-                    rebuilt_inner
-                        .node_attr_correlations
-                        .insert((*node_id, pair_key.clone()), *rho);
+            if !self.inner.node_attr_correlations.is_empty() {
+                for ((node_id, pair_key), rho) in &self.inner.node_attr_correlations {
+                    if node_ids.contains(node_id) {
+                        rebuilt_inner
+                            .node_attr_correlations
+                            .insert((*node_id, pair_key.clone()), *rho);
+                    }
+                }
+            }
+            if !self.inner.edge_weight_posteriors.is_empty() {
+                for eid in edge_ids {
+                    if let Some(weight) = self.inner.edge_weight_posteriors.get(eid) {
+                        rebuilt_inner.edge_weight_posteriors.insert(*eid, *weight);
+                    }
                 }
             }
         }
@@ -1864,6 +1879,94 @@ impl BeliefGraph {
             .get_node_attr_with_deltas(node, attr)
             .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
         Ok(posterior.precision)
+    }
+
+    fn edge_weight_posterior(&self, edge: EdgeId) -> Result<GaussianPosterior, ExecError> {
+        if self.edge(edge).is_none() {
+            return Err(ExecError::Internal("missing edge".into()));
+        }
+        self.inner
+            .edge_weight_posteriors
+            .get(&edge)
+            .copied()
+            .ok_or_else(|| {
+                ExecError::ValidationError(format!(
+                    "edge {:?} does not declare a continuous weight posterior",
+                    edge
+                ))
+            })
+    }
+
+    /// Initializes or replaces the Gaussian posterior for an edge's continuous weight.
+    pub fn set_edge_weight_prior(
+        &mut self,
+        edge: EdgeId,
+        posterior: GaussianPosterior,
+    ) -> Result<(), ExecError> {
+        if self.edge(edge).is_none() {
+            return Err(ExecError::Internal("missing edge".into()));
+        }
+        if !posterior.mean.is_finite() || !posterior.precision.is_finite() || posterior.precision <= 0.0
+        {
+            return Err(ExecError::ValidationError(format!(
+                "edge weight prior must have finite mean and positive finite precision, got mean={} precision={}",
+                posterior.mean, posterior.precision
+            )));
+        }
+
+        self.ensure_owned();
+        let inner =
+            Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
+        inner.edge_weight_posteriors.insert(edge, posterior);
+        Ok(())
+    }
+
+    /// Returns the posterior mean of an edge's continuous weight.
+    pub fn edge_weight_expectation(&self, edge: EdgeId) -> Result<f64, ExecError> {
+        Ok(self.edge_weight_posterior(edge)?.mean)
+    }
+
+    /// Returns the posterior variance of an edge's continuous weight.
+    pub fn edge_weight_variance(&self, edge: EdgeId) -> Result<f64, ExecError> {
+        Ok(self.edge_weight_posterior(edge)?.variance())
+    }
+
+    /// Returns the posterior standard deviation of an edge's continuous weight.
+    pub fn edge_weight_stddev(&self, edge: EdgeId) -> Result<f64, ExecError> {
+        Ok(self.edge_weight_variance(edge)?.sqrt())
+    }
+
+    /// Applies a Gaussian soft observation to an edge's continuous weight posterior.
+    pub fn observe_edge_weight(
+        &mut self,
+        edge: EdgeId,
+        value: f64,
+        tau_obs: f64,
+    ) -> Result<(), ExecError> {
+        if !tau_obs.is_finite() || tau_obs <= 0.0 {
+            return Err(ExecError::ValidationError(format!(
+                "edge weight observation precision must be finite and > 0, got {}",
+                tau_obs
+            )));
+        }
+        if self.edge(edge).is_none() {
+            return Err(ExecError::Internal("missing edge".into()));
+        }
+
+        self.ensure_owned();
+        let inner =
+            Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
+        let posterior = inner
+            .edge_weight_posteriors
+            .get_mut(&edge)
+            .ok_or_else(|| {
+                ExecError::ValidationError(format!(
+                    "edge {:?} does not declare a continuous weight posterior",
+                    edge
+                ))
+            })?;
+        posterior.update(value, tau_obs.max(MIN_OBS_PRECISION));
+        Ok(())
     }
 
     /// Sets a fixed Gaussian correlation between two attributes on the same node.
@@ -3086,6 +3189,27 @@ impl BeliefGraph {
                     }
                 }
             }
+
+            if let Some(weight) = self.inner.edge_weight_posteriors.get(&edge.id) {
+                if !weight.mean.is_finite() {
+                    return Err(ExecError::Numerical(format!(
+                        "Edge {:?} has non-finite weight mean: {}",
+                        edge.id, weight.mean
+                    )));
+                }
+                if !weight.precision.is_finite() || weight.precision <= 0.0 {
+                    return Err(ExecError::Numerical(format!(
+                        "Edge {:?} has invalid weight precision: {}",
+                        edge.id, weight.precision
+                    )));
+                }
+                if weight.precision < MIN_PRECISION * 10.0 {
+                    warnings.push(format!(
+                        "Edge {:?} has very low weight precision: {:.2e}",
+                        edge.id, weight.precision
+                    ));
+                }
+            }
         }
 
         Ok(warnings)
@@ -3590,6 +3714,58 @@ mod tests {
         assert_eq!(g.degree_outgoing(NodeId(1), 0.0), 1);
         assert_eq!(g.degree_outgoing(NodeId(2), 0.0), 1);
         assert_eq!(g.degree_outgoing(NodeId(3), 0.0), 0);
+    }
+
+    #[test]
+    fn belief_graph_edge_weight_observation_updates_gaussian_posterior() {
+        let mut g = BeliefGraph::default();
+        let src = g.add_node("N".into(), HashMap::new());
+        let dst = g.add_node("N".into(), HashMap::new());
+        let edge_id = g.add_edge(
+            src,
+            dst,
+            "REL".into(),
+            BetaPosterior {
+                alpha: 1.0,
+                beta: 1.0,
+            },
+        );
+
+        g.set_edge_weight_prior(
+            edge_id,
+            GaussianPosterior {
+                mean: 0.0,
+                precision: 1.0,
+            },
+        )
+        .unwrap();
+        g.observe_edge_weight(edge_id, 2.0, 3.0).unwrap();
+
+        let mean = g.edge_weight_expectation(edge_id).unwrap();
+        let variance = g.edge_weight_variance(edge_id).unwrap();
+        assert!((mean - 1.5).abs() < 1e-12);
+        assert!((variance - 0.25).abs() < 1e-12);
+    }
+
+    #[test]
+    fn belief_graph_edge_weight_requires_declared_weight_posterior() {
+        let mut g = BeliefGraph::default();
+        let src = g.add_node("N".into(), HashMap::new());
+        let dst = g.add_node("N".into(), HashMap::new());
+        let edge_id = g.add_edge(
+            src,
+            dst,
+            "REL".into(),
+            BetaPosterior {
+                alpha: 1.0,
+                beta: 1.0,
+            },
+        );
+
+        let err = g
+            .observe_edge_weight(edge_id, 1.0, 1.0)
+            .expect_err("missing weight posterior should fail");
+        assert!(err.to_string().contains("continuous weight posterior"));
     }
 
     #[test]

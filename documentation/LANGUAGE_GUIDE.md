@@ -63,7 +63,8 @@ schema MySchema {
 
 Notes:
 
-- Edge attributes are not supported.
+- Generic edge attributes are not supported.
+- Continuous edge weights are supported via `weight ~ Gaussian(...)` in `belief_model`.
 - Priors are not declared in `schema`; they are declared in `belief_model`.
 
 ## 4. Belief Models
@@ -79,6 +80,7 @@ belief_model MyBeliefs on MySchema {
 
   edge CONNECTS {
     exist ~ Bernoulli(prior=0.3, weight=2.0)
+    weight ~ Gaussian(prior_mean=1.0, prior_precision=1.0)
   }
 }
 ```
@@ -159,8 +161,12 @@ evidence Ev2 on MyBeliefs {
 
   observe edge CONNECTS(Entity["A"], Entity["B"]) present
   observe edge CONNECTS(Entity["B"], Entity["A"]) absent
+  observe edge CONNECTS(Entity["A"], Entity["B"]) weight=2.5 (precision=3.0)
 }
 ```
+
+Notes:
+- Edge-weight observations currently use explicit `observe edge ... weight=...` syntax (not grouped-edge sugar).
 
 Supported edge modes:
 
@@ -292,6 +298,7 @@ Supported:
 
 - `E[A.attr]`
 - `prob(edge_var)`
+- `weight(edge_var)` (posterior mean for continuous edge weight)
 - `prob(A.attr > B.attr)` (supports `< <= > >=` comparisons)
 - `prob_correlated(A.attr > B.attr, rho=...)` (correlation-aware comparison probability)
   - if `rho` is omitted and both operands are attributes on the same node, uses the model's fixed `corr_<attr>` value.
@@ -334,7 +341,7 @@ Inside metric filters/contrib/step expressions (`node` is the bound row variable
 - `credible(...)` in rule `where` must be:
   - an edge variable event, or
   - a supported comparison form, with optional `p` and `rho` named args.
-- `prune_edges ... where ...` predicates are restricted to `prob(edge)`-style checks.
+- `prune_edges ... where ...` predicates are restricted to `prob(edge)` and `weight(edge)` checks.
 - Metric expressions reject `exists` subqueries.
 - Builder `order_by(...)` is only valid with `fold(...)`.
 
@@ -435,6 +442,8 @@ Notes:
 - `infer_beliefs` message passing is deterministic (stable edge ordering + synchronous updates).
 - Runtime flow outputs include `intervention_audit` events for `apply_rule`/`apply_ruleset`
   transforms (rule name, match count, action count) for reproducibility/traceability hooks.
+- Runtime flow outputs include `inference_diagnostics` events for `infer_beliefs`
+  (converged flag, iteration count, final max message delta, variable counts).
 
 ## 14. Current Non-Goals / Not Implemented in Syntax
 

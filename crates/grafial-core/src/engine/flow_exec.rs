@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Mutex;
 
-use crate::engine::belief_propagation::run_loopy_belief_propagation;
+use crate::engine::belief_propagation::run_loopy_belief_propagation_with_diagnostics;
 use crate::engine::errors::ExecError;
 use crate::engine::evidence::build_graph_from_evidence_ir;
 #[cfg(not(feature = "jit"))]
@@ -97,6 +97,8 @@ pub struct FlowResult {
     pub snapshots: HashMap<String, BeliefGraph>,
     /// Runtime intervention audit events emitted by rule transforms.
     pub intervention_audit: Vec<InterventionAuditEvent>,
+    /// Runtime convergence diagnostics emitted by inference transforms.
+    pub inference_diagnostics: Vec<InferenceDiagnosticEvent>,
 }
 
 /// Runtime trace event for a rule-based intervention during flow execution.
@@ -116,6 +118,31 @@ pub struct InterventionAuditEvent {
     pub matched_bindings: usize,
     /// Total action statements executed.
     pub actions_executed: usize,
+}
+
+/// Runtime diagnostics emitted by inference transforms during flow execution.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InferenceDiagnosticEvent {
+    /// Flow name where inference was executed.
+    pub flow: String,
+    /// Graph variable currently being transformed.
+    pub graph: String,
+    /// Transform descriptor (`infer_beliefs#i`).
+    pub transform: String,
+    /// Inference algorithm identifier.
+    pub algorithm: String,
+    /// Number of iterations executed.
+    pub iterations_run: usize,
+    /// Iteration limit configured for the transform.
+    pub max_iterations: usize,
+    /// Whether convergence criterion was reached before the limit.
+    pub converged: bool,
+    /// Final max absolute message delta at termination.
+    pub final_max_message_delta: f64,
+    /// Number of edge variables considered.
+    pub variable_count: usize,
+    /// Number of variables with at least one neighbor in the factor graph.
+    pub connected_variable_count: usize,
 }
 
 /// IR execution backend boundary.
@@ -1421,7 +1448,24 @@ fn apply_transform<E: FlowExprEvaluator>(
             ctx.result.snapshots.insert(name.clone(), snapshot_graph);
             Ok(graph.clone())
         }
-        TransformIR::InferBeliefs => run_loopy_belief_propagation(graph),
+        TransformIR::InferBeliefs => {
+            let (next, diagnostics) = run_loopy_belief_propagation_with_diagnostics(graph)?;
+            ctx.result
+                .inference_diagnostics
+                .push(InferenceDiagnosticEvent {
+                    flow: ctx.flow_name.to_string(),
+                    graph: ctx.graph_name.to_string(),
+                    transform: format!("infer_beliefs#{}", ctx.transform_idx),
+                    algorithm: "loopy_sum_product".into(),
+                    iterations_run: diagnostics.iterations_run,
+                    max_iterations: diagnostics.max_iterations,
+                    converged: diagnostics.converged,
+                    final_max_message_delta: diagnostics.final_max_message_delta,
+                    variable_count: diagnostics.variable_count,
+                    connected_variable_count: diagnostics.connected_variable_count,
+                });
+            Ok(next)
+        }
         TransformIR::PruneEdges {
             edge_type,
             predicate,
@@ -1745,7 +1789,7 @@ fn rebuild_pruned_graph(
 
 /// Expression evaluation context for prune predicates.
 ///
-/// Only allows `prob(edge)` function calls and prohibits variables/fields.
+/// Only allows `prob(edge)` and `weight(edge)` function calls and prohibits variables/fields.
 struct PruneExprContext {
     edge: EdgeId,
 }
@@ -1763,21 +1807,30 @@ impl ExprContext for PruneExprContext {
         graph: &BeliefGraph,
     ) -> Result<f64, ExecError> {
         match name {
-            "prob" => {
+            "prob" | "weight" => {
                 if !all_args.is_empty() && matches!(all_args[0], CallArg::Named { .. }) {
                     return Err(ExecError::ValidationError(
-                        "prob() does not accept named arguments".into(),
+                        format!("{}() does not accept named arguments", name),
                     ));
                 }
                 if pos_args.len() != 1 {
                     return Err(ExecError::ValidationError(
-                        "prob(): expected single positional argument".into(),
+                        format!("{}(): expected single positional argument", name),
                     ));
                 }
                 match &pos_args[0] {
-                    ExprAst::Var(v) if v == "edge" => graph.prob_mean(self.edge),
+                    ExprAst::Var(v) if v == "edge" => {
+                        if name == "prob" {
+                            graph.prob_mean(self.edge)
+                        } else {
+                            graph.edge_weight_expectation(self.edge)
+                        }
+                    }
                     _ => Err(ExecError::ValidationError(
-                        "prob(): argument must be 'edge' in prune predicate".into(),
+                        format!(
+                            "{}(): argument must be 'edge' in prune predicate",
+                            name
+                        ),
                     )),
                 }
             }
@@ -1961,6 +2014,27 @@ mod tests {
         };
         let result = eval_prune_predicate(&expr, &g, EdgeId(1)).unwrap();
         assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn eval_prune_predicate_weight_function() {
+        let mut g = build_simple_graph();
+        g.set_edge_weight_prior(
+            EdgeId(1),
+            GaussianPosterior {
+                mean: 1.0,
+                precision: 1.0,
+            },
+        )
+        .unwrap();
+        g.observe_edge_weight(EdgeId(1), 3.0, 3.0).unwrap();
+
+        let expr = ExprAst::Call {
+            name: "weight".into(),
+            args: vec![CallArg::Positional(ExprAst::Var("edge".into()))],
+        };
+        let result = eval_prune_predicate(&expr, &g, EdgeId(1)).unwrap();
+        assert!((result - 2.5).abs() < 1e-12);
     }
 
     #[test]

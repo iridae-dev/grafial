@@ -176,6 +176,7 @@ fn test_evidence_pipeline_parity() {
                     ("pseudo_count".to_string(), 2.0),
                 ],
             },
+            weight: None,
         }],
         body_src: String::new(), // Not needed for testing
     };

@@ -69,6 +69,13 @@ pub enum ObserveStmtIR {
         dst: NodeRefIR,
         mode: EvidenceModeIR,
     },
+    EdgeWeight {
+        edge_type: String,
+        src: NodeRefIR,
+        dst: NodeRefIR,
+        value: f64,
+        precision: Option<f64>,
+    },
     Attribute {
         node: NodeRefIR,
         attr: String,
@@ -91,6 +98,19 @@ impl ObserveStmtIR {
                 src: src.to_ast_tuple(),
                 dst: dst.to_ast_tuple(),
                 mode: mode.to_ast(),
+            },
+            Self::EdgeWeight {
+                edge_type,
+                src,
+                dst,
+                value,
+                precision,
+            } => ObserveStmt::EdgeWeight {
+                edge_type: edge_type.clone(),
+                src: src.to_ast_tuple(),
+                dst: dst.to_ast_tuple(),
+                value: *value,
+                precision: *precision,
             },
             Self::Attribute {
                 node,
@@ -120,6 +140,19 @@ impl From<&ObserveStmt> for ObserveStmtIR {
                 src: NodeRefIR::from(src),
                 dst: NodeRefIR::from(dst),
                 mode: mode.clone().into(),
+            },
+            ObserveStmt::EdgeWeight {
+                edge_type,
+                src,
+                dst,
+                value,
+                precision,
+            } => Self::EdgeWeight {
+                edge_type: edge_type.clone(),
+                src: NodeRefIR::from(src),
+                dst: NodeRefIR::from(dst),
+                value: *value,
+                precision: *precision,
             },
             ObserveStmt::Attribute {
                 node,
@@ -193,6 +226,13 @@ mod tests {
                     src: ("Person".into(), "Alice".into()),
                     dst: ("Person".into(), "Bob".into()),
                     mode: EvidenceMode::Present,
+                },
+                ObserveStmt::EdgeWeight {
+                    edge_type: "KNOWS".into(),
+                    src: ("Person".into(), "Alice".into()),
+                    dst: ("Person".into(), "Bob".into()),
+                    value: 0.75,
+                    precision: Some(3.0),
                 },
             ],
             body_src: "raw".into(),

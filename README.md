@@ -20,7 +20,7 @@ CLI, Python bindings, tests, and benchmarks.
 Grafial programs are organized around five building blocks:
 
 1. `schema`: typed node/edge structure.
-2. `belief_model`: priors over attributes and edge existence.
+2. `belief_model`: priors over attributes, edge existence, and optional continuous edge weights.
 3. `evidence`: observed data used to update beliefs.
 4. `rule`: graph pattern + condition + actions.
 5. `flow`: pipeline that builds graphs, applies transforms, computes metrics, and exports results.
@@ -30,7 +30,7 @@ Common flow transforms:
 - `apply_rule RuleName`
 - `apply_ruleset { RuleA, RuleB, ... }`
 - `infer_beliefs` (deterministic loopy belief propagation on independent edges)
-- `prune_edges EdgeType where prob(edge) < threshold`
+- `prune_edges EdgeType where prob(edge) < threshold` (or `weight(edge)` predicates for weighted edges)
 - `snapshot "name"`
 
 ## Quick Start

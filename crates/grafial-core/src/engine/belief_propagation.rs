@@ -74,6 +74,23 @@ struct EdgeVariable {
     prior_beta: f64,
 }
 
+/// Runtime diagnostics emitted by loopy belief propagation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BeliefPropagationDiagnostics {
+    /// Iteration limit configured for this run.
+    pub max_iterations: usize,
+    /// Number of synchronous iterations actually executed.
+    pub iterations_run: usize,
+    /// Whether convergence tolerance was reached before the iteration limit.
+    pub converged: bool,
+    /// Final max absolute message delta after the last iteration.
+    pub final_max_message_delta: f64,
+    /// Number of independent edge variables considered.
+    pub variable_count: usize,
+    /// Number of variables with at least one neighbor in the factor graph.
+    pub connected_variable_count: usize,
+}
+
 /// Runs loopy sum-product belief propagation with default configuration.
 pub fn run_loopy_belief_propagation(input: &BeliefGraph) -> Result<BeliefGraph, ExecError> {
     run_loopy_belief_propagation_with_config(input, BeliefPropagationConfig::default())
@@ -84,19 +101,45 @@ pub fn run_loopy_belief_propagation_with_config(
     input: &BeliefGraph,
     config: BeliefPropagationConfig,
 ) -> Result<BeliefGraph, ExecError> {
+    run_loopy_belief_propagation_with_config_diagnostics(input, config).map(|(graph, _)| graph)
+}
+
+/// Runs loopy sum-product belief propagation with default configuration and diagnostics.
+pub fn run_loopy_belief_propagation_with_diagnostics(
+    input: &BeliefGraph,
+) -> Result<(BeliefGraph, BeliefPropagationDiagnostics), ExecError> {
+    run_loopy_belief_propagation_with_config_diagnostics(input, BeliefPropagationConfig::default())
+}
+
+/// Runs loopy sum-product belief propagation with explicit configuration and diagnostics.
+pub fn run_loopy_belief_propagation_with_config_diagnostics(
+    input: &BeliefGraph,
+    config: BeliefPropagationConfig,
+) -> Result<(BeliefGraph, BeliefPropagationDiagnostics), ExecError> {
     let config = config.validate()?;
 
     let mut output = input.clone();
     output.ensure_owned();
 
     let variables = collect_independent_edge_variables(&output);
+    let variable_count = variables.len();
+    let mut diagnostics = BeliefPropagationDiagnostics {
+        max_iterations: config.max_iterations,
+        iterations_run: 0,
+        converged: true,
+        final_max_message_delta: 0.0,
+        variable_count,
+        connected_variable_count: 0,
+    };
+
     if variables.len() <= 1 {
-        return Ok(output);
+        return Ok((output, diagnostics));
     }
 
     let neighbors = build_neighborhood_graph(&variables);
+    diagnostics.connected_variable_count = neighbors.iter().filter(|adj| !adj.is_empty()).count();
     if neighbors.iter().all(|n| n.is_empty()) {
-        return Ok(output);
+        return Ok((output, diagnostics));
     }
     let reverse = build_reverse_neighbor_index(&neighbors)?;
     let unary = build_unary_log_potentials(&variables);
@@ -110,7 +153,8 @@ pub fn run_loopy_belief_propagation_with_config(
     let log_same = config.coupling_strength;
     let log_diff = -config.coupling_strength;
 
-    for _ in 0..config.max_iterations {
+    diagnostics.converged = false;
+    for iteration in 0..config.max_iterations {
         let mut max_delta = 0.0_f64;
 
         for (src_idx, src_neighbors) in neighbors.iter().enumerate() {
@@ -155,7 +199,10 @@ pub fn run_loopy_belief_propagation_with_config(
         }
 
         std::mem::swap(&mut messages, &mut next_messages);
+        diagnostics.iterations_run = iteration + 1;
+        diagnostics.final_max_message_delta = max_delta;
         if max_delta < config.convergence_tolerance {
+            diagnostics.converged = true;
             break;
         }
     }
@@ -171,7 +218,7 @@ pub fn run_loopy_belief_propagation_with_config(
         )?;
     }
 
-    Ok(output)
+    Ok((output, diagnostics))
 }
 
 fn collect_independent_edge_variables(graph: &BeliefGraph) -> Vec<EdgeVariable> {
@@ -482,5 +529,39 @@ mod tests {
 
         assert!((first_p1 - second_p1).abs() < 1e-12);
         assert!((first_p2 - second_p2).abs() < 1e-12);
+    }
+
+    #[test]
+    fn infer_beliefs_reports_convergence_diagnostics() {
+        let mut graph = simple_graph();
+        graph.insert_edge(EdgeData {
+            id: EdgeId(1),
+            src: NodeId(1),
+            dst: NodeId(2),
+            ty: Arc::from("REL"),
+            exist: EdgePosterior::independent(BetaPosterior {
+                alpha: 9.0,
+                beta: 1.0,
+            }),
+        });
+        graph.insert_edge(EdgeData {
+            id: EdgeId(2),
+            src: NodeId(1),
+            dst: NodeId(3),
+            ty: Arc::from("REL"),
+            exist: EdgePosterior::independent(BetaPosterior {
+                alpha: 1.0,
+                beta: 9.0,
+            }),
+        });
+        graph.ensure_owned();
+
+        let (_out, diagnostics) =
+            run_loopy_belief_propagation_with_diagnostics(&graph).expect("inference");
+        assert_eq!(diagnostics.variable_count, 2);
+        assert_eq!(diagnostics.connected_variable_count, 2);
+        assert!(diagnostics.iterations_run > 0);
+        assert!(diagnostics.iterations_run <= diagnostics.max_iterations);
+        assert!(diagnostics.final_max_message_delta.is_finite());
     }
 }

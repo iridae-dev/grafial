@@ -23,7 +23,7 @@
 //! - Arithmetic: `+`, `-`, `*`, `/`
 //! - Comparisons: `<`, `<=`, `>`, `>=`, `==`, `!=`
 //! - Logical: `and`, `or`, `not`
-//! - Special functions: `prob(edge)`, `prob_correlated(A.attr > B.attr, rho=...)`,
+//! - Special functions: `prob(edge)`, `weight(edge)`, `prob_correlated(A.attr > B.attr, rho=...)`,
 //!   `credible(event, p=...)`, `corr(A.x, A.y)`, `cov(A.x, A.y)`, `degree(node)`, `E[node.attr]`
 //!
 //! ## Performance
@@ -81,6 +81,14 @@ pub struct MatchBindings {
     pub edge_vars: HashMap<String, EdgeId>,
 }
 
+/// Compact edge candidate used during pattern matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EdgeMatchCandidate {
+    id: EdgeId,
+    src: NodeId,
+    dst: NodeId,
+}
+
 impl MatchBindings {
     /// Creates bindings with pre-allocated capacity based on expected pattern count.
     ///
@@ -134,7 +142,7 @@ pub struct RuleExecutionAudit {
 /// Expression evaluation context for rule execution.
 ///
 /// Provides variable resolution from locals, globals, and pattern bindings,
-/// and implements rule-specific functions (prob, degree, E).
+/// and implements rule-specific functions (prob, weight, degree, E).
 struct RuleExprContext<'a> {
     bindings: &'a MatchBindings,
     locals: &'a Locals,
@@ -175,6 +183,7 @@ impl<'a> ExprContext for RuleExprContext<'a> {
         match name {
             "E" => self.eval_expectation_function(pos_args, all_args, graph),
             "prob" => self.eval_prob_function(pos_args, all_args, graph),
+            "weight" => self.eval_weight_function(pos_args, all_args, graph),
             "prob_correlated" => self.eval_prob_correlated_function(pos_args, all_args, graph),
             "credible" => self.eval_credible_function(pos_args, all_args, graph),
             "variance" => self.eval_variance_function(pos_args, all_args, graph),
@@ -538,6 +547,32 @@ impl<'a> RuleExprContext<'a> {
             }
             _ => Err(ExecError::Internal(
                 "prob(): argument must be an edge variable or comparison".into(),
+            )),
+        }
+    }
+
+    /// Evaluates weight(edge) for continuous edge-weight posteriors.
+    fn eval_weight_function(
+        &self,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        self.ensure_positional_only(all_args, "weight")?;
+
+        if pos_args.len() != 1 {
+            return Err(ExecError::Internal(
+                "weight() expects one positional argument".into(),
+            ));
+        }
+
+        match &pos_args[0] {
+            ExprAst::Var(var_name) => {
+                let eid = self.resolve_edge_var(var_name)?;
+                graph.edge_weight_expectation(eid)
+            }
+            _ => Err(ExecError::Internal(
+                "weight(): argument must be an edge variable".into(),
             )),
         }
     }
@@ -925,17 +960,10 @@ impl<'a> RuleExprContext<'a> {
         negated: bool,
         graph: &BeliefGraph,
     ) -> Result<f64, ExecError> {
-        // Need to ensure graph has deltas applied so find_candidate_edges can see all edges
-        // But we can't mutate graph, so we need find_candidate_edges to handle deltas
-        // Actually, find_candidate_edges uses graph.edges() which only returns base edges
-        // So we need to make find_candidate_edges delta-aware, or ensure graph has deltas applied
-        let candidates = find_candidate_edges(graph, &pattern.edge.ty);
+        let edge_candidate_index = build_edge_candidate_index(graph);
+        let candidates = build_pattern_candidates(graph, pattern, &edge_candidate_index)?;
 
         for edge in candidates {
-            if !matches_node_labels(graph, edge, pattern)? {
-                continue;
-            }
-
             // Build subquery bindings, validating compatibility with parent bindings
             // Subquery has single pattern, so estimate 2 nodes + 1 edge
             let mut subquery_bindings = MatchBindings {
@@ -1309,15 +1337,12 @@ pub fn run_rule_for_each_with_globals_audit(
             ));
         }
         // Use input graph for candidate finding (we want to iterate over original edges)
-        let candidates = find_candidate_edges(input, &pat.edge.ty);
+        let edge_candidate_index = build_edge_candidate_index(input);
+        let candidates = build_pattern_candidates(input, pat, &edge_candidate_index)?;
 
         // First pass: collect matches (read-only, no clone needed)
         let mut matches = Vec::new();
         for edge in candidates {
-            if !matches_node_labels(input, edge, pat)? {
-                continue;
-            }
-
             let mut bindings = MatchBindings::with_capacity(&rule.patterns);
             bindings.node_vars.insert(pat.src.var.clone(), edge.src);
             bindings.node_vars.insert(pat.dst.var.clone(), edge.dst);
@@ -1374,6 +1399,9 @@ pub fn run_rule_for_each_with_globals_audit(
         .iter()
         .map(|&idx| rule.patterns[idx].clone())
         .collect();
+    let edge_candidate_index = build_edge_candidate_index(input);
+    let pattern_candidates =
+        build_ordered_pattern_candidates(input, &ordered_patterns, &edge_candidate_index)?;
 
     // First pass: collect all matches (read-only, no clone needed).
     // Use arena-backed temporary bindings to reduce allocation pressure during recursive joins.
@@ -1383,8 +1411,8 @@ pub fn run_rule_for_each_with_globals_audit(
         let initial_bindings =
             ArenaMatchBindings::with_capacity(&arena, rule.patterns.len() * 2, rule.patterns.len());
         find_multi_pattern_matches_arena(
-            input,
             &ordered_patterns,
+            &pattern_candidates,
             0,
             &initial_bindings,
             &arena,
@@ -1453,44 +1481,81 @@ pub fn run_rule_for_each_with_globals_audit(
 /// Finds candidate edges matching a pattern's edge type, sorted deterministically.
 ///
 /// Deterministic ordering by EdgeId ensures reproducible rule execution across runs.
-fn find_candidate_edges<'a>(
-    graph: &'a BeliefGraph,
-    edge_type: &str,
-) -> Vec<&'a crate::engine::graph::EdgeData> {
-    // Collect edges from both base and delta
-    let mut candidates: Vec<_> = Vec::new();
+fn build_edge_candidate_index(graph: &BeliefGraph) -> HashMap<String, Vec<EdgeMatchCandidate>> {
+    let mut effective_edges = HashMap::with_capacity(graph.edges().len() + graph.delta().len());
 
-    // First, collect all edge IDs we've seen (to avoid duplicates)
-    let mut seen_ids = std::collections::HashSet::new();
-
-    // Arc<str> implements PartialEq with &str, so we can compare directly using .as_ref()
-    // Add edges from base graph
     for edge in graph.edges() {
-        if edge.ty.as_ref() == edge_type {
-            seen_ids.insert(edge.id);
-            candidates.push(edge);
-        }
+        effective_edges.insert(edge.id, edge);
     }
 
-    // Add edges from delta (checking for duplicates)
     for change in graph.delta() {
-        if let crate::engine::graph::GraphDelta::EdgeChange { id, edge } = change {
-            if edge.ty.as_ref() == edge_type && !seen_ids.contains(id) {
-                seen_ids.insert(*id);
-                candidates.push(edge);
+        match change {
+            crate::engine::graph::GraphDelta::EdgeChange { id, edge } => {
+                effective_edges.insert(*id, edge);
             }
+            crate::engine::graph::GraphDelta::EdgeRemoved { id } => {
+                effective_edges.remove(id);
+            }
+            _ => {}
         }
     }
 
-    // Use unstable sort (faster) since EdgeId ordering is stable and deterministic
-    candidates.sort_unstable_by_key(|e| e.id);
-    candidates
+    let mut by_type: HashMap<String, Vec<EdgeMatchCandidate>> = HashMap::new();
+    for edge in effective_edges.values() {
+        by_type
+            .entry(edge.ty.to_string())
+            .or_default()
+            .push(EdgeMatchCandidate {
+                id: edge.id,
+                src: edge.src,
+                dst: edge.dst,
+            });
+    }
+    for candidates in by_type.values_mut() {
+        candidates.sort_unstable_by_key(|edge| edge.id);
+    }
+
+    by_type
+}
+
+fn build_pattern_candidates(
+    graph: &BeliefGraph,
+    pattern: &PatternItem,
+    edge_candidate_index: &HashMap<String, Vec<EdgeMatchCandidate>>,
+) -> Result<Vec<EdgeMatchCandidate>, ExecError> {
+    let Some(candidates_for_type) = edge_candidate_index.get(pattern.edge.ty.as_str()) else {
+        return Ok(Vec::new());
+    };
+
+    let mut candidates = Vec::with_capacity(candidates_for_type.len());
+    for edge in candidates_for_type {
+        if matches_node_labels(graph, edge, pattern)? {
+            candidates.push(*edge);
+        }
+    }
+    Ok(candidates)
+}
+
+fn build_ordered_pattern_candidates(
+    graph: &BeliefGraph,
+    ordered_patterns: &[PatternItem],
+    edge_candidate_index: &HashMap<String, Vec<EdgeMatchCandidate>>,
+) -> Result<Vec<Vec<EdgeMatchCandidate>>, ExecError> {
+    let mut out = Vec::with_capacity(ordered_patterns.len());
+    for pattern in ordered_patterns {
+        out.push(build_pattern_candidates(
+            graph,
+            pattern,
+            edge_candidate_index,
+        )?);
+    }
+    Ok(out)
 }
 
 /// Checks if an edge matches a pattern's node labels.
 fn matches_node_labels(
     graph: &BeliefGraph,
-    edge: &crate::engine::graph::EdgeData,
+    edge: &EdgeMatchCandidate,
     pattern: &PatternItem,
 ) -> Result<bool, ExecError> {
     let src = graph
@@ -1510,7 +1575,7 @@ fn matches_node_labels(
 fn try_extend_bindings_arena<'a>(
     current_bindings: &ArenaMatchBindings<'a>,
     pattern: &PatternItem,
-    edge: &crate::engine::graph::EdgeData,
+    edge: &EdgeMatchCandidate,
     arena: &'a Arena,
 ) -> Option<ArenaMatchBindings<'a>> {
     // Validate source node variable compatibility
@@ -1552,8 +1617,8 @@ fn arena_bindings_to_match(bindings: &ArenaMatchBindings<'_>) -> MatchBindings {
 /// This keeps recursive binding expansion allocation-light while preserving deterministic
 /// matching semantics and final `MatchBindings` output.
 fn find_multi_pattern_matches_arena<'a>(
-    graph: &BeliefGraph,
     patterns: &[PatternItem],
+    pattern_candidates: &[Vec<EdgeMatchCandidate>],
     pattern_idx: usize,
     current_bindings: &ArenaMatchBindings<'a>,
     arena: &'a Arena,
@@ -1565,21 +1630,17 @@ fn find_multi_pattern_matches_arena<'a>(
     }
 
     let pat = &patterns[pattern_idx];
-    let candidates = find_candidate_edges(graph, &pat.edge.ty);
+    let candidates = &pattern_candidates[pattern_idx];
 
     for edge in candidates {
-        if !matches_node_labels(graph, edge, pat)? {
-            continue;
-        }
-
         let Some(new_bindings) = try_extend_bindings_arena(current_bindings, pat, edge, arena)
         else {
             continue;
         };
 
         find_multi_pattern_matches_arena(
-            graph,
             patterns,
+            pattern_candidates,
             pattern_idx + 1,
             &new_bindings,
             arena,
@@ -2377,6 +2438,36 @@ mod tests {
         };
         let err = eval_expr_core(&expr, &g, &ctx).expect_err("invalid p should fail");
         assert!(err.to_string().contains("credible(): p"));
+    }
+
+    #[test]
+    fn eval_weight_function_reads_edge_weight_expectation() {
+        let mut g = create_test_graph();
+        g.set_edge_weight_prior(
+            EdgeId(1),
+            GaussianPosterior {
+                mean: 2.0,
+                precision: 1.0,
+            },
+        )
+        .unwrap();
+        g.observe_edge_weight(EdgeId(1), 4.0, 3.0).unwrap();
+
+        let mut bindings = MatchBindings::default();
+        bindings.edge_vars.insert("e".into(), EdgeId(1));
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
+        };
+
+        let expr = ExprAst::Call {
+            name: "weight".into(),
+            args: vec![CallArg::Positional(ExprAst::Var("e".into()))],
+        };
+        let value = eval_expr_core(&expr, &g, &ctx).expect("weight()");
+        assert!((value - 3.5).abs() < 1e-12);
     }
 
     #[test]
