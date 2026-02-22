@@ -329,6 +329,7 @@ flow Analysis on SocialBeliefs {
 
   graph cleaned = base
     |> apply_rule Transfer
+    |> infer_beliefs
     |> prune_edges REL where prob(edge) < 0.1
     |> snapshot "after_clean"
 
@@ -348,8 +349,16 @@ Transforms:
 
 - `apply_rule RuleName`
 - `apply_ruleset { RuleA, RuleB, ... }`
+- `infer_beliefs`
 - `snapshot "name"`
 - `prune_edges EdgeType where expr`
+
+`infer_beliefs` semantics:
+
+- Runs deterministic loopy sum-product belief propagation over independent edge beliefs.
+- Neighbor coupling is applied between edges of the same type that share a source or destination node.
+- Competing (categorical/Dirichlet) edges are not modified by this transform.
+- The transform updates posterior means while preserving each edge's effective sample size.
 
 Metric sharing between flows:
 
@@ -393,6 +402,7 @@ Notes:
 - Graph transforms produce immutable snapshots (copy-on-write under the hood).
 - Flow planning and execution order are deterministic.
 - Rule matching and metric evaluation are deterministic by stable ID order.
+- `infer_beliefs` message passing is deterministic (stable edge ordering + synchronous updates).
 - Runtime flow outputs include `intervention_audit` events for `apply_rule`/`apply_ruleset`
   transforms (rule name, match count, action count) for reproducibility/traceability hooks.
 

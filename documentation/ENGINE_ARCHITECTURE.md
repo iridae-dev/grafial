@@ -70,6 +70,7 @@ baygraph/
 - **`engine/evidence.rs`**: Evidence ingestion and graph building
 - **`engine/rule_exec.rs`**: Pattern matching and rule execution
 - **`engine/flow_exec.rs`**: Flow transform interpreter and pipeline execution
+- **`engine/belief_propagation.rs`**: Deterministic loopy belief propagation transform (`infer_beliefs`)
 - **`engine/expr_eval.rs`**: Expression evaluation core
 - **`engine/expr_utils.rs`**: Expression utility functions
 - **`engine/query_plan.rs`**: Query plan optimization and caching

@@ -25,6 +25,14 @@ Grafial programs are organized around five building blocks:
 4. `rule`: graph pattern + condition + actions.
 5. `flow`: pipeline that builds graphs, applies transforms, computes metrics, and exports results.
 
+Common flow transforms:
+
+- `apply_rule RuleName`
+- `apply_ruleset { RuleA, RuleB, ... }`
+- `infer_beliefs` (deterministic loopy belief propagation on independent edges)
+- `prune_edges EdgeType where prob(edge) < threshold`
+- `snapshot "name"`
+
 ## Quick Start
 
 Prerequisites:
