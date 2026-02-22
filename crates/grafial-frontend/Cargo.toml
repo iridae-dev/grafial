@@ -2,6 +2,7 @@
 name = "grafial-frontend"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Parser, AST, and validation for Grafial DSL"
 
@@ -9,4 +10,3 @@ description = "Parser, AST, and validation for Grafial DSL"
 pest = "2"
 pest_derive = "2"
 thiserror.workspace = true
-

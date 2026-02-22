@@ -88,26 +88,50 @@ mod tests {
 
     #[test]
     fn test_flow_loader() {
+        use grafial_core::engine::aot_flows::CompiledFlowLoader;
+
+        let flow = create_test_flow();
+        let mut compiler = FlowCompiler::new(OptLevel::None).unwrap();
+        let mut loader = CompiledFlowLoader::new();
+
+        let temp_dir = std::env::temp_dir();
+        let output_path = temp_dir.join("test_flow_loader.o");
+        let metadata = compiler.compile_flow(&flow, &output_path).unwrap();
+
+        // Loading should succeed for a valid compiled artifact.
+        assert!(loader.load_flow(metadata).is_ok());
+
+        // Execution should invoke the compiled entrypoint and succeed.
+        let mut graph = BeliefGraph::default();
+        let result = loader.execute_flow("test_flow", &mut graph);
+        assert!(result.is_ok());
+
+        // Clean up object + shared-library artifacts.
+        std::fs::remove_file(&output_path).ok();
+        let shared_path = output_path.with_extension(if cfg!(target_os = "macos") {
+            "dylib"
+        } else if cfg!(target_os = "windows") {
+            "dll"
+        } else {
+            "so"
+        });
+        std::fs::remove_file(shared_path).ok();
+    }
+
+    #[test]
+    fn test_flow_loader_rejects_missing_artifact() {
         use grafial_core::engine::aot_flows::{CompiledFlowLoader, CompiledFlowMetadata};
 
         let mut loader = CompiledFlowLoader::new();
-
         let metadata = CompiledFlowMetadata {
-            name: "test_flow".to_string(),
-            source_hash: "abcdef123456".to_string(),
-            object_path: "/tmp/test_flow.o".to_string(),
-            entry_symbol: "flow_test_flow_execute".to_string(),
-            dependencies: vec!["evidence:ev1".to_string()],
+            name: "missing_flow".to_string(),
+            source_hash: "deadbeef".to_string(),
+            object_path: "/tmp/does-not-exist/libmissing.so".to_string(),
+            entry_symbol: "flow_missing_flow_execute".to_string(),
+            dependencies: vec![],
         };
 
-        // Loading should succeed (even though the file doesn't exist,
-        // since we're not actually doing dlopen yet)
-        assert!(loader.load_flow(metadata).is_ok());
-
-        // Execution should fail since the flow isn't actually loaded
-        let mut graph = BeliefGraph::default();
-        let result = loader.execute_flow("test_flow", &mut graph);
-        assert!(result.is_err());
+        assert!(loader.load_flow(metadata).is_err());
     }
 
     #[test]

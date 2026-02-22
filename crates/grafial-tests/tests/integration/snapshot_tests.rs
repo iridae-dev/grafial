@@ -3,21 +3,37 @@
 #[cfg(feature = "serde")]
 mod serde_tests {
     use grafial_core::engine::errors::ExecError;
-    use grafial_core::engine::graph::{BeliefGraph, EdgeId, NodeId};
+    use grafial_core::engine::graph::{BeliefGraph, BetaPosterior, GaussianPosterior};
     use grafial_core::engine::snapshot::{
         load_snapshot_binary, load_snapshot_json, save_snapshot_binary, save_snapshot_json,
         Snapshot,
     };
+    use std::collections::HashMap;
 
     fn create_test_graph() -> BeliefGraph {
         let mut g = BeliefGraph::default();
-        let n1 = g.add_node("Person".to_string());
-        let n2 = g.add_node("Person".to_string());
-        let e1 = g.add_edge(n1, "REL".to_string(), n2);
+        let attrs = HashMap::from([(
+            "value".to_string(),
+            GaussianPosterior {
+                mean: 0.0,
+                precision: 1.0,
+            },
+        )]);
+        let n1 = g.add_node("Person".to_string(), attrs.clone());
+        let n2 = g.add_node("Person".to_string(), attrs);
+        let e1 = g.add_edge(
+            n1,
+            n2,
+            "REL".to_string(),
+            BetaPosterior {
+                alpha: 1.0,
+                beta: 1.0,
+            },
+        );
 
         // Apply some observations
         g.observe_edge(e1, true).unwrap();
-        g.observe_attr(n1, "value".to_string(), 1.0).unwrap();
+        g.observe_attr(n1, "value", 1.0, 1.0).unwrap();
 
         // Ensure all deltas are applied (snapshot will do this too, but be explicit)
         g
@@ -111,7 +127,7 @@ mod serde_tests {
         let mut graph = create_test_graph();
 
         // Add a node that will be in delta
-        let n3 = graph.add_node("Person".to_string());
+        let n3 = graph.add_node("Person".to_string(), HashMap::new());
 
         // Create snapshot - should apply deltas
         let snapshot = Snapshot::new(graph, None);

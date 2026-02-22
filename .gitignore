@@ -5,7 +5,7 @@ crates/grafial-benches/target/
 *.pdb
 
 # Cargo
-Cargo.lock
+# Note: root Cargo.lock is intentionally tracked for reproducible CLI/application builds.
 
 # IDE
 .idea/
@@ -13,6 +13,10 @@ Cargo.lock
 *.swp
 *.swo
 *~
+
+# Node / extension artifacts
+node_modules/
+*.vsix
 
 # OS
 .DS_Store

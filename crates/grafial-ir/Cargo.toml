@@ -2,10 +2,10 @@
 name = "grafial-ir"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Intermediate representation for Grafial programs"
 
 [dependencies]
 grafial-frontend = { path = "../grafial-frontend" }
 thiserror.workspace = true
-

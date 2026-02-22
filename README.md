@@ -107,9 +107,9 @@ Key crates in `crates/`:
 
 `crates/grafial-core/Cargo.toml` defines optional features:
 
-- `parallel`: parallel evidence, metric, and rule execution paths.
+- `parallel`: parallel evidence and metric execution paths with deterministic ruleset orchestration hooks.
 - `jit`: Cranelift-based JIT backend.
-- `aot`: ahead-of-time compilation support.
+- `aot`: ahead-of-time flow artifact compilation with runtime hash validation and compiled entrypoint execution checks.
 - `vectorized`: vectorized Bayesian evidence updates.
 - `simd-kernels`: SIMD numeric kernel dispatch (feature-gated).
 - `gpu-kernels`: GPU-staged kernel dispatch path (feature-gated host staging baseline).
@@ -166,6 +166,9 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 ```
 
+Lockfile policy:
+- Root `Cargo.lock` is tracked in git for reproducible CLI/workspace builds.
+
 Benchmarks:
 
 ```bash
@@ -191,4 +194,4 @@ See `AGENTS.md` and `CONTRIBUTING.md` (if present) for contribution and coding g
 
 ## License
 
-MIT OR Apache-2.0
+MIT

@@ -192,7 +192,7 @@ pip install /path/to/baygraph/crates/grafial-python
 ### Option 2: Git Repository
 
 ```bash
-pip install git+https://github.com/yourusername/baygraph.git#subdirectory=crates/grafial-python
+pip install git+https://github.com/iridae-dev/grafial.git#subdirectory=crates/grafial-python
 ```
 
 ### Option 3: Development Editable Install
@@ -217,7 +217,7 @@ In your project's `pyproject.toml`:
 ```toml
 [project]
 dependencies = [
-    "grafial @ git+https://github.com/yourusername/baygraph.git#subdirectory=crates/grafial-python",
+    "grafial @ git+https://github.com/iridae-dev/grafial.git#subdirectory=crates/grafial-python",
 ]
 ```
 

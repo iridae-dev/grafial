@@ -21,3 +21,37 @@ jobs:
 
       - name: Run Phase 6 release gate
         run: ./scripts/phase6_release_gate.sh
+
+      - name: Run strict clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run workspace tests
+        run: cargo test --workspace
+
+  python-bindings-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache cargo builds
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Python extension and run pytest
+        working-directory: crates/grafial-python
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install maturin pytest
+          export PYO3_PYTHON="$PWD/.venv/bin/python"
+          maturin develop --release
+          pytest tests -q

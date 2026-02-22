@@ -444,11 +444,10 @@ fn rule_context_winner_function() {
 
     impl ExprContext for TestContext {
         fn resolve_var(&self, name: &str) -> Option<f64> {
-            if let Some(node_id) = self.bindings.node_vars.get(name) {
-                Some(node_id.0 as f64)
-            } else {
-                None
-            }
+            self.bindings
+                .node_vars
+                .get(name)
+                .map(|node_id| node_id.0 as f64)
         }
 
         fn eval_function(
@@ -568,11 +567,10 @@ fn rule_context_entropy_function() {
 
     impl ExprContext for TestContext {
         fn resolve_var(&self, name: &str) -> Option<f64> {
-            if let Some(node_id) = self.bindings.node_vars.get(name) {
-                Some(node_id.0 as f64)
-            } else {
-                None
-            }
+            self.bindings
+                .node_vars
+                .get(name)
+                .map(|node_id| node_id.0 as f64)
         }
 
         fn eval_function(

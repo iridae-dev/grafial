@@ -1,356 +1,161 @@
-//! Parallel rule application for non-overlapping matches.
+//! Rule-application orchestration behind the `parallel` feature.
 //!
-//! This module provides parallel execution of rules when their matches
-//! don't overlap. Rules that affect different parts of the graph can
-//! be applied concurrently for improved performance.
-//!
-//! ## Architecture
-//!
-//! - **Match analysis**: Identifies non-overlapping rule matches
-//! - **Conflict detection**: Ensures rules don't modify same nodes/edges
-//! - **Parallel application**: Applies non-conflicting rules concurrently
-//! - **Sequential fallback**: Handles conflicting rules sequentially
-//!
-//! ## Feature gating
-//!
-//! Parallel rules are behind the `parallel` feature flag. When disabled,
-//! rules are applied sequentially.
+//! This module now runs real rule execution (via `rule_exec`) and keeps a stable
+//! API/telemetry surface for future non-overlapping parallel scheduling.
 
-use std::collections::HashSet;
-
-use crate::engine::errors::ExecError;
-use crate::engine::graph::{BeliefGraph, EdgeId, NodeId};
-use grafial_ir::RuleIR;
 use std::collections::HashMap;
 
-/// A match result from pattern matching.
-#[derive(Debug, Clone)]
-struct RuleMatch {
-    /// Matched nodes by variable name
-    nodes: HashMap<String, NodeId>,
-    /// Matched edges by variable name
-    edges: HashMap<String, EdgeId>,
-}
+use crate::engine::errors::ExecError;
+use crate::engine::graph::BeliefGraph;
+use crate::engine::rule_exec::run_rule_for_each_with_globals_audit;
+use grafial_ir::RuleIR;
 
-/// Result of parallel rule application.
+/// Result of rule-application execution.
 #[derive(Debug)]
 pub struct ParallelRuleResult {
-    /// Number of rules applied
+    /// Number of rules that had at least one matched binding.
     pub rules_applied: usize,
-    /// Number of matches found
+    /// Total number of matched bindings across all rules.
     pub matches_found: usize,
-    /// Statistics about parallel execution
+    /// Statistics about execution.
     pub stats: ParallelRuleStats,
 }
 
-/// Statistics about parallel rule application.
+/// Statistics about rule-application execution.
 #[derive(Debug, Default)]
 pub struct ParallelRuleStats {
-    /// Number of parallel batches executed
+    /// Number of execution batches (currently deterministic sequential batches).
     pub parallel_batches: usize,
-    /// Maximum parallelism achieved
+    /// Maximum parallelism achieved in execution batches.
     pub max_parallelism: usize,
-    /// Number of conflicts detected
+    /// Number of conflicts detected (0 in deterministic sequential mode).
     pub conflicts_detected: usize,
 }
 
-/// A match with its affected graph elements.
-#[derive(Debug, Clone)]
-struct MatchWithFootprint {
-    /// The original match
-    match_data: RuleMatch,
-    /// Rule to apply
-    rule: RuleIR,
-    /// Nodes that will be read or modified
-    affected_nodes: HashSet<NodeId>,
-    /// Edges that will be read or modified
-    affected_edges: HashSet<EdgeId>,
-}
-
-/// Check if two matches conflict (overlap in their affected elements).
-fn matches_conflict(m1: &MatchWithFootprint, m2: &MatchWithFootprint) -> bool {
-    // Two matches conflict if they affect any of the same nodes or edges
-    !m1.affected_nodes.is_disjoint(&m2.affected_nodes)
-        || !m1.affected_edges.is_disjoint(&m2.affected_edges)
-}
-
-/// Extract affected elements from a rule match and its actions.
-fn extract_footprint(match_data: &RuleMatch, _rule: &RuleIR) -> (HashSet<NodeId>, HashSet<EdgeId>) {
-    let mut nodes = HashSet::new();
-    let mut edges = HashSet::new();
-
-    // Add matched nodes
-    for node_id in match_data.nodes.values() {
-        nodes.insert(*node_id);
-    }
-
-    // Add matched edges
-    for edge_id in match_data.edges.values() {
-        edges.insert(*edge_id);
-    }
-
-    // TODO: Analyze rule actions to identify nodes/edges that will be modified
-    // For now, we conservatively assume all matched elements are modified
-
-    (nodes, edges)
-}
-
-/// Group matches into non-conflicting batches for parallel execution.
-fn batch_non_conflicting_matches(matches: Vec<MatchWithFootprint>) -> Vec<Vec<MatchWithFootprint>> {
-    let mut batches: Vec<Vec<MatchWithFootprint>> = Vec::new();
-
-    for match_item in matches {
-        // Try to add to an existing batch
-        let mut added = false;
-        for batch in &mut batches {
-            // Check if this match conflicts with any match in the batch
-            let has_conflict = batch
-                .iter()
-                .any(|existing| matches_conflict(&match_item, existing));
-
-            if !has_conflict {
-                batch.push(match_item.clone());
-                added = true;
-                break;
-            }
-        }
-
-        // If couldn't add to any batch, create a new one
-        if !added {
-            batches.push(vec![match_item]);
-        }
-    }
-
-    batches
-}
-
-/// Apply rules in parallel when matches don't overlap.
-#[cfg(feature = "parallel")]
+/// Apply rules using engine rule semantics.
+///
+/// The API is retained under the `parallel` feature and currently executes with
+/// deterministic ruleset semantics (each rule receives previous output).
 pub fn apply_rules_parallel(
     graph: &mut BeliefGraph,
     rules: &[RuleIR],
 ) -> Result<ParallelRuleResult, ExecError> {
+    let mut matched_rules = 0;
     let mut total_matches = 0;
-    let mut total_applied = 0;
-    let mut max_parallelism = 0;
-    let mut conflicts = 0;
+    let mut batch_count = 0;
 
-    // For each rule, find matches and apply in parallel batches
-    for rule in rules {
-        // Find all matches for this rule
-        let matches = find_rule_matches(graph, rule)?;
-        total_matches += matches.len();
+    let globals: HashMap<String, f64> = HashMap::new();
+    let mut current = graph.clone();
 
-        if matches.is_empty() {
-            continue;
+    for rule_ir in rules {
+        let rule = rule_ir.to_ast();
+        let (next, audit) = run_rule_for_each_with_globals_audit(&current, &rule, &globals)?;
+        if audit.matched_bindings > 0 {
+            matched_rules += 1;
+            batch_count += 1;
         }
-
-        // Extract footprints for each match
-        let matches_with_footprint: Vec<_> = matches
-            .into_iter()
-            .map(|m| {
-                let (nodes, edges) = extract_footprint(&m, rule);
-                MatchWithFootprint {
-                    match_data: m,
-                    rule: rule.clone(),
-                    affected_nodes: nodes,
-                    affected_edges: edges,
-                }
-            })
-            .collect();
-
-        // Group into non-conflicting batches
-        let batches = batch_non_conflicting_matches(matches_with_footprint);
-
-        // Track conflicts
-        if batches.len() > 1 {
-            conflicts += batches.len() - 1;
-        }
-
-        // Apply each batch
-        for batch in batches {
-            max_parallelism = max_parallelism.max(batch.len());
-
-            // Apply all matches in this batch in parallel
-            // Note: In practice, we need thread-safe graph operations
-            // For now, we apply sequentially but could parallelize with proper locking
-            for match_item in batch {
-                apply_rule_actions(graph, &match_item.match_data, &match_item.rule)?;
-                total_applied += 1;
-            }
-        }
+        total_matches += audit.matched_bindings;
+        current = next;
     }
 
-    Ok(ParallelRuleResult {
-        rules_applied: total_applied,
-        matches_found: total_matches,
-        stats: ParallelRuleStats {
-            parallel_batches: 1, // Simplified for now
-            max_parallelism,
-            conflicts_detected: conflicts,
-        },
-    })
-}
-
-/// Sequential fallback for rule application.
-#[cfg(not(feature = "parallel"))]
-pub fn apply_rules_parallel(
-    graph: &mut BeliefGraph,
-    rules: &[RuleIR],
-) -> Result<ParallelRuleResult, ExecError> {
-    let mut total_matches = 0;
-    let mut total_applied = 0;
-
-    for rule in rules {
-        let matches = find_rule_matches(graph, rule)?;
-        total_matches += matches.len();
-
-        for match_data in matches {
-            apply_rule_actions(graph, &match_data, rule)?;
-            total_applied += 1;
-        }
-    }
+    *graph = current;
 
     Ok(ParallelRuleResult {
-        rules_applied: total_applied,
+        rules_applied: matched_rules,
         matches_found: total_matches,
         stats: ParallelRuleStats {
-            parallel_batches: 1,
-            max_parallelism: 1,
+            parallel_batches: batch_count,
+            max_parallelism: if rules.is_empty() { 0 } else { 1 },
             conflicts_detected: 0,
         },
     })
 }
 
-/// Find all matches for a rule in the graph.
-///
-/// This is a placeholder - the actual implementation would use
-/// the pattern matching from rule_exec module.
-fn find_rule_matches(_graph: &BeliefGraph, _rule: &RuleIR) -> Result<Vec<RuleMatch>, ExecError> {
-    // TODO: Integrate with actual rule matching logic
-    Ok(Vec::new())
-}
-
-/// Apply rule actions for a match.
-///
-/// This is a placeholder - the actual implementation would use
-/// the action execution from rule_exec module.
-fn apply_rule_actions(
-    _graph: &mut BeliefGraph,
-    _match_data: &RuleMatch,
-    _rule: &RuleIR,
-) -> Result<(), ExecError> {
-    // TODO: Integrate with actual rule action execution
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::graph::{BetaPosterior, GaussianPosterior};
+    use grafial_frontend::{parse_program, validate_program};
+    use std::collections::HashMap;
 
-    #[test]
-    fn test_conflict_detection() {
-        let mut match1 = MatchWithFootprint {
-            match_data: RuleMatch {
-                nodes: HashMap::new(),
-                edges: HashMap::new(),
-            },
-            rule: RuleIR {
-                name: "rule1".to_string(),
-                on_model: "test".to_string(),
-                patterns: Vec::new(),
-                where_expr: None,
-                actions: Vec::new(),
-                mode: None,
-            },
-            affected_nodes: HashSet::new(),
-            affected_edges: HashSet::new(),
-        };
+    fn make_test_rule_ir() -> RuleIR {
+        let src = r#"
+        schema S {
+            node Person { score: Real }
+            edge REL {}
+        }
 
-        let mut match2 = match1.clone();
-        match2.rule.name = "rule2".to_string();
+        belief_model M on S {
+            node Person { score ~ Gaussian(mean=0.0, precision=1.0) }
+            edge REL { exist ~ Bernoulli(prior=0.6, weight=2.0) }
+        }
 
-        // Initially no conflict
-        assert!(!matches_conflict(&match1, &match2));
+        rule Bump on M {
+            (A:Person)-[ab:REL]->(B:Person) => {
+                B.score ~= 5.0 precision=1.0 count=1
+            }
+        }
+        "#;
 
-        // Add same node to both - now they conflict
-        let node_id = NodeId(0);
-        match1.affected_nodes.insert(node_id);
-        match2.affected_nodes.insert(node_id);
-
-        assert!(matches_conflict(&match1, &match2));
+        let ast = parse_program(src).expect("parse test rule source");
+        validate_program(&ast).expect("validate test rule source");
+        RuleIR::from(&ast.rules[0])
     }
 
     #[test]
-    fn test_batch_creation() {
-        let rule = RuleIR {
-            name: "rule".to_string(),
-            on_model: "test".to_string(),
-            patterns: Vec::new(),
-            where_expr: None,
-            actions: Vec::new(),
-            mode: None,
-        };
+    fn apply_rules_parallel_applies_real_rule_logic() {
+        let mut graph = BeliefGraph::default();
 
-        // Create non-conflicting matches
-        let mut matches = Vec::new();
-        for i in 0..4 {
-            let mut nodes = HashSet::new();
-            nodes.insert(NodeId(i));
+        let attrs_a = HashMap::from([(
+            "score".to_string(),
+            GaussianPosterior {
+                mean: 1.0,
+                precision: 1.0,
+            },
+        )]);
+        let attrs_b = HashMap::from([(
+            "score".to_string(),
+            GaussianPosterior {
+                mean: 0.0,
+                precision: 1.0,
+            },
+        )]);
 
-            matches.push(MatchWithFootprint {
-                match_data: RuleMatch {
-                    nodes: HashMap::new(),
-                    edges: HashMap::new(),
-                },
-                rule: rule.clone(),
-                affected_nodes: nodes,
-                affected_edges: HashSet::new(),
-            });
-        }
+        let a = graph.add_node("Person".to_string(), attrs_a);
+        let b = graph.add_node("Person".to_string(), attrs_b);
+        graph.add_edge(
+            a,
+            b,
+            "REL".to_string(),
+            BetaPosterior {
+                alpha: 6.0,
+                beta: 1.0,
+            },
+        );
 
-        let batches = batch_non_conflicting_matches(matches);
+        let before = graph.expectation(b, "score").expect("pre-rule expectation");
+        let rule = make_test_rule_ir();
 
-        // All matches should be in one batch since they don't conflict
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].len(), 4);
+        let stats = apply_rules_parallel(&mut graph, &[rule]).expect("apply rules");
+
+        let after = graph
+            .expectation(b, "score")
+            .expect("post-rule expectation");
+
+        assert!(after > before, "rule should increase B.score expectation");
+        assert_eq!(stats.rules_applied, 1);
+        assert_eq!(stats.matches_found, 1);
+        assert_eq!(stats.stats.max_parallelism, 1);
     }
 
     #[test]
-    fn test_conflicting_batch_creation() {
-        let rule = RuleIR {
-            name: "rule".to_string(),
-            on_model: "test".to_string(),
-            patterns: Vec::new(),
-            where_expr: None,
-            actions: Vec::new(),
-            mode: None,
-        };
+    fn apply_rules_parallel_empty_rules_is_noop() {
+        let mut graph = BeliefGraph::default();
+        let stats = apply_rules_parallel(&mut graph, &[]).expect("empty rules should succeed");
 
-        // Create conflicting matches (all affect node 0)
-        let mut matches = Vec::new();
-        for i in 0..3 {
-            let mut nodes = HashSet::new();
-            nodes.insert(NodeId(0)); // All affect same node
-            nodes.insert(NodeId(i + 1)); // Plus unique node
-
-            matches.push(MatchWithFootprint {
-                match_data: RuleMatch {
-                    nodes: HashMap::new(),
-                    edges: HashMap::new(),
-                },
-                rule: rule.clone(),
-                affected_nodes: nodes,
-                affected_edges: HashSet::new(),
-            });
-        }
-
-        let batches = batch_non_conflicting_matches(matches);
-
-        // Each match should be in its own batch since they all conflict
-        assert_eq!(batches.len(), 3);
-        for batch in batches {
-            assert_eq!(batch.len(), 1);
-        }
+        assert_eq!(stats.rules_applied, 0);
+        assert_eq!(stats.matches_found, 0);
+        assert_eq!(stats.stats.parallel_batches, 0);
+        assert_eq!(stats.stats.max_parallelism, 0);
     }
 }

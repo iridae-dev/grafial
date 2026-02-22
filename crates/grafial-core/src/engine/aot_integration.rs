@@ -12,6 +12,7 @@ use crate::engine::aot_flows::FlowCompiler;
 use crate::engine::aot_flows::{CompiledFlowLoader, CompiledFlowMetadata};
 use crate::engine::errors::ExecError;
 use crate::engine::flow_exec;
+use crate::engine::graph::BeliefGraph;
 use grafial_ir::{FlowIR, ProgramIR};
 
 /// Global registry of AOT-compiled flows.
@@ -61,18 +62,22 @@ impl AotFlowRegistry {
         let mut metadata_map = self.metadata.write().unwrap();
 
         for line in manifest.lines() {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() != 2 {
+            let mut parts = line.splitn(3, ':');
+            let Some(name_part) = parts.next() else {
                 continue;
-            }
+            };
+            let Some(object_path_part) = parts.next() else {
+                continue;
+            };
+            let source_hash_part = parts.next().unwrap_or_default();
 
-            let name = parts[0].to_string();
-            let object_path = parts[1].to_string();
+            let name = name_part.to_string();
+            let object_path = object_path_part.to_string();
 
             // Create metadata (in real implementation, would read from object file)
             let metadata = CompiledFlowMetadata {
                 name: name.clone(),
-                source_hash: "placeholder".to_string(),
+                source_hash: source_hash_part.to_string(),
                 object_path,
                 entry_symbol: format!("flow_{}_execute", sanitize_name(&name)),
                 dependencies: Vec::new(),
@@ -100,9 +105,20 @@ impl AotFlowRegistry {
         if self.has_compiled(&flow.name) {
             // Verify the compiled version matches the source
             if self.verify_flow_hash(flow) {
-                // TODO: Execute the compiled version
-                eprintln!("Would execute compiled flow '{}'", flow.name);
-                // For now, fall through to interpreted execution
+                // Execute compiled artifact entrypoint for runtime validation, then
+                // continue through interpreter path for full flow materialization.
+                let mut probe_graph = BeliefGraph::default();
+                if let Err(err) = self
+                    .loader
+                    .read()
+                    .unwrap()
+                    .execute_flow(&flow.name, &mut probe_graph)
+                {
+                    eprintln!(
+                        "Warning: Compiled flow '{}' failed runtime execution ({}), falling back to interpreter",
+                        flow.name, err
+                    );
+                }
             } else {
                 eprintln!(
                     "Warning: Compiled flow '{}' is out of date, falling back to interpreter",
@@ -116,10 +132,13 @@ impl AotFlowRegistry {
     }
 
     /// Verify that a compiled flow matches its source.
-    fn verify_flow_hash(&self, _flow: &FlowIR) -> bool {
-        // TODO: Implement actual hash verification
-        // For now, always consider compiled versions valid
-        true
+    fn verify_flow_hash(&self, flow: &FlowIR) -> bool {
+        let expected = crate::engine::aot_flows::compute_flow_hash(flow);
+        self.metadata
+            .read()
+            .unwrap()
+            .get(&flow.name)
+            .is_some_and(|metadata| metadata.source_hash == expected)
     }
 }
 

@@ -191,7 +191,7 @@ proptest! {
             exist: EdgePosterior::Independent(BetaPosterior { alpha, beta }),
         });
         let p = g.prob_mean(EdgeId(1)).unwrap();
-        prop_assert!(p >= 0.0 && p <= 1.0);
+        prop_assert!((0.0..=1.0).contains(&p));
     }
 
     #[test]

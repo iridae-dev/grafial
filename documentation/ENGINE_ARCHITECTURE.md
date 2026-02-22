@@ -78,7 +78,7 @@ baygraph/
 - **`engine/numeric_kernels.rs`**: Backend-dispatched numeric kernels (scalar/SIMD/GPU-staged)
 - **`engine/snapshot.rs`**: Graph snapshot serialization
 - **`engine/errors.rs`**: Error types (`ExecError`)
-- **`engine/parallel_*`** (feature `parallel`): Parallel evidence, metric, flow, graph, and rule paths
+- **`engine/parallel_*`** (feature `parallel`): Parallel evidence/metric/flow/graph paths and deterministic ruleset orchestration hooks
 - **`engine/rule_kernels.rs`** (feature `jit`): JIT kernel cache and compiled predicate/action support
 - **`engine/aot_*`** (feature `aot`): Ahead-of-time flow compilation and integration
 - **`engine/vectorized.rs`** (feature `vectorized`): Vectorized evidence update kernels

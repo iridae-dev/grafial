@@ -10,7 +10,7 @@ fn parses_min_schema() {
 #[test]
 fn parses_social_example() {
     let src = include_str!("../../../grafial-examples/social.grafial");
-    let ast = parse_program(&src).expect("parse");
+    let ast = parse_program(src).expect("parse");
     // Basic shape checks
     assert_eq!(ast.schemas.len(), 1);
     assert_eq!(ast.belief_models.len(), 1);
@@ -53,6 +53,6 @@ fn parses_social_example() {
 fn parses_exists_and_not_exists_syntax() {
     // Ensure textual `exists` and `not exists` in where clauses parse correctly
     let src = include_str!("../../../grafial-examples/probabilistic_pattern_matching.grafial");
-    let ast = parse_program(&src).expect("parse probabilistic_pattern_matching");
+    let ast = parse_program(src).expect("parse probabilistic_pattern_matching");
     assert!(ast.rules.iter().any(|r| r.name == "IndirectInfluence"));
 }

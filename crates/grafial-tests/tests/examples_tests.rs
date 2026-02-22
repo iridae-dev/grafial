@@ -191,7 +191,7 @@ fn example_transitive_closure_sanity() -> Result<(), ExecError> {
         ExecError::Internal("ReachabilityAnalysis: missing 'avg_reachability'".into())
     })?;
     assert!(avg_reachability.is_finite());
-    assert!(avg_reachability >= 0.0 && avg_reachability <= 1.0);
+    assert!((0.0..=1.0).contains(&avg_reachability));
 
     let reachable_count = *result.metrics.get("reachable_count").ok_or_else(|| {
         ExecError::Internal("ReachabilityAnalysis: missing 'reachable_count'".into())

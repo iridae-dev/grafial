@@ -4,7 +4,7 @@ This document describes how to build and install the Grafial engine and CLI tool
 
 ## Prerequisites
 
-- **Rust**: Version 1.70 or later (install from [rustup.rs](https://rustup.rs/))
+- **Rust**: Version 1.83 or later (install from [rustup.rs](https://rustup.rs/))
 - **Cargo**: Included with Rust installation
 - **Nix** (optional): For development environment with pinned toolchains (see `shell.nix`)
 
@@ -15,6 +15,9 @@ Grafial is organized as a Cargo workspace with multiple crates. Build all crates
 ```bash
 cargo build --workspace --release
 ```
+
+Lockfile policy:
+- Root `Cargo.lock` is intentionally tracked to keep CLI/workspace dependency resolution reproducible.
 
 Build a specific crate:
 
@@ -64,7 +67,7 @@ This installs `grafial` to `~/.cargo/bin/` (or `$CARGO_HOME/bin` if set). Make s
 To install directly from a git repository:
 
 ```bash
-cargo install --git <repository-url> --path crates/grafial-cli
+cargo install --git https://github.com/iridae-dev/grafial --path crates/grafial-cli
 ```
 
 ## CLI Usage
@@ -172,7 +175,7 @@ This provides:
 ### Without Nix
 
 Ensure you have:
-- Rust 1.70+ installed via `rustup`
+- Rust 1.83+ installed via `rustup`
 - Standard build tools for your platform
 
 ## Features
@@ -180,9 +183,9 @@ Ensure you have:
 `grafial-core` supports optional features:
 
 - Runtime/acceleration:
-  - `parallel`: enable parallel evidence/metric/rule execution paths
+  - `parallel`: enable parallel evidence/metric/flow/graph paths plus deterministic ruleset orchestration hooks
   - `jit`: enable Cranelift JIT backend
-  - `aot`: enable AOT compilation support
+  - `aot`: enable AOT artifact compilation, hash validation, and compiled-entry runtime checks
   - `vectorized`: enable vectorized evidence update paths
   - `simd-kernels`: enable SIMD numeric-kernel dispatch
   - `gpu-kernels`: enable GPU-staged numeric-kernel dispatch baseline
@@ -228,7 +231,7 @@ Workspace builds of `grafial-cli` include JSON support by default. If you are bu
 
 ### Build errors
 
-- Ensure you're using Rust 1.70 or later: `rustc --version`
+- Ensure you're using Rust 1.83 or later: `rustc --version`
 - Try cleaning and rebuilding: `cargo clean && cargo build --workspace`
 - Check that all dependencies are available: `cargo update`
 

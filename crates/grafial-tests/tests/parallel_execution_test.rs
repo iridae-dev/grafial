@@ -33,7 +33,7 @@ mod tests {
             let value2 = result2
                 .metrics
                 .get(key)
-                .expect(&format!("{}: Missing metric {}", context, key));
+                .unwrap_or_else(|| panic!("{}: Missing metric {}", context, key));
             assert!(
                 (value1 - value2).abs() < 1e-10,
                 "{}: Metric {} differs: {} vs {}",
