@@ -1829,7 +1829,9 @@ impl BeliefGraph {
         }
         // Apply delta to ensure all items are in base for consistency
         rebuilt.ensure_owned();
-        if !self.inner.node_attr_correlations.is_empty() || !self.inner.edge_weight_posteriors.is_empty() {
+        if !self.inner.node_attr_correlations.is_empty()
+            || !self.inner.edge_weight_posteriors.is_empty()
+        {
             let rebuilt_inner =
                 Arc::get_mut(&mut rebuilt.inner).expect("ensure_owned guarantees ownership");
             if !self.inner.node_attr_correlations.is_empty() {
@@ -1906,7 +1908,9 @@ impl BeliefGraph {
         if self.edge(edge).is_none() {
             return Err(ExecError::Internal("missing edge".into()));
         }
-        if !posterior.mean.is_finite() || !posterior.precision.is_finite() || posterior.precision <= 0.0
+        if !posterior.mean.is_finite()
+            || !posterior.precision.is_finite()
+            || posterior.precision <= 0.0
         {
             return Err(ExecError::ValidationError(format!(
                 "edge weight prior must have finite mean and positive finite precision, got mean={} precision={}",
@@ -1956,15 +1960,12 @@ impl BeliefGraph {
         self.ensure_owned();
         let inner =
             Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
-        let posterior = inner
-            .edge_weight_posteriors
-            .get_mut(&edge)
-            .ok_or_else(|| {
-                ExecError::ValidationError(format!(
-                    "edge {:?} does not declare a continuous weight posterior",
-                    edge
-                ))
-            })?;
+        let posterior = inner.edge_weight_posteriors.get_mut(&edge).ok_or_else(|| {
+            ExecError::ValidationError(format!(
+                "edge {:?} does not declare a continuous weight posterior",
+                edge
+            ))
+        })?;
         posterior.update(value, tau_obs.max(MIN_OBS_PRECISION));
         Ok(())
     }

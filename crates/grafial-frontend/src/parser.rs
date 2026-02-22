@@ -958,8 +958,9 @@ fn build_observe_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ObserveStmt, 
                 FrontendError::ParseError("Missing edge observe target".to_string())
             })?;
             let (edge_type, src, dst) = parse_edge_observe_target(target)?;
-            let value = value
-                .ok_or_else(|| FrontendError::ParseError("Missing edge weight value".to_string()))?;
+            let value = value.ok_or_else(|| {
+                FrontendError::ParseError("Missing edge weight value".to_string())
+            })?;
 
             Ok(ObserveStmt::EdgeWeight {
                 edge_type,
@@ -1068,7 +1069,8 @@ fn parse_edge_observe_target(
     }
 
     let src = src.ok_or_else(|| FrontendError::ParseError("Missing source node".to_string()))?;
-    let dst = dst.ok_or_else(|| FrontendError::ParseError("Missing destination node".to_string()))?;
+    let dst =
+        dst.ok_or_else(|| FrontendError::ParseError("Missing destination node".to_string()))?;
     Ok((edge_type, src, dst))
 }
 
@@ -3228,10 +3230,12 @@ mod tests {
         let edge_decl = &ast.belief_models[0].edges[0];
         match edge_decl.weight.as_ref().expect("weight posterior present") {
             PosteriorType::Gaussian { params } => {
-                assert!(params.iter().any(|(k, v)| k == "prior_mean" && (*v - 1.0).abs() < 1e-12));
-                assert!(params.iter().any(|(k, v)| {
-                    k == "prior_precision" && (*v - 0.5).abs() < 1e-12
-                }));
+                assert!(params
+                    .iter()
+                    .any(|(k, v)| k == "prior_mean" && (*v - 1.0).abs() < 1e-12));
+                assert!(params
+                    .iter()
+                    .any(|(k, v)| { k == "prior_precision" && (*v - 0.5).abs() < 1e-12 }));
             }
             other => panic!("expected Gaussian edge weight posterior, got {:?}", other),
         }

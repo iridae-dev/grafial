@@ -555,10 +555,7 @@ fn validate_belief_model(
                 }
                 other => {
                     return Err(validation_error(
-                        format!(
-                            "{} must use GaussianPosterior, got {:?}",
-                            target, other
-                        ),
+                        format!("{} must use GaussianPosterior, got {:?}", target, other),
                         Some(&context),
                         range,
                     ));
@@ -914,10 +911,7 @@ fn validate_evidence(
                 if let Some(tau) = precision {
                     if !tau.is_finite() || *tau <= 0.0 {
                         return Err(validation_error(
-                            format!(
-                                "Edge weight precision must be finite and > 0, got {}",
-                                tau
-                            ),
+                            format!("Edge weight precision must be finite and > 0, got {}", tau),
                             Some(&context),
                             range,
                         ));
@@ -3242,6 +3236,8 @@ evidence Ev on M {
 "#;
         let ast = crate::parser::parse_program(src).expect("parse");
         let err = validate_program(&ast).expect_err("should reject missing edge weight posterior");
-        assert!(err.to_string().contains("does not declare a weight posterior"));
+        assert!(err
+            .to_string()
+            .contains("does not declare a weight posterior"));
     }
 }

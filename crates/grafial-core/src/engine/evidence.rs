@@ -621,7 +621,11 @@ fn split_prepared_observations(
         }
     }
 
-    (edge_observations, edge_weight_observations, attr_observations)
+    (
+        edge_observations,
+        edge_weight_observations,
+        attr_observations,
+    )
 }
 
 /// Creates a node if it doesn't exist, initializing attributes from the belief model.

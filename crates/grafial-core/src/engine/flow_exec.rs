@@ -1809,14 +1809,16 @@ impl ExprContext for PruneExprContext {
         match name {
             "prob" | "weight" => {
                 if !all_args.is_empty() && matches!(all_args[0], CallArg::Named { .. }) {
-                    return Err(ExecError::ValidationError(
-                        format!("{}() does not accept named arguments", name),
-                    ));
+                    return Err(ExecError::ValidationError(format!(
+                        "{}() does not accept named arguments",
+                        name
+                    )));
                 }
                 if pos_args.len() != 1 {
-                    return Err(ExecError::ValidationError(
-                        format!("{}(): expected single positional argument", name),
-                    ));
+                    return Err(ExecError::ValidationError(format!(
+                        "{}(): expected single positional argument",
+                        name
+                    )));
                 }
                 match &pos_args[0] {
                     ExprAst::Var(v) if v == "edge" => {
@@ -1826,12 +1828,10 @@ impl ExprContext for PruneExprContext {
                             graph.edge_weight_expectation(self.edge)
                         }
                     }
-                    _ => Err(ExecError::ValidationError(
-                        format!(
-                            "{}(): argument must be 'edge' in prune predicate",
-                            name
-                        ),
-                    )),
+                    _ => Err(ExecError::ValidationError(format!(
+                        "{}(): argument must be 'edge' in prune predicate",
+                        name
+                    ))),
                 }
             }
             _ => Err(ExecError::ValidationError(format!(

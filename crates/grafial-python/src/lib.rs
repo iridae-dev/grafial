@@ -18,17 +18,18 @@ const FORCE_PRECISION: f64 = 1_000_000.0;
 /// Classify near-deterministic independent edge states.
 ///
 /// Core can encode these states via force APIs (1e6) or high-confidence delete
-/// paths (1e9). We treat both as forced when one parameter is near 1 and the
-/// opposite parameter is at least FORCE_PRECISION.
+/// paths (1e9). We treat an edge as forced when one side has large effective
+/// evidence and the posterior mean is near-deterministic.
 fn classify_forced_state(
     beta: &grafial_core::engine::graph::BetaPosterior,
 ) -> Option<&'static str> {
-    const UNIT_EPS: f64 = 1e-9;
+    const PROB_EPS: f64 = 1e-3;
     let alpha = beta.alpha;
     let beta_param = beta.beta;
-    if alpha <= 1.0 + UNIT_EPS && beta_param >= FORCE_PRECISION {
+    let mean = beta.mean_probability();
+    if beta_param >= FORCE_PRECISION && mean <= PROB_EPS {
         Some("absent")
-    } else if beta_param <= 1.0 + UNIT_EPS && alpha >= FORCE_PRECISION {
+    } else if alpha >= FORCE_PRECISION && mean >= 1.0 - PROB_EPS {
         Some("present")
     } else {
         None
