@@ -126,7 +126,7 @@ rule MisunderstoodForceAbsent on ExampleBeliefs {
     prob(ab) >= 0.7
 
   action {
-    delete ab confidence=high // Sets edge to Beta(1, 10⁶) → P(exist) ≈ 0.000001
+    delete ab confidence=high // Adds ~10⁹ absent pseudo-counts, so P(exist) becomes near zero
     // NOT exactly zero! Still a valid probability distribution
     // Strong evidence could theoretically update this (though unlikely)
   }

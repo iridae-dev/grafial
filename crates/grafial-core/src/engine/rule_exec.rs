@@ -961,8 +961,8 @@ fn eval_where_with_exists(
 /// - `Let`: Evaluates an expression and stores it in a local variable
 /// - `SetExpectation`: Updates a node attribute's expected value (soft update)
 ///   - Adjusts mean without changing precision (variance)
-/// - `ForceAbsent`: Forces an edge to be absent with high certainty
-///   - Sets Beta parameters to α=1, β=1e6 (mean ≈ 0.000001)
+/// - `ForceAbsent`: Legacy action that applies very strong absent evidence
+///   - Preserves prior history while pushing edge probability toward zero
 pub fn execute_actions(
     graph: &mut BeliefGraph,
     actions: &[ActionStmt],

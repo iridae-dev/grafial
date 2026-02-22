@@ -79,7 +79,7 @@ rule DisconnectOverloaded on AllocationBeliefs {
     and E[B.allocation] > 0.9
   
   action {
-    // delete ... confidence=high: sets edge to Beta(1, 10⁶) → P(exist) ≈ 0.000001
+    // delete ... confidence=high: adds ~10⁹ absent pseudo-counts, pushing P(exist) near zero
     // Properties:
     // - NOT exactly zero (still a valid probability distribution)
     // - Highly concentrated: variance ≈ 10⁻¹²

@@ -43,7 +43,7 @@ rule TransferAndDisconnect on SocialBeliefs {
     let v_ab = E[A.some_value] / 2
     non_bayesian_nudge A.some_value to E[A.some_value] - v_ab variance=preserve
     non_bayesian_nudge B.some_value to E[B.some_value] + v_ab variance=preserve // Disconnect B->C to prevent further propagation
-    // delete ... confidence=high sets edge to Beta(1, 10⁶) → P(exist) ≈ 0.000001
+    // delete ... confidence=high adds ~10⁹ absent pseudo-counts, driving P(exist) near zero
     // NOT exactly zero - still a valid probability distribution
     // Strong subsequent evidence could theoretically shift this belief
     delete bc confidence=high

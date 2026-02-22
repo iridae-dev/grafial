@@ -44,7 +44,8 @@ After a comprehensive Bayesian and graph-theoretic review of the Grafial project
 ## High Priority Issues
 
 ### Mathematical/Statistical
-1. **Force operations create inconsistent states** - Forced edge existence/absence breaks probabilistic coherence
+1. **Force operations create inconsistent states ✅ COMPLETED (2026-02-22)** - Forced edge existence/absence breaks probabilistic coherence
+Resolution implemented: legacy `force_*` and modern `delete`/`suppress` paths now apply strong weighted Bayesian evidence instead of resetting posteriors, preserving prior history and probabilistic coherence. Runtime now rejects invalid `delete` confidence values and non-positive/non-finite `suppress` weights.
 2. **No validation against improper priors ✅ COMPLETED (2026-02-22)** - System accepts invalid prior parameters
 Resolution implemented: belief-model validation now rejects improper/unknown Gaussian and Bernoulli parameters (including non-positive Gaussian precision, Bernoulli priors outside `(0,1)`, non-positive pseudo-counts, duplicate parameters, and non-Gaussian node-attribute posteriors).
 3. **Missing multivariate support** - No correlation modeling between variables

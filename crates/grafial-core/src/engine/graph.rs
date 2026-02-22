@@ -19,7 +19,7 @@
 //! - Normal-Normal conjugacy for Gaussian attributes (precision parameterization τ = 1/σ²)
 //! - Beta-Bernoulli conjugacy for independent edges (α, β parameters)
 //! - Dirichlet-Categorical conjugacy for competing edges (α_k concentrations)
-//! - Force operations for hard constraints (sets precision/concentrations to large finite values)
+//! - Strong-evidence operations for near-deterministic beliefs (large finite evidence weight)
 //! - O(1) node/edge lookups via HashMap indexes
 //!
 //! ## Example
@@ -46,10 +46,10 @@ use crate::engine::adjacency_index::EnhancedAdjacencyIndex;
 use crate::engine::errors::ExecError;
 
 // Bayesian inference constants
-/// High precision value for force operations.
+/// Large finite evidence weight for near-deterministic updates.
 ///
-/// Sets precision to 1e6 (large but finite) to create hard constraints while avoiding
-/// infinities. Used by force_value, force_present, force_absent, and force_choice.
+/// This is used by legacy `force_*` operations and by high-confidence delete/suppress
+/// operations to inject very strong evidence while preserving posterior history.
 const FORCE_PRECISION: f64 = 1_000_000.0;
 
 /// Minimum precision for Gaussian posteriors.
@@ -194,19 +194,17 @@ impl GaussianPosterior {
         self.precision = tau_new;
     }
 
-    /// Forces the attribute to a specific value with very high certainty.
+    /// Applies a very strong observation toward `x`.
     ///
-    /// Sets precision to FORCE_PRECISION (1e6), effectively creating a hard constraint.
-    /// This corresponds to conditioning on an observation with effectively infinite
-    /// precision; subsequent finite-precision updates will have negligible effect
-    /// but remain well-defined.
+    /// This is a legacy helper used by `force_*` APIs. It does not create a true hard
+    /// constraint; it performs a high-precision Bayesian update so posterior history
+    /// is preserved and future evidence can still move the belief.
     ///
     /// # Arguments
     ///
     /// * `x` - The value to force
     pub fn force_value(&mut self, x: f64) {
-        self.mean = x;
-        self.precision = FORCE_PRECISION;
+        self.update(x, FORCE_PRECISION);
     }
 
     /// Returns the posterior variance σ² = 1/τ (with precision floor applied).
@@ -231,22 +229,18 @@ pub struct BetaPosterior {
 }
 
 impl BetaPosterior {
-    /// Forces the edge to be absent (α=1, β=1e6).
+    /// Applies very strong absent evidence.
     ///
-    /// Sets parameters to create a numerically stable approximation to a degenerate
-    /// belief (mean ≈ 0.000001). Further single observations will have negligible effect.
+    /// This is a legacy helper used by `force_*` APIs. It does not reset prior history.
     pub fn force_absent(&mut self) {
-        self.alpha = 1.0;
-        self.beta = FORCE_PRECISION;
+        self.observe_weighted(false, FORCE_PRECISION);
     }
 
-    /// Forces the edge to be present (α=1e6, β=1).
+    /// Applies very strong present evidence.
     ///
-    /// Sets parameters to create a numerically stable approximation to a degenerate
-    /// belief (mean ≈ 0.999999). Further single observations will have negligible effect.
+    /// This is a legacy helper used by `force_*` APIs. It does not reset prior history.
     pub fn force_present(&mut self) {
-        self.alpha = FORCE_PRECISION;
-        self.beta = 1.0;
+        self.observe_weighted(true, FORCE_PRECISION);
     }
 
     /// Performs a conjugate Beta-Bernoulli update.
@@ -258,10 +252,22 @@ impl BetaPosterior {
     ///
     /// * `present` - Whether the edge was observed to be present
     pub fn observe(&mut self, present: bool) {
-        if present {
-            self.alpha += 1.0;
+        self.observe_weighted(present, 1.0);
+    }
+
+    /// Performs a weighted conjugate Beta-Bernoulli update.
+    ///
+    /// Adds `weight` pseudo-observations to α (present) or β (absent).
+    pub fn observe_weighted(&mut self, present: bool, weight: f64) {
+        let w = if weight.is_finite() && weight > 0.0 {
+            weight
         } else {
-            self.beta += 1.0;
+            MIN_BETA_PARAM
+        };
+        if present {
+            self.alpha += w;
+        } else {
+            self.beta += w;
         }
     }
 
@@ -1936,13 +1942,15 @@ impl BeliefGraph {
 
         // Only fine-grained delta for independent edges
         if let EdgePosterior::Independent(beta) = current_posterior {
+            let mut updated = beta;
+            updated.force_absent();
             // Store fine-grained delta (only alpha/beta change)
             self.delta.push(GraphDelta::EdgeProbChange {
                 edge,
                 old_alpha: beta.alpha,
                 old_beta: beta.beta,
-                new_alpha: 1.0,
-                new_beta: FORCE_PRECISION,
+                new_alpha: updated.alpha,
+                new_beta: updated.beta,
             });
             Ok(())
         } else {
@@ -1953,7 +1961,7 @@ impl BeliefGraph {
     }
 
     /// Delete an independent edge with optional confidence mapping.
-    /// Defaults to near-zero mean with very large β.
+    /// Defaults to strong absent evidence with a large finite weight.
     pub fn delete_edge(&mut self, edge: EdgeId, confidence: Option<&str>) -> Result<(), ExecError> {
         self.ensure_ready_for_delta();
         let current = self
@@ -1962,16 +1970,24 @@ impl BeliefGraph {
         let scale = match confidence.map(|s| s.to_ascii_lowercase()) {
             Some(ref s) if s == "low" => 1_000.0,
             Some(ref s) if s == "high" => 1_000_000_000.0,
+            Some(other) => {
+                return Err(ExecError::ValidationError(format!(
+                    "delete confidence must be 'low' or 'high', got '{}'",
+                    other
+                )))
+            }
             _ => FORCE_PRECISION,
         };
         match current {
             EdgePosterior::Independent(beta) => {
+                let mut updated = beta;
+                updated.observe_weighted(false, scale);
                 self.delta.push(GraphDelta::EdgeProbChange {
                     edge,
                     old_alpha: beta.alpha,
                     old_beta: beta.beta,
-                    new_alpha: 1.0_f64.max(MIN_BETA_PARAM),
-                    new_beta: scale.max(MIN_BETA_PARAM),
+                    new_alpha: updated.alpha,
+                    new_beta: updated.beta,
                 });
                 Ok(())
             }
@@ -1981,21 +1997,32 @@ impl BeliefGraph {
         }
     }
 
-    /// Suppress an independent edge by setting a moderate Beta prior against existence.
+    /// Suppress an independent edge by injecting moderate absent evidence.
     pub fn suppress_edge(&mut self, edge: EdgeId, weight: Option<f64>) -> Result<(), ExecError> {
         self.ensure_ready_for_delta();
         let current = self
             .get_edge_posterior_with_deltas(edge)
             .ok_or_else(|| ExecError::Internal("missing edge".into()))?;
-        let w = weight.unwrap_or(10.0).max(MIN_BETA_PARAM);
+        let w = match weight {
+            Some(v) if v.is_finite() && v > 0.0 => v,
+            Some(v) => {
+                return Err(ExecError::ValidationError(format!(
+                    "suppress weight must be finite and > 0, got {}",
+                    v
+                )))
+            }
+            None => 10.0,
+        };
         match current {
             EdgePosterior::Independent(beta) => {
+                let mut updated = beta;
+                updated.observe_weighted(false, w);
                 self.delta.push(GraphDelta::EdgeProbChange {
                     edge,
                     old_alpha: beta.alpha,
                     old_beta: beta.beta,
-                    new_alpha: 1.0_f64.max(MIN_BETA_PARAM),
-                    new_beta: w,
+                    new_alpha: updated.alpha,
+                    new_beta: updated.beta,
                 });
                 Ok(())
             }
@@ -2495,20 +2522,16 @@ impl BeliefGraph {
 
         // Only fine-grained delta for independent edges
         if let EdgePosterior::Independent(beta) = current_posterior {
-            // Compute new alpha/beta after observation
-            let (new_alpha, new_beta) = if present {
-                (beta.alpha + 1.0, beta.beta)
-            } else {
-                (beta.alpha, beta.beta + 1.0)
-            };
+            let mut updated = beta;
+            updated.observe(present);
 
             // Store fine-grained delta
             self.delta.push(GraphDelta::EdgeProbChange {
                 edge,
                 old_alpha: beta.alpha,
                 old_beta: beta.beta,
-                new_alpha,
-                new_beta,
+                new_alpha: updated.alpha,
+                new_beta: updated.beta,
             });
             Ok(())
         } else {
@@ -2648,13 +2671,15 @@ impl BeliefGraph {
 
         // Only fine-grained delta for independent edges
         if let EdgePosterior::Independent(beta) = current_posterior {
+            let mut updated = beta;
+            updated.force_present();
             // Store fine-grained delta (only alpha/beta change)
             self.delta.push(GraphDelta::EdgeProbChange {
                 edge,
                 old_alpha: beta.alpha,
                 old_beta: beta.beta,
-                new_alpha: FORCE_PRECISION,
-                new_beta: 1.0,
+                new_alpha: updated.alpha,
+                new_beta: updated.beta,
             });
             Ok(())
         } else {
@@ -2702,15 +2727,17 @@ impl BeliefGraph {
             .get_node_attr_with_deltas(node, attr)
             .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
 
-        // Force value sets mean to x and precision to FORCE_PRECISION
-        // Store fine-grained delta
+        let mut updated = old_posterior;
+        updated.force_value(x);
+
+        // Store fine-grained delta after strong-observation update
         self.delta.push(GraphDelta::NodeAttributeChange {
             node,
             attr: Arc::from(attr),
             old_mean: old_posterior.mean,
             old_precision: old_posterior.precision,
-            new_mean: x,
-            new_precision: FORCE_PRECISION,
+            new_mean: updated.mean,
+            new_precision: updated.precision,
         });
         Ok(())
     }
@@ -3068,10 +3095,13 @@ mod tests {
         };
         g.force_value(42.0);
 
-        assert_eq!(g.mean, 42.0, "mean should be forced to exact value");
-        assert_eq!(
-            g.precision, FORCE_PRECISION,
-            "precision should be very high"
+        assert!(
+            (g.mean - 42.0).abs() < 1e-4,
+            "mean should move very close to target"
+        );
+        assert!(
+            g.precision >= FORCE_PRECISION,
+            "precision should increase to very high confidence"
         );
     }
 
@@ -3103,8 +3133,8 @@ mod tests {
         };
         b.force_absent();
 
-        assert_eq!(b.alpha, 1.0);
-        assert_eq!(b.beta, FORCE_PRECISION);
+        assert_eq!(b.alpha, 5.0);
+        assert_eq!(b.beta, 5.0 + FORCE_PRECISION);
 
         let mean = b.alpha / (b.alpha + b.beta);
         assert!(mean < 1e-5, "forced absent should have near-zero mean");
@@ -3118,11 +3148,23 @@ mod tests {
         };
         b.force_present();
 
-        assert_eq!(b.alpha, FORCE_PRECISION);
-        assert_eq!(b.beta, 1.0);
+        assert_eq!(b.alpha, 5.0 + FORCE_PRECISION);
+        assert_eq!(b.beta, 5.0);
 
         let mean = b.alpha / (b.alpha + b.beta);
         assert!(mean > 0.99999, "forced present should have near-one mean");
+    }
+
+    #[test]
+    fn beta_force_absent_preserves_posterior_history() {
+        let mut b = BetaPosterior {
+            alpha: 100.0,
+            beta: 4.0,
+        };
+        b.force_absent();
+
+        assert_eq!(b.alpha, 100.0);
+        assert_eq!(b.beta, 4.0 + FORCE_PRECISION);
     }
 
     #[test]
@@ -3571,11 +3613,77 @@ mod tests {
 
         let edge = g.edge(EdgeId(1)).unwrap();
         if let EdgePosterior::Independent(beta) = &edge.exist {
-            assert_eq!(beta.alpha, FORCE_PRECISION);
+            assert_eq!(beta.alpha, 1.0 + FORCE_PRECISION);
             assert_eq!(beta.beta, 1.0);
         } else {
             panic!("Expected independent edge");
         }
+    }
+
+    #[test]
+    fn belief_graph_delete_edge_adds_absent_evidence_without_resetting_alpha() {
+        let mut g = BeliefGraph::default();
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1),
+            NodeId(1),
+            NodeId(2),
+            "R".into(),
+            BetaPosterior {
+                alpha: 12.0,
+                beta: 3.0,
+            },
+        ));
+
+        g.delete_edge(EdgeId(1), None).unwrap();
+        g.ensure_owned();
+
+        let edge = g.edge(EdgeId(1)).unwrap();
+        if let EdgePosterior::Independent(beta) = &edge.exist {
+            assert_eq!(beta.alpha, 12.0);
+            assert_eq!(beta.beta, 3.0 + FORCE_PRECISION);
+        } else {
+            panic!("Expected independent edge");
+        }
+    }
+
+    #[test]
+    fn belief_graph_delete_edge_rejects_unknown_confidence() {
+        let mut g = BeliefGraph::default();
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1),
+            NodeId(1),
+            NodeId(2),
+            "R".into(),
+            BetaPosterior {
+                alpha: 1.0,
+                beta: 1.0,
+            },
+        ));
+
+        let err = g
+            .delete_edge(EdgeId(1), Some("medium"))
+            .expect_err("unknown confidence should fail");
+        assert!(err.to_string().contains("confidence"));
+    }
+
+    #[test]
+    fn belief_graph_suppress_edge_rejects_non_positive_weight() {
+        let mut g = BeliefGraph::default();
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1),
+            NodeId(1),
+            NodeId(2),
+            "R".into(),
+            BetaPosterior {
+                alpha: 1.0,
+                beta: 1.0,
+            },
+        ));
+
+        let err = g
+            .suppress_edge(EdgeId(1), Some(0.0))
+            .expect_err("invalid suppress weight should fail");
+        assert!(err.to_string().contains("weight"));
     }
 
     #[test]
@@ -3647,14 +3755,14 @@ mod tests {
         g.force_attr_value(NodeId(1), "x", 42.0).unwrap();
 
         let mean = g.expectation(NodeId(1), "x").unwrap();
-        assert!((mean - 42.0).abs() < 1e-9);
+        assert!((mean - 42.0).abs() < 1e-4);
 
         // Apply fine-grained deltas to see the updated node
         g.ensure_owned();
 
         let node = g.node(NodeId(1)).unwrap();
         let attr = node.attrs.get("x").unwrap();
-        assert_eq!(attr.precision, FORCE_PRECISION);
+        assert!(attr.precision >= FORCE_PRECISION);
     }
 
     // ============================================================================
@@ -3820,20 +3928,24 @@ mod tests {
     #[test]
     fn force_operations_create_near_deterministic_beliefs() {
         // force_present should create near-1 probability
-        let mut b = BetaPosterior {
+        let mut b_present = BetaPosterior {
             alpha: 1.0,
             beta: 1.0,
         };
-        b.force_present();
-        let mean = b.alpha / (b.alpha + b.beta);
+        b_present.force_present();
+        let mean = b_present.alpha / (b_present.alpha + b_present.beta);
         assert!(
             mean > 0.999,
             "force_present should give probability > 0.999"
         );
 
         // force_absent should create near-0 probability
-        b.force_absent();
-        let mean = b.alpha / (b.alpha + b.beta);
+        let mut b_absent = BetaPosterior {
+            alpha: 1.0,
+            beta: 1.0,
+        };
+        b_absent.force_absent();
+        let mean = b_absent.alpha / (b_absent.alpha + b_absent.beta);
         assert!(mean < 0.001, "force_absent should give probability < 0.001");
 
         // force_value should create very small variance
@@ -3844,7 +3956,10 @@ mod tests {
         g.force_value(42.0);
         let variance = 1.0 / g.precision;
         assert!(variance < 1e-5, "force_value should give variance < 1e-5");
-        assert_eq!(g.mean, 42.0, "force_value should set exact mean");
+        assert!(
+            (g.mean - 42.0).abs() < 1e-4,
+            "force_value should move mean very near target"
+        );
     }
 
     // ============================================================================
@@ -4085,29 +4200,29 @@ mod tests {
             },
         );
 
-        // Suppress -> Beta(1,10) by default
+        // Suppress adds 10 absent pseudo-counts by default.
         g.suppress_edge(e, None).unwrap();
         let post1 = g.get_edge_posterior_with_deltas(e).unwrap();
         match post1 {
             EdgePosterior::Independent(beta) => {
                 assert!((beta.alpha - 1.0).abs() < 1e-12);
-                assert!((beta.beta - 10.0).abs() < 1e-12);
+                assert!((beta.beta - 11.0).abs() < 1e-12);
             }
             _ => panic!("not independent"),
         }
 
-        // Delete high -> Beta(1, 1e9)
+        // Delete high adds 1e9 absent pseudo-counts.
         g.delete_edge(e, Some("high")).unwrap();
         let post2 = g.get_edge_posterior_with_deltas(e).unwrap();
         match post2 {
             EdgePosterior::Independent(beta) => {
                 assert!((beta.alpha - 1.0).abs() < 1e-12);
-                assert!(beta.beta > 1e8);
+                assert!(beta.beta > 1e9);
             }
             _ => panic!("not independent"),
         }
 
         let needed = g.observations_to_half(e).unwrap();
-        assert!(needed >= 1.0e8);
+        assert!(needed >= 1.0e9);
     }
 }

@@ -277,7 +277,7 @@ fn evidence_application_updates_posteriors() {
 
     // Force value clamps precision large
     g.force_attr_value(NodeId(1), "x", 5.0).expect("force attr");
-    assert!((g.expectation(NodeId(1), "x").unwrap() - 5.0).abs() < 1e-9);
+    assert!((g.expectation(NodeId(1), "x").unwrap() - 5.0).abs() < 1e-4);
 
     // Observe edge present increments alpha
     g.observe_edge(EdgeId(10), true).expect("present");
