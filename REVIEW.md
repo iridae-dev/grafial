@@ -15,11 +15,12 @@ After a comprehensive Bayesian and graph-theoretic review of the Grafial project
 **Fix Required**: Implement proper Dirichlet updating that only increments the observed category's parameter.
 **Resolution Implemented**: Removed uniform redistribution. `observe_unchosen` now performs an exact update only for binary groups (`K=2`, where "unchosen i" implies the other category was chosen) and rejects `K>2` unchosen-only evidence as non-conjugate.
 
-### 2. Dynamic Category Discovery Breaks Consistency
+### 2. Dynamic Category Discovery Breaks Consistency ✅ COMPLETED (2026-02-22)
 **Location**: `/crates/grafial-core/src/engine/evidence.rs:574-600`
 **Severity**: CRITICAL
 **Issue**: Adding categories retroactively changes the interpretation of prior distributions, violating Bayesian consistency.
 **Fix Required**: Categories must be fixed at model definition time, or use nonparametric models (Dirichlet Process).
+**Resolution Implemented**: Competing-group category sets are now fixed before posterior updates by precomputing categories per `(source, edge_type)` from evidence, initializing Dirichlet priors over that full fixed set, and rejecting any out-of-set category insertion.
 
 ### 3. Zero Test Coverage for Bayesian Updates
 **Severity**: CRITICAL

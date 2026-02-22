@@ -141,7 +141,6 @@ fn build_graph_from_evidence_with_context(
     let mut node_map: HashMap<(String, String), NodeId> = HashMap::new();
     let mut edge_map: HashMap<(NodeId, NodeId, String), EdgeId> = HashMap::new();
     let mut competing_group_map: HashMap<(NodeId, String), CompetingGroupId> = HashMap::new();
-    let mut next_group_id = 0u32;
 
     // First pass: collect all nodes referenced in observations to ensure graph structure
     // is complete before applying updates (needed for parallel evidence application)
@@ -170,6 +169,10 @@ fn build_graph_from_evidence_with_context(
         // Ensure node_id is in map (should already be, but be safe)
         node_map.insert((node_type, label), node_id);
     }
+
+    // Precompute fixed category sets for competing groups before any posterior updates.
+    // This avoids order-dependent retroactive changes to Dirichlet interpretation.
+    let planned_competing_categories = plan_competing_group_categories(evidence, model, &node_map)?;
 
     // Second pass: create edges and normalize observations once.
     let mut prepared_observations = Vec::with_capacity(evidence.observations.len());
@@ -220,7 +223,6 @@ fn build_graph_from_evidence_with_context(
                             &mut graph,
                             &mut edge_map,
                             &mut competing_group_map,
-                            &mut next_group_id,
                             EdgeBuildInput {
                                 src: *src_id,
                                 dst: *dst_id,
@@ -228,6 +230,7 @@ fn build_graph_from_evidence_with_context(
                             },
                             edge_decl,
                             schema,
+                            &planned_competing_categories,
                         )?
                     };
 
@@ -324,6 +327,76 @@ fn build_graph_from_evidence_with_context(
     graph.ensure_owned();
 
     Ok(graph)
+}
+
+fn plan_competing_group_categories(
+    evidence: &EvidenceDef,
+    model: &BeliefModel,
+    node_map: &HashMap<(String, String), NodeId>,
+) -> Result<HashMap<(NodeId, String), Vec<NodeId>>, ExecError> {
+    let mut planned: HashMap<(NodeId, String), Vec<NodeId>> = HashMap::new();
+
+    for obs in &evidence.observations {
+        let ObserveStmt::Edge {
+            edge_type,
+            src,
+            dst,
+            ..
+        } = obs
+        else {
+            continue;
+        };
+
+        let edge_decl = model
+            .edges
+            .iter()
+            .find(|e| e.edge_type == *edge_type)
+            .ok_or_else(|| {
+                ExecError::ValidationError(format!(
+                    "Edge type '{}' not declared in belief model '{}'",
+                    edge_type, model.name
+                ))
+            })?;
+
+        let PosteriorType::Categorical { categories, .. } = &edge_decl.exist else {
+            continue;
+        };
+
+        if let Some(allowed_categories) = categories {
+            if !allowed_categories.iter().any(|name| name == &dst.1) {
+                return Err(ExecError::ValidationError(format!(
+                    "Destination '{}' is not allowed for categorical edge '{}'; expected one of {:?}",
+                    dst.1, edge_type, allowed_categories
+                )));
+            }
+        }
+
+        let src_id = *node_map
+            .get(&(src.0.clone(), src.1.clone()))
+            .ok_or_else(|| {
+                ExecError::Internal(format!("Missing source node: {}[\"{}\"]", src.0, src.1))
+            })?;
+        let dst_id = *node_map
+            .get(&(dst.0.clone(), dst.1.clone()))
+            .ok_or_else(|| {
+                ExecError::Internal(format!(
+                    "Missing destination node: {}[\"{}\"]",
+                    dst.0, dst.1
+                ))
+            })?;
+
+        planned
+            .entry((src_id, edge_type.clone()))
+            .or_default()
+            .push(dst_id);
+    }
+
+    for categories in planned.values_mut() {
+        categories.sort();
+        categories.dedup();
+    }
+
+    Ok(planned)
 }
 
 #[cfg(feature = "parallel")]
@@ -494,10 +567,10 @@ fn create_edge_with_posterior(
     graph: &mut BeliefGraph,
     edge_map: &mut HashMap<(NodeId, NodeId, String), EdgeId>,
     competing_group_map: &mut HashMap<(NodeId, String), CompetingGroupId>,
-    next_group_id: &mut u32,
     edge: EdgeBuildInput,
     edge_decl: &EdgeBeliefDecl,
     schema: &Schema,
+    planned_competing_categories: &HashMap<(NodeId, String), Vec<NodeId>>,
 ) -> Result<EdgeId, ExecError> {
     let EdgeBuildInput {
         src,
@@ -555,63 +628,51 @@ fn create_edge_with_posterior(
             let group_id = if let Some(&gid) = competing_group_map.get(&(src, edge_type.clone())) {
                 gid
             } else {
-                let new_group_id = CompetingGroupId(*next_group_id);
-                *next_group_id += 1;
+                let new_group_id = CompetingGroupId(competing_group_map.len() as u32);
                 competing_group_map.insert((src, edge_type.clone()), new_group_id);
                 new_group_id
             };
 
-            // Get the category index (create group if new, or get existing)
+            // Get the category index (create group if new, or use existing fixed group)
             let category_idx = {
                 let competing_groups = graph.competing_groups_mut();
                 if let Some(existing_group) = competing_groups.get_mut(&group_id) {
-                    // Check if this destination is already in the group
                     if let Some(&idx) = existing_group.category_index.get(&dst) {
-                        idx // Already exists, return existing index
+                        idx
                     } else {
-                        // Add new category to existing group
-                        let category_index = existing_group.categories.len();
-                        existing_group.categories.push(dst);
-                        existing_group.category_index.insert(dst, category_index);
-
-                        // Update Dirichlet posterior to include new category
-                        // For uniform prior: add new category with its prior concentration,
-                        // preserving existing posterior concentrations (Bayesian principle)
-                        let old_concentrations = existing_group.posterior.concentrations.clone();
-                        let new_concentrations = if let CategoricalPrior::Uniform { pseudo_count } =
-                            prior
-                        {
-                            // Correct Bayesian approach: preserve existing posteriors, add new category with prior
-                            // For uniform prior with K existing categories: prior per category was pseudo_count / K
-                            // For new category (K+1): prior concentration is pseudo_count / (K+1)
-                            // However, we want to be consistent with the original uniform allocation
-                            let k_old = old_concentrations.len();
-                            let prior_alpha_new = pseudo_count / (k_old + 1) as f64;
-
-                            let mut new = old_concentrations.clone();
-                            new.push(prior_alpha_new);
-                            new
-                        } else {
-                            // For explicit prior, we can't add new categories dynamically
-                            return Err(ExecError::ValidationError(
-                            "Dynamic category discovery not supported for explicit CategoricalPrior".into()
-                        ));
-                        };
-                        existing_group.posterior = DirichletPosterior::new(new_concentrations);
-
-                        category_index // Return the index we just added
+                        return Err(ExecError::ValidationError(format!(
+                            "Dynamic category discovery is not supported for competing edge '{}': destination {:?} is outside the fixed category set",
+                            edge_type, dst
+                        )));
                     }
                 } else {
                     let competing_groups = graph.competing_groups_mut();
-                    // Create new group
+
+                    let mut categories = planned_competing_categories
+                        .get(&(src, edge_type.clone()))
+                        .cloned()
+                        .unwrap_or_else(|| vec![dst]);
+                    categories.sort();
+                    categories.dedup();
+                    if !categories.contains(&dst) {
+                        return Err(ExecError::Internal(format!(
+                            "Destination {:?} missing from planned category set for edge '{}'",
+                            dst, edge_type
+                        )));
+                    }
+
                     let initial_concentrations = match prior {
                         CategoricalPrior::Uniform { pseudo_count } => {
-                            vec![pseudo_count / 1.0] // Start with one category
+                            vec![pseudo_count / categories.len() as f64; categories.len()]
                         }
                         CategoricalPrior::Explicit { concentrations } => {
-                            if concentrations.len() != 1 {
+                            if concentrations.len() != categories.len() {
                                 return Err(ExecError::ValidationError(
-                                format!("Explicit CategoricalPrior must match number of categories (got {} for first edge)", concentrations.len())
+                                format!(
+                                    "Explicit CategoricalPrior must match fixed category count (got {}, expected {})",
+                                    concentrations.len(),
+                                    categories.len()
+                                )
                             ));
                             }
                             concentrations.clone()
@@ -623,11 +684,17 @@ fn create_edge_with_posterior(
                         group_id,
                         src,
                         edge_type.clone(),
-                        vec![dst],
+                        categories,
                         dirichlet,
                     );
+                    let category_index = new_group.get_category_index(dst).ok_or_else(|| {
+                        ExecError::Internal(format!(
+                            "Destination {:?} missing from new competing group for edge '{}'",
+                            dst, edge_type
+                        ))
+                    })?;
                     competing_groups.insert(group_id, new_group);
-                    0 // First category
+                    category_index
                 }
             };
 

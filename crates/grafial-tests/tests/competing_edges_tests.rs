@@ -931,7 +931,7 @@ fn validation_accepts_chosen_evidence_for_competing_edge() {
 // ============================================================================
 
 #[test]
-fn dynamic_category_discovery_adds_new_categories_to_existing_group() {
+fn competing_category_sets_are_fixed_before_updates() {
     use grafial_core::engine::evidence::build_graph_from_evidence;
     use grafial_frontend::ast::*;
 
@@ -969,41 +969,9 @@ fn dynamic_category_discovery_adds_new_categories_to_existing_group() {
         flows: vec![],
     };
 
-    // First evidence: observe edge to destination S2
-    let evidence1 = EvidenceDef {
-        name: "Evidence1".into(),
-        on_model: "NetworkBeliefs".into(),
-        observations: vec![ObserveStmt::Edge {
-            edge_type: "ROUTES_TO".into(),
-            src: ("Server".into(), "S1".into()),
-            dst: ("Server".into(), "S2".into()),
-            mode: EvidenceMode::Chosen,
-        }],
-        body_src: "".into(),
-    };
-
-    let graph1 = build_graph_from_evidence(&evidence1, &program).unwrap();
-
-    // Verify group was created with one category
-    // Nodes are created with label = node_type, so we need to find by ID
-    // Since we know S1 is the source, we can find it by looking at edges
-    // Or we can just use the first node ID (NodeId(0) or NodeId(1))
-    // Actually, let's use the node_map pattern - but we don't have access to that
-    // Let's find the source node by looking at edges
-    let edges = graph1.edges();
-    assert!(!edges.is_empty(), "Should have at least one edge");
-    let s1_id = edges[0].src; // Source of first edge
-    let group1 = graph1.get_competing_group(s1_id, "ROUTES_TO").unwrap();
-    assert_eq!(
-        group1.categories.len(),
-        1,
-        "Group should have 1 category after first edge"
-    );
-    assert_eq!(group1.posterior.num_categories(), 1);
-
-    // Second evidence: observe edge to a NEW destination S3 (dynamic discovery)
-    let evidence2 = EvidenceDef {
-        name: "Evidence2".into(),
+    // Evidence with two destinations in a single competing group.
+    let evidence_a = EvidenceDef {
+        name: "EvidenceA".into(),
         on_model: "NetworkBeliefs".into(),
         observations: vec![
             ObserveStmt::Edge {
@@ -1022,62 +990,60 @@ fn dynamic_category_discovery_adds_new_categories_to_existing_group() {
         body_src: "".into(),
     };
 
-    let graph2 = build_graph_from_evidence(&evidence2, &program).unwrap();
+    let graph_a = build_graph_from_evidence(&evidence_a, &program).unwrap();
+    let edges_a = graph_a.edges();
+    let s1_id_a = edges_a[0].src;
+    let group_a = graph_a.get_competing_group(s1_id_a, "ROUTES_TO").unwrap();
 
-    // Verify group was expanded to include the new category
-    let edges2 = graph2.edges();
-    let s1_id2 = edges2[0].src; // Source should be the same
-    let group2 = graph2.get_competing_group(s1_id2, "ROUTES_TO").unwrap();
+    assert_eq!(group_a.categories.len(), 2);
+    assert_eq!(group_a.posterior.num_categories(), 2);
+    assert_eq!(group_a.posterior.concentrations.len(), 2);
+    for alpha in &group_a.posterior.concentrations {
+        assert!(
+            (*alpha - 4.0).abs() < 1e-10,
+            "Expected fixed-set initialization then one observation per category (alpha=4.0), got {}",
+            alpha
+        );
+    }
+
+    let probs_a = group_a.posterior.mean_probabilities();
+    let sum_a: f64 = probs_a.iter().sum();
+    assert!(
+        (sum_a - 1.0).abs() < 1e-10,
+        "Probabilities should sum to 1.0, got {}",
+        sum_a
+    );
+    assert!((probs_a[0] - 0.5).abs() < 1e-10);
+    assert!((probs_a[1] - 0.5).abs() < 1e-10);
+
+    // Same observations in reverse order should produce identical posteriors.
+    let evidence_b = EvidenceDef {
+        name: "EvidenceB".into(),
+        on_model: "NetworkBeliefs".into(),
+        observations: vec![
+            ObserveStmt::Edge {
+                edge_type: "ROUTES_TO".into(),
+                src: ("Server".into(), "S1".into()),
+                dst: ("Server".into(), "S3".into()),
+                mode: EvidenceMode::Chosen,
+            },
+            ObserveStmt::Edge {
+                edge_type: "ROUTES_TO".into(),
+                src: ("Server".into(), "S1".into()),
+                dst: ("Server".into(), "S2".into()),
+                mode: EvidenceMode::Chosen,
+            },
+        ],
+        body_src: "".into(),
+    };
+    let graph_b = build_graph_from_evidence(&evidence_b, &program).unwrap();
+    let edges_b = graph_b.edges();
+    let s1_id_b = edges_b[0].src;
+    let group_b = graph_b.get_competing_group(s1_id_b, "ROUTES_TO").unwrap();
+
     assert_eq!(
-        group2.categories.len(),
-        2,
-        "Group should have 2 categories after dynamic discovery"
-    );
-    assert_eq!(group2.posterior.num_categories(), 2);
-
-    // Verify both destinations are in the group
-    // Find destinations by looking at edges
-    let s2_id = edges2
-        .iter()
-        .find(|e| e.ty.as_ref() == "ROUTES_TO" && e.src == s1_id2)
-        .map(|e| e.dst)
-        .expect("Should find S2 edge");
-    let s3_id = edges2
-        .iter()
-        .find(|e| e.ty.as_ref() == "ROUTES_TO" && e.src == s1_id2 && e.dst != s2_id)
-        .map(|e| e.dst)
-        .expect("Should find S3 edge");
-    assert!(group2.categories.contains(&s2_id));
-    assert!(group2.categories.contains(&s3_id));
-
-    // Verify probabilities sum to 1.0
-    let probs = group2.posterior.mean_probabilities();
-    let sum: f64 = probs.iter().sum();
-    assert!(
-        (sum - 1.0).abs() < 1e-10,
-        "Probabilities should sum to 1.0, got {}",
-        sum
-    );
-
-    // Verify the new category got the correct prior concentration
-    // For uniform prior with pseudo_count=6.0:
-    // First evidence: observe S2 → concentration becomes 7.0 (initial 6.0 + 1 observation)
-    // Second evidence: observe S2 again → 8.0, observe S3 → add new category
-    // When adding S3 dynamically, new category gets prior = pseudo_count / (k_old + 1) = 6.0 / 2 = 3.0
-    // Then observe S3 → 3.0 + 1 = 4.0
-    // Final concentrations: S2 = 8.0, S3 = 4.0, total = 12.0
-    // Means: S2 = 8.0/12.0 = 0.666..., S3 = 4.0/12.0 = 0.333...
-    let means = group2.posterior.mean_probabilities();
-    let total: f64 = means.iter().sum();
-    assert!(
-        (total - 1.0).abs() < 1e-10,
-        "Probabilities should sum to 1.0, got {}",
-        total
-    );
-    // S2 should have higher probability (observed twice vs S3 once)
-    assert!(
-        means[0] > means[1] || means[1] > means[0],
-        "One category should have higher probability"
+        group_a.posterior.concentrations,
+        group_b.posterior.concentrations
     );
 }
 
@@ -1149,12 +1115,15 @@ fn dynamic_category_discovery_rejects_explicit_prior() {
         "Should reject dynamic category discovery for explicit prior"
     );
     let err_msg = result.unwrap_err().to_string();
-    // The error might be about category count mismatch or dynamic discovery
+    // The error may mention fixed category constraints or prior/category mismatch.
     assert!(
-        err_msg.contains("Dynamic category discovery not supported")
+        err_msg.contains("not allowed for categorical edge")
+            || err_msg.contains("fixed category")
+            || err_msg.contains("Dynamic category discovery not supported")
             || err_msg.contains("must match number of categories")
+            || err_msg.contains("must match fixed category count")
             || err_msg.contains("not found"),
-        "Error should mention dynamic discovery or category mismatch, got: {}",
+        "Error should mention fixed categories or category mismatch, got: {}",
         err_msg
     );
 }
