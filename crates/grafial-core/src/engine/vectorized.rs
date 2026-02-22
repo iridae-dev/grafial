@@ -191,7 +191,7 @@ pub fn beta_batch_update_simd(
     observations: &[bool],
 ) -> Result<BetaPosterior, ExecError> {
     if observations.is_empty() {
-        return Ok(prior.clone());
+        return Ok(*prior);
     }
 
     // For boolean counting, we could use POPCNT instruction on packed bits
