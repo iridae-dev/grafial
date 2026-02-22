@@ -124,9 +124,11 @@ flow_decl = { KW_flow ~ ident ~ KW_on ~ ident ~ "{" ~ flow_body ~ "}" }
 flow_body = { (COMMENT | graph_stmt | metric_stmt | export_stmt | metric_export_stmt | metric_import_stmt)* }
 
 graph_stmt = { KW_graph ~ ident ~ "=" ~ graph_expr }
-graph_expr = { from_evidence_expr | from_graph_expr | pipeline_expr }
+graph_expr = { from_evidence_expr | from_graph_expr | select_model_expr | pipeline_expr }
 from_evidence_expr = { KW_from_evidence ~ ident }
 from_graph_expr = { KW_from_graph ~ string }
+select_model_expr = { KW_select_model ~ "{" ~ ident ~ ("," ~ ident)* ~ "}" ~ "by" ~ model_selection_criterion }
+model_selection_criterion = { KW_edge_aic | KW_edge_bic }
 pipeline_expr = { ident ~ (pipe_op ~ transform)+ }
 pipe_op = { "|>" }
 
@@ -201,6 +203,9 @@ kw_flow_tok = @{ "flow" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_graph_tok = @{ "graph" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_from_evidence_tok = @{ "from_evidence" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_from_graph_tok = @{ "from_graph" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_select_model_tok = @{ "select_model" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_edge_aic_tok = @{ "edge_aic" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_edge_bic_tok = @{ "edge_bic" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_apply_rule_tok = @{ "apply_rule" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_apply_ruleset_tok = @{ "apply_ruleset" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_snapshot_tok = @{ "snapshot" ~ !(ASCII_ALPHANUMERIC | "_") }
@@ -243,6 +248,9 @@ KW_flow = _{ kw_flow_tok }
 KW_graph = _{ kw_graph_tok }
 KW_from_evidence = _{ kw_from_evidence_tok }
 KW_from_graph = _{ kw_from_graph_tok }
+KW_select_model = _{ kw_select_model_tok }
+KW_edge_aic = _{ kw_edge_aic_tok }
+KW_edge_bic = _{ kw_edge_bic_tok }
 KW_apply_rule = _{ kw_apply_rule_tok }
 KW_apply_ruleset = _{ kw_apply_ruleset_tok }
 KW_snapshot = _{ kw_snapshot_tok }

@@ -22,6 +22,7 @@ pub mod flow_exec;
 pub mod graph;
 #[cfg(feature = "jit")]
 pub mod jit_backend;
+pub mod model_selection;
 pub mod numeric_kernels;
 #[cfg(feature = "parallel")]
 pub mod parallel_evidence;

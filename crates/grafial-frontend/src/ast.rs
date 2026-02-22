@@ -279,6 +279,15 @@ pub struct GraphDef {
     pub expr: GraphExpr,
 }
 
+/// Model-selection criteria for choosing among candidate graph structures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelSelectionCriterion {
+    /// Akaike Information Criterion over edge-structure likelihood terms.
+    EdgeAic,
+    /// Bayesian Information Criterion over edge-structure likelihood terms.
+    EdgeBic,
+}
+
 /// A graph expression creates or transforms a graph.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphExpr {
@@ -298,6 +307,13 @@ pub enum GraphExpr {
         start: String,
         /// The sequence of transformations to apply
         transforms: Vec<Transform>,
+    },
+    /// Select the best graph among existing candidates using a criterion.
+    SelectModel {
+        /// Candidate graph variable names (must be defined in the same flow).
+        candidates: Vec<String>,
+        /// Selection criterion (lower score wins).
+        criterion: ModelSelectionCriterion,
     },
 }
 

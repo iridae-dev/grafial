@@ -14,7 +14,7 @@ pub use evidence::{EvidenceIR, EvidenceModeIR, NodeRefIR, ObserveStmtIR};
 pub use expr::{BinaryOpIR, CallArgIR, ExprIR, UnaryOpIR};
 pub use flow::{
     ExportDefIR, FlowIR, GraphDefIR, GraphExprIR, MetricDefIR, MetricExportDefIR,
-    MetricImportDefIR, TransformIR,
+    MetricImportDefIR, ModelSelectionCriterionIR, TransformIR,
 };
 pub use optimize::optimize_program;
 pub use program::ProgramIR;

@@ -318,6 +318,14 @@ fn extract_graph_expr_deps(expr: &GraphExprIR, deps: &mut Vec<String>) {
         GraphExprIR::FromEvidence(name) => {
             deps.push(format!("evidence:{}", name));
         }
+        GraphExprIR::FromGraph(alias) => {
+            deps.push(format!("graph:{}", alias));
+        }
+        GraphExprIR::SelectModel { candidates, .. } => {
+            for candidate in candidates {
+                deps.push(format!("graph:{}", candidate));
+            }
+        }
         GraphExprIR::Pipeline { transforms, .. } => {
             for transform in transforms {
                 match transform {
@@ -333,7 +341,6 @@ fn extract_graph_expr_deps(expr: &GraphExprIR, deps: &mut Vec<String>) {
                 }
             }
         }
-        _ => {}
     }
 }
 

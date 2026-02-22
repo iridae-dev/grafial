@@ -363,6 +363,7 @@ Graph expression forms:
 - `from_evidence EvidenceName`
 - `from_graph "alias"`
 - `existing_graph |> transform |> transform ...`
+- `select_model { graph_a, graph_b, ... } by edge_aic|edge_bic`
 
 Transforms:
 
@@ -378,6 +379,16 @@ Transforms:
 - Neighbor coupling is applied between edges of the same type that share a source or destination node.
 - Competing (categorical/Dirichlet) edges are not modified by this transform.
 - The transform updates posterior means while preserving each edge's effective sample size.
+
+`select_model` semantics:
+
+- Compares previously defined candidate graphs in the same flow.
+- Supported criteria:
+  - `edge_aic`: Akaike information criterion over edge posteriors.
+  - `edge_bic`: Bayesian information criterion over edge posteriors.
+- Lower score wins; ties are broken deterministically by graph name.
+- Candidates must have comparable effective sample size (same posterior concentration mass),
+  otherwise execution fails with a validation error.
 
 Metric sharing between flows:
 

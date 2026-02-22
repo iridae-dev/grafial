@@ -1692,6 +1692,9 @@ fn build_graph_stmt(pair: pest::iterators::Pair<Rule>) -> Result<GraphDef, Front
                 let alias = extract_string(&mut inner, "Missing graph alias in from_graph")?;
                 expr_opt = Some(GraphExpr::FromGraph { alias });
             }
+            Rule::select_model_expr => {
+                expr_opt = Some(build_select_model_expr(p)?);
+            }
             Rule::pipeline_expr => {
                 expr_opt = Some(build_pipeline_expr(p)?);
             }
@@ -1709,6 +1712,9 @@ fn build_graph_stmt(pair: pest::iterators::Pair<Rule>) -> Result<GraphDef, Front
                             let alias =
                                 extract_string(&mut ii, "Missing graph alias in from_graph")?;
                             expr_opt = Some(GraphExpr::FromGraph { alias });
+                        }
+                        Rule::select_model_expr => {
+                            expr_opt = Some(build_select_model_expr(inner)?);
                         }
                         Rule::pipeline_expr => {
                             expr_opt = Some(build_pipeline_expr(inner)?);
@@ -1814,6 +1820,50 @@ fn build_transform(pair: pest::iterators::Pair<Rule>) -> Result<Transform, Front
             pair.as_rule()
         ))),
     }
+}
+
+fn build_select_model_expr(pair: pest::iterators::Pair<Rule>) -> Result<GraphExpr, FrontendError> {
+    let mut candidates = Vec::new();
+    let mut criterion = None;
+
+    for p in pair.into_inner() {
+        match p.as_rule() {
+            Rule::ident => candidates.push(p.as_str().to_string()),
+            Rule::model_selection_criterion => {
+                let crit_pair = p.into_inner().next().ok_or_else(|| {
+                    FrontendError::ParseError(
+                        "Missing model selection criterion in select_model".to_string(),
+                    )
+                })?;
+                criterion = Some(match crit_pair.as_rule() {
+                    Rule::KW_edge_aic | Rule::kw_edge_aic_tok => ModelSelectionCriterion::EdgeAic,
+                    Rule::KW_edge_bic | Rule::kw_edge_bic_tok => ModelSelectionCriterion::EdgeBic,
+                    _ => {
+                        return Err(FrontendError::ParseError(format!(
+                            "Unsupported model selection criterion: {:?}",
+                            crit_pair.as_rule()
+                        )))
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+
+    if candidates.is_empty() {
+        return Err(FrontendError::ParseError(
+            "select_model must contain at least one candidate graph".to_string(),
+        ));
+    }
+
+    Ok(GraphExpr::SelectModel {
+        candidates,
+        criterion: criterion.ok_or_else(|| {
+            FrontendError::ParseError(
+                "Missing model selection criterion in select_model".to_string(),
+            )
+        })?,
+    })
 }
 
 fn build_metric_stmt(pair: pest::iterators::Pair<Rule>) -> Result<MetricDef, FrontendError> {
@@ -2744,6 +2794,35 @@ mod tests {
                 assert_eq!(transforms, &vec![Transform::InferBeliefs]);
             }
             _ => panic!("Expected pipeline"),
+        }
+    }
+
+    #[test]
+    fn parse_select_model_graph_expr() {
+        let src = r#"
+            schema S { node N {} edge E {} }
+            belief_model M on S {}
+            flow F on M {
+                graph g0 = from_evidence Ev
+                graph g1 = g0 |> prune_edges E where prob(edge) < 0.2
+                graph g2 = g0 |> prune_edges E where prob(edge) < 0.5
+                graph best = select_model { g0, g1, g2 } by edge_bic
+            }
+        "#;
+
+        let result = parse_program(src).expect("parse");
+        let flow = &result.flows[0];
+        assert_eq!(flow.graphs.len(), 4);
+
+        match &flow.graphs[3].expr {
+            GraphExpr::SelectModel {
+                candidates,
+                criterion,
+            } => {
+                assert_eq!(candidates, &vec!["g0", "g1", "g2"]);
+                assert_eq!(*criterion, ModelSelectionCriterion::EdgeBic);
+            }
+            _ => panic!("Expected select_model graph expression"),
         }
     }
 

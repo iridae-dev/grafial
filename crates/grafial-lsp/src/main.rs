@@ -662,6 +662,9 @@ fn builtin_hover(token: &str) -> Option<lsp::HoverContents> {
         "belief_model" => Some(("belief_model Name on Schema { ... }", "Associates posterior models with a schema (nodes, edges).")),
         "rule" => Some(("rule Name on Model { ... }", "Pattern-action rule executed on a belief model.")),
         "flow" => Some(("flow Name on Model { ... }", "Pipeline of transformations and metrics.")),
+        "select_model" => Some(("select_model { g1, g2, ... } by edge_bic", "Selects the best candidate graph by edge-structure information criterion (`edge_aic` or `edge_bic`). Candidates must be comparable (same effective sample size).")),
+        "edge_aic" => Some(("edge_aic", "Model-selection criterion over edge posteriors (AIC). Lower scores are better.")),
+        "edge_bic" => Some(("edge_bic", "Model-selection criterion over edge posteriors (BIC). Lower scores are better.")),
         _ => None,
     }?;
 

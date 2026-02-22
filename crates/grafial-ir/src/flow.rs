@@ -5,8 +5,32 @@
 
 use crate::expr::ExprIR;
 use grafial_frontend::ast::{
-    ExportDef, FlowDef, GraphExpr, MetricDef, MetricExportDef, MetricImportDef, Transform,
+    ExportDef, FlowDef, GraphExpr, MetricDef, MetricExportDef, MetricImportDef,
+    ModelSelectionCriterion, Transform,
 };
+
+/// Model-selection criterion in IR form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelSelectionCriterionIR {
+    EdgeAic,
+    EdgeBic,
+}
+
+impl ModelSelectionCriterionIR {
+    fn to_ast(self) -> ModelSelectionCriterion {
+        match self {
+            Self::EdgeAic => ModelSelectionCriterion::EdgeAic,
+            Self::EdgeBic => ModelSelectionCriterion::EdgeBic,
+        }
+    }
+
+    fn from_ast(value: ModelSelectionCriterion) -> Self {
+        match value {
+            ModelSelectionCriterion::EdgeAic => Self::EdgeAic,
+            ModelSelectionCriterion::EdgeBic => Self::EdgeBic,
+        }
+    }
+}
 
 /// A graph expression IR.
 #[derive(Debug, Clone, PartialEq)]
@@ -19,6 +43,11 @@ pub enum GraphExprIR {
     Pipeline {
         start_graph: String,
         transforms: Vec<TransformIR>,
+    },
+    /// Select the best graph among existing candidates using a criterion.
+    SelectModel {
+        candidates: Vec<String>,
+        criterion: ModelSelectionCriterionIR,
     },
 }
 
@@ -38,6 +67,13 @@ impl GraphExprIR {
             } => GraphExpr::Pipeline {
                 start: start_graph.clone(),
                 transforms: transforms.iter().map(TransformIR::to_ast).collect(),
+            },
+            Self::SelectModel {
+                candidates,
+                criterion,
+            } => GraphExpr::SelectModel {
+                candidates: candidates.clone(),
+                criterion: criterion.to_ast(),
             },
         }
     }
@@ -243,6 +279,13 @@ impl From<&FlowDef> for FlowIR {
                             })
                             .collect(),
                     },
+                    GraphExpr::SelectModel {
+                        candidates,
+                        criterion,
+                    } => GraphExprIR::SelectModel {
+                        candidates: candidates.clone(),
+                        criterion: ModelSelectionCriterionIR::from_ast(*criterion),
+                    },
                 },
             })
             .collect();
@@ -375,6 +418,38 @@ mod tests {
         } else {
             panic!("Expected Pipeline expression");
         }
+    }
+
+    #[test]
+    fn flow_ir_select_model_conversion() {
+        let flow_def = FlowDef {
+            name: "SelectFlow".into(),
+            on_model: "Model".into(),
+            graphs: vec![grafial_frontend::ast::GraphDef {
+                name: "best".into(),
+                expr: GraphExpr::SelectModel {
+                    candidates: vec!["g0".into(), "g1".into()],
+                    criterion: ModelSelectionCriterion::EdgeAic,
+                },
+            }],
+            metrics: vec![],
+            exports: vec![],
+            metric_exports: vec![],
+            metric_imports: vec![],
+        };
+
+        let ir = FlowIR::from(&flow_def);
+        assert!(matches!(
+            &ir.graphs[0].expr,
+            GraphExprIR::SelectModel {
+                candidates,
+                criterion
+            } if candidates == &vec!["g0".to_string(), "g1".to_string()]
+                && *criterion == ModelSelectionCriterionIR::EdgeAic
+        ));
+
+        let back = ir.to_ast();
+        assert_eq!(flow_def, back);
     }
 
     #[test]

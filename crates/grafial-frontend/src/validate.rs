@@ -1365,30 +1365,81 @@ fn validate_flow_inner(
     flow: &FlowDef,
     source: Option<&FlowSourceEntry>,
 ) -> Result<(), FrontendError> {
+    let all_graph_names: HashSet<&str> = flow.graphs.iter().map(|g| g.name.as_str()).collect();
     let mut prune_idx = 0usize;
     for g in &flow.graphs {
-        if let GraphExpr::Pipeline { transforms, .. } = &g.expr {
-            for t in transforms {
-                match t {
-                    Transform::ApplyRule { .. } => {}
-                    Transform::ApplyRuleset { .. } => {}
-                    Transform::Snapshot { .. } => {}
-                    Transform::InferBeliefs => {}
-                    Transform::PruneEdges {
-                        edge_type,
-                        predicate,
-                    } => {
-                        let range = source.and_then(|s| s.prune_predicates.get(prune_idx).copied());
-                        prune_idx += 1;
-                        let ctx = ValidationContext::PrunePredicate {
-                            flow: flow.name.clone(),
-                            graph: g.name.clone(),
-                            edge_type: edge_type.clone(),
-                        };
-                        validate_prune_predicate_with_ctx(predicate, Some(&ctx), range)?;
+        match &g.expr {
+            GraphExpr::Pipeline { transforms, .. } => {
+                for t in transforms {
+                    match t {
+                        Transform::ApplyRule { .. } => {}
+                        Transform::ApplyRuleset { .. } => {}
+                        Transform::Snapshot { .. } => {}
+                        Transform::InferBeliefs => {}
+                        Transform::PruneEdges {
+                            edge_type,
+                            predicate,
+                        } => {
+                            let range =
+                                source.and_then(|s| s.prune_predicates.get(prune_idx).copied());
+                            prune_idx += 1;
+                            let ctx = ValidationContext::PrunePredicate {
+                                flow: flow.name.clone(),
+                                graph: g.name.clone(),
+                                edge_type: edge_type.clone(),
+                            };
+                            validate_prune_predicate_with_ctx(predicate, Some(&ctx), range)?;
+                        }
                     }
                 }
             }
+            GraphExpr::SelectModel { candidates, .. } => {
+                if candidates.len() < 2 {
+                    return Err(validation_error(
+                        format!(
+                            "flow '{}' graph '{}': select_model requires at least two candidates",
+                            flow.name, g.name
+                        ),
+                        None,
+                        None,
+                    ));
+                }
+
+                let mut seen = HashSet::new();
+                for candidate in candidates {
+                    if candidate == &g.name {
+                        return Err(validation_error(
+                            format!(
+                                "flow '{}' graph '{}': select_model cannot reference itself",
+                                flow.name, g.name
+                            ),
+                            None,
+                            None,
+                        ));
+                    }
+                    if !all_graph_names.contains(candidate.as_str()) {
+                        return Err(validation_error(
+                            format!(
+                                "flow '{}' graph '{}': unknown select_model candidate '{}'",
+                                flow.name, g.name, candidate
+                            ),
+                            None,
+                            None,
+                        ));
+                    }
+                    if !seen.insert(candidate.as_str()) {
+                        return Err(validation_error(
+                            format!(
+                                "flow '{}' graph '{}': duplicate select_model candidate '{}'",
+                                flow.name, g.name, candidate
+                            ),
+                            None,
+                            None,
+                        ));
+                    }
+                }
+            }
+            GraphExpr::FromEvidence { .. } | GraphExpr::FromGraph { .. } => {}
         }
     }
 
@@ -2865,6 +2916,38 @@ mod tests {
 
         let result = validate_program(&ast);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_program_with_select_model_graph_expr() {
+        let src = r#"
+schema S { node N {} edge E {} }
+belief_model M on S {}
+evidence Ev on M {}
+flow F on M {
+  graph g1 = from_evidence Ev
+  graph g2 = g1 |> prune_edges E where prob(edge) < 0.0
+  graph best = select_model { g1, g2 } by edge_bic
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        validate_program(&ast).expect("select_model validation should pass");
+    }
+
+    #[test]
+    fn validate_program_rejects_select_model_self_reference() {
+        let src = r#"
+schema S { node N {} edge E {} }
+belief_model M on S {}
+evidence Ev on M {}
+flow F on M {
+  graph g1 = from_evidence Ev
+  graph best = select_model { best, g1 } by edge_aic
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        let err = validate_program(&ast).expect_err("must reject self-reference");
+        assert!(err.to_string().contains("cannot reference itself"));
     }
 
     #[test]

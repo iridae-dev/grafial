@@ -24,6 +24,7 @@ use crate::engine::evidence::build_graph_from_evidence_ir;
 use crate::engine::expr_eval::{eval_binary_op, eval_unary_op};
 use crate::engine::expr_eval::{eval_expr_core, ExprContext};
 use crate::engine::graph::{BeliefGraph, EdgeId};
+use crate::engine::model_selection::{select_best_graph, EdgeModelCriterion};
 use crate::engine::rule_exec::run_rule_for_each_with_globals_audit;
 use crate::metrics::{eval_metric_expr, MetricContext, MetricRegistry};
 use grafial_frontend::ast::RuleDef;
@@ -31,7 +32,8 @@ use grafial_frontend::{CallArg, ExprAst, ProgramAst};
 #[cfg(not(feature = "jit"))]
 use grafial_ir::{BinaryOpIR, CallArgIR, UnaryOpIR};
 use grafial_ir::{
-    EvidenceIR, ExprIR, FlowIR, GraphExprIR, MetricImportDefIR, ProgramIR, RuleIR, TransformIR,
+    EvidenceIR, ExprIR, FlowIR, GraphExprIR, MetricImportDefIR, ModelSelectionCriterionIR,
+    ProgramIR, RuleIR, TransformIR,
 };
 
 // When the `jit` feature is active, bring in the real Cranelift compiled types.
@@ -1116,6 +1118,10 @@ fn run_flow_internal<B: GraphBuilder, E: FlowExprEvaluator>(
                 }
                 current
             }
+            GraphExprIR::SelectModel {
+                candidates,
+                criterion,
+            } => select_model_graph(candidates, *criterion, &result.graphs)?,
             _ => eval_graph_expr(
                 &graph_def.expr,
                 &evidence_by_name,
@@ -1198,8 +1204,9 @@ fn collect_referenced_rules(flow: &FlowIR) -> HashSet<String> {
 /// Build a deterministic graph execution plan for a flow.
 ///
 /// The plan is dependency-driven:
-/// - non-pipeline graphs are always ready
 /// - pipeline graphs are ready when their start graph has already been produced
+/// - select_model graphs are ready when all candidate graphs have already been produced
+/// - from_evidence/from_graph graphs are always ready
 ///
 /// If no progress can be made, the flow has unresolved or cyclic dependencies.
 fn build_graph_execution_plan(flow: &FlowIR) -> Result<Vec<usize>, ExecError> {
@@ -1227,6 +1234,9 @@ fn build_graph_execution_plan(flow: &FlowIR) -> Result<Vec<usize>, ExecError> {
                 GraphExprIR::Pipeline { start_graph, .. } => {
                     produced.contains(start_graph.as_str())
                 }
+                GraphExprIR::SelectModel { candidates, .. } => candidates
+                    .iter()
+                    .all(|candidate| produced.contains(candidate.as_str())),
                 GraphExprIR::FromEvidence(_) | GraphExprIR::FromGraph(_) => true,
             };
 
@@ -1287,6 +1297,9 @@ fn eval_graph_expr<B: GraphBuilder>(
             graph_builder.build_graph(ev, program)
         }
         GraphExprIR::FromGraph(alias) => lookup_graph_from_prior(alias, prior),
+        GraphExprIR::SelectModel { .. } => Err(ExecError::Internal(
+            "select_model evaluation should be handled in flow graph execution".into(),
+        )),
         GraphExprIR::Pipeline { .. } => {
             // Pipelines require the start graph to already exist, so they're handled
             // separately in run_flow_internal after initial graphs are created
@@ -1295,6 +1308,34 @@ fn eval_graph_expr<B: GraphBuilder>(
             ))
         }
     }
+}
+
+fn select_model_graph(
+    candidates: &[String],
+    criterion: ModelSelectionCriterionIR,
+    available_graphs: &HashMap<String, BeliefGraph>,
+) -> Result<BeliefGraph, ExecError> {
+    let runtime_criterion = match criterion {
+        ModelSelectionCriterionIR::EdgeAic => EdgeModelCriterion::Aic,
+        ModelSelectionCriterionIR::EdgeBic => EdgeModelCriterion::Bic,
+    };
+
+    let mut candidate_refs = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let graph = available_graphs.get(candidate).ok_or_else(|| {
+            ExecError::Internal(format!(
+                "select_model candidate graph '{}' is not available",
+                candidate
+            ))
+        })?;
+        candidate_refs.push((candidate.as_str(), graph));
+    }
+
+    let selected = select_best_graph(candidate_refs.into_iter(), runtime_criterion)?;
+    available_graphs
+        .get(&selected.name)
+        .cloned()
+        .ok_or_else(|| ExecError::Internal("selected model graph missing after selection".into()))
 }
 
 /// Look up a graph from prior flow's exports or snapshots.
@@ -2012,6 +2053,41 @@ mod tests {
     }
 
     #[test]
+    fn graph_execution_plan_handles_select_model_dependencies() {
+        let flow = FlowIR {
+            name: "F".into(),
+            on_model: "M".into(),
+            graphs: vec![
+                grafial_ir::GraphDefIR {
+                    name: "best".into(),
+                    expr: GraphExprIR::SelectModel {
+                        candidates: vec!["g2".into(), "g1".into()],
+                        criterion: ModelSelectionCriterionIR::EdgeBic,
+                    },
+                },
+                grafial_ir::GraphDefIR {
+                    name: "g2".into(),
+                    expr: GraphExprIR::Pipeline {
+                        start_graph: "g1".into(),
+                        transforms: vec![],
+                    },
+                },
+                grafial_ir::GraphDefIR {
+                    name: "g1".into(),
+                    expr: GraphExprIR::FromEvidence("Ev".into()),
+                },
+            ],
+            metrics: vec![],
+            exports: vec![],
+            metric_exports: vec![],
+            metric_imports: vec![],
+        };
+
+        let plan = build_graph_execution_plan(&flow).expect("plan");
+        assert_eq!(plan, vec![2, 1, 0]);
+    }
+
+    #[test]
     fn run_flow_supports_out_of_order_pipeline_chains() {
         let program = ProgramAst {
             schemas: vec![],
@@ -2064,6 +2140,60 @@ mod tests {
             result.graphs.get("g1").unwrap().edges().len(),
             result.graphs.get("g3").unwrap().edges().len()
         );
+    }
+
+    #[test]
+    fn run_flow_select_model_returns_deterministic_best_candidate() {
+        let program = ProgramAst {
+            schemas: vec![],
+            belief_models: vec![],
+            evidences: vec![EvidenceDef {
+                name: "Ev".into(),
+                on_model: "M".into(),
+                observations: vec![],
+                body_src: "".into(),
+            }],
+            rules: vec![],
+            flows: vec![FlowDef {
+                name: "Demo".into(),
+                on_model: "M".into(),
+                graphs: vec![
+                    GraphDef {
+                        name: "g1".into(),
+                        expr: GraphExpr::FromEvidence {
+                            evidence: "Ev".into(),
+                        },
+                    },
+                    GraphDef {
+                        name: "g2".into(),
+                        expr: GraphExpr::Pipeline {
+                            start: "g1".into(),
+                            transforms: vec![Transform::PruneEdges {
+                                edge_type: "OTHER".into(),
+                                predicate: ExprAst::Bool(true),
+                            }],
+                        },
+                    },
+                    GraphDef {
+                        name: "best".into(),
+                        expr: GraphExpr::SelectModel {
+                            candidates: vec!["g2".into(), "g1".into()],
+                            criterion: grafial_frontend::ast::ModelSelectionCriterion::EdgeBic,
+                        },
+                    },
+                ],
+                metrics: vec![],
+                exports: vec![],
+                metric_exports: vec![],
+                metric_imports: vec![],
+            }],
+        };
+
+        let result =
+            run_flow_with_builder(&program, "Demo", &simple_evidence_builder, None).expect("flow");
+        let g1 = result.graphs.get("g1").expect("g1");
+        let best = result.graphs.get("best").expect("best");
+        assert_eq!(best.edges().len(), g1.edges().len());
     }
 
     #[test]

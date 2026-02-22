@@ -289,6 +289,10 @@ impl ParallelFlowExecutor {
                 // Depends on the starting graph
                 deps.insert(start_graph.clone());
             }
+            grafial_ir::GraphExprIR::SelectModel { candidates, .. } => {
+                // Depends on all candidate graphs.
+                deps.extend(candidates.iter().cloned());
+            }
         }
 
         deps

@@ -50,7 +50,8 @@ Resolution implemented: legacy `force_*` and modern `delete`/`suppress` paths no
 Resolution implemented: belief-model validation now rejects improper/unknown Gaussian and Bernoulli parameters (including non-positive Gaussian precision, Bernoulli priors outside `(0,1)`, non-positive pseudo-counts, duplicate parameters, and non-Gaussian node-attribute posteriors).
 3. **Missing multivariate support ✅ COMPLETED (2026-02-22)** - No correlation modeling between variables
 Resolution implemented: node Gaussian declarations now support fixed pairwise correlations via `corr_<other_attr>=rho`; runtime persists/query these correlations (`corr(...)`, `cov(...)`), and `prob_correlated(...)` now uses model correlation when `rho` is omitted for same-node attribute comparisons.
-4. **No model selection** - Cannot compare alternative graph structures
+4. **No model selection ✅ COMPLETED (2026-02-22)** - Cannot compare alternative graph structures
+Resolution implemented: added first-class flow graph expression `select_model { ... } by edge_aic|edge_bic`, plus deterministic edge-structure scoring in runtime (Beta/Dirichlet posterior-based AIC/BIC). Selection now enforces comparable effective sample size across candidates to avoid invalid cross-dataset comparisons.
 
 ### Graph-Theoretic
 1. **O(V²) pattern matching** - Inefficient for large graphs
@@ -92,7 +93,7 @@ Resolution implemented: node Gaussian declarations now support fixed pairwise co
 2. Implement junction tree algorithm for exact inference
 3. Add support for continuous variables (Gaussian networks)
 4. Create probabilistic programming DSL frontend
-5. Add model selection capabilities (BIC, cross-validation)
+5. Expand model selection beyond current edge AIC/BIC baseline (e.g., cross-validation)
 
 ### Nice to Have (4-6 months)
 1. Variational inference methods
