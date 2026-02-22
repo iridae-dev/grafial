@@ -77,6 +77,14 @@ const MIN_DIRICHLET_PARAM: f64 = 0.01;
 /// a potential outlier or data error.
 const OUTLIER_THRESHOLD_SIGMA: f64 = 10.0;
 
+fn canonical_attr_pair_key(left_attr: &str, right_attr: &str) -> String {
+    if left_attr <= right_attr {
+        format!("{}|{}", left_attr, right_attr)
+    } else {
+        format!("{}|{}", right_attr, left_attr)
+    }
+}
+
 /// A unique identifier for a node in the belief graph.
 ///
 /// NodeId implements Ord/PartialOrd for stable, deterministic iteration.
@@ -936,6 +944,10 @@ pub(crate) struct BeliefGraphInner {
     pub(crate) edges: Vec<EdgeData>,
     /// Competing edge groups (for Dirichlet-Categorical posteriors)
     pub(crate) competing_groups: FxHashMap<CompetingGroupId, CompetingEdgeGroup>,
+    /// Fixed Gaussian attribute correlations per node.
+    ///
+    /// Keys are `(node_id, "attr_a|attr_b")` with lexicographically normalized pair order.
+    pub(crate) node_attr_correlations: FxHashMap<(NodeId, String), f64>,
     /// Index mapping NodeId to position in nodes vector
     pub(crate) node_index: FxHashMap<NodeId, usize>,
     /// Index mapping EdgeId to position in edges vector
@@ -1149,6 +1161,7 @@ impl BeliefGraphInner {
             nodes: Vec::new(),
             edges: Vec::new(),
             competing_groups: FxHashMap::default(),
+            node_attr_correlations: FxHashMap::default(),
             node_index: FxHashMap::default(),
             edge_index: FxHashMap::default(),
             adjacency: None,
@@ -1253,6 +1266,9 @@ impl BeliefGraph {
                 GraphDelta::NodeChange { id, node } => {
                     structural_update = true;
                     if let Some(idx) = inner.node_index.get(&id).copied() {
+                        inner
+                            .node_attr_correlations
+                            .retain(|(node_id, _), _| *node_id != id);
                         inner.nodes[idx] = node;
                     } else {
                         let idx = inner.nodes.len();
@@ -1301,6 +1317,9 @@ impl BeliefGraph {
                             inner.node_index.insert(inner.nodes[idx].id, idx);
                         }
                     }
+                    inner
+                        .node_attr_correlations
+                        .retain(|(node_id, _), _| *node_id != id);
                     if let Some(index) = inner.enhanced_adjacency.as_mut() {
                         index.invalidate_node(id);
                     }
@@ -1791,6 +1810,7 @@ impl BeliefGraph {
         edge_ids: &[EdgeId],
     ) -> Result<Self, ExecError> {
         let mut rebuilt = BeliefGraph::default();
+        let node_ids: std::collections::HashSet<NodeId> = nodes.iter().map(|n| n.id).collect();
         for node in nodes {
             rebuilt.insert_node(node.clone());
         }
@@ -1803,6 +1823,17 @@ impl BeliefGraph {
         }
         // Apply delta to ensure all items are in base for consistency
         rebuilt.ensure_owned();
+        if !self.inner.node_attr_correlations.is_empty() {
+            let rebuilt_inner =
+                Arc::get_mut(&mut rebuilt.inner).expect("ensure_owned guarantees ownership");
+            for ((node_id, pair_key), rho) in &self.inner.node_attr_correlations {
+                if node_ids.contains(node_id) {
+                    rebuilt_inner
+                        .node_attr_correlations
+                        .insert((*node_id, pair_key.clone()), *rho);
+                }
+            }
+        }
         Ok(rebuilt)
     }
 
@@ -1833,6 +1864,93 @@ impl BeliefGraph {
             .get_node_attr_with_deltas(node, attr)
             .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", attr)))?;
         Ok(posterior.precision)
+    }
+
+    /// Sets a fixed Gaussian correlation between two attributes on the same node.
+    ///
+    /// Correlations are stored sparsely. A missing pair implies independence (`rho = 0`).
+    pub fn set_attr_correlation(
+        &mut self,
+        node: NodeId,
+        left_attr: &str,
+        right_attr: &str,
+        rho: f64,
+    ) -> Result<(), ExecError> {
+        if left_attr == right_attr {
+            return if (rho - 1.0).abs() < 1e-12 {
+                Ok(())
+            } else {
+                Err(ExecError::ValidationError(format!(
+                    "self-correlation for '{}.{}' must be 1, got {}",
+                    node.0, left_attr, rho
+                )))
+            };
+        }
+
+        if !rho.is_finite() || !(-1.0..=1.0).contains(&rho) {
+            return Err(ExecError::ValidationError(format!(
+                "attribute correlation must be finite and in [-1, 1], got {}",
+                rho
+            )));
+        }
+
+        // Ensure attributes exist for this node before storing the pair.
+        self.get_node_attr_with_deltas(node, left_attr)
+            .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", left_attr)))?;
+        self.get_node_attr_with_deltas(node, right_attr)
+            .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", right_attr)))?;
+
+        self.ensure_owned();
+        let inner =
+            Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
+        let key = canonical_attr_pair_key(left_attr, right_attr);
+        if rho.abs() < 1e-12 {
+            inner.node_attr_correlations.remove(&(node, key));
+        } else {
+            inner.node_attr_correlations.insert((node, key), rho);
+        }
+        Ok(())
+    }
+
+    /// Returns the configured Gaussian correlation `rho` between two attributes.
+    ///
+    /// Returns `1.0` for identical attributes and `0.0` for unspecified pairs.
+    pub fn attr_correlation(
+        &self,
+        node: NodeId,
+        left_attr: &str,
+        right_attr: &str,
+    ) -> Result<f64, ExecError> {
+        if left_attr == right_attr {
+            self.get_node_attr_with_deltas(node, left_attr)
+                .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", left_attr)))?;
+            return Ok(1.0);
+        }
+
+        self.get_node_attr_with_deltas(node, left_attr)
+            .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", left_attr)))?;
+        self.get_node_attr_with_deltas(node, right_attr)
+            .ok_or_else(|| ExecError::Internal(format!("missing attr '{}'", right_attr)))?;
+
+        let key = canonical_attr_pair_key(left_attr, right_attr);
+        Ok(*self
+            .inner
+            .node_attr_correlations
+            .get(&(node, key))
+            .unwrap_or(&0.0))
+    }
+
+    /// Returns covariance between two node attributes under fixed-correlation Gaussian semantics.
+    pub fn attr_covariance(
+        &self,
+        node: NodeId,
+        left_attr: &str,
+        right_attr: &str,
+    ) -> Result<f64, ExecError> {
+        let rho = self.attr_correlation(node, left_attr, right_attr)?;
+        let left_var = self.variance(node, left_attr)?.max(0.0);
+        let right_var = self.variance(node, right_attr)?.max(0.0);
+        Ok(rho * (left_var * right_var).sqrt())
     }
 
     pub fn set_expectation(
@@ -3763,6 +3881,118 @@ mod tests {
         let node = g.node(NodeId(1)).unwrap();
         let attr = node.attrs.get("x").unwrap();
         assert!(attr.precision >= FORCE_PRECISION);
+    }
+
+    #[test]
+    fn belief_graph_attr_correlation_defaults_and_overrides() {
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData {
+            id: NodeId(1),
+            label: Arc::from("N"),
+            attrs: HashMap::from([
+                (
+                    "x".into(),
+                    GaussianPosterior {
+                        mean: 0.0,
+                        precision: 4.0,
+                    },
+                ),
+                (
+                    "y".into(),
+                    GaussianPosterior {
+                        mean: 1.0,
+                        precision: 9.0,
+                    },
+                ),
+            ]),
+        });
+        g.ensure_owned();
+
+        assert_eq!(g.attr_correlation(NodeId(1), "x", "y").unwrap(), 0.0);
+        assert_eq!(g.attr_correlation(NodeId(1), "x", "x").unwrap(), 1.0);
+
+        g.set_attr_correlation(NodeId(1), "x", "y", 0.5).unwrap();
+        assert_eq!(g.attr_correlation(NodeId(1), "x", "y").unwrap(), 0.5);
+        assert_eq!(g.attr_correlation(NodeId(1), "y", "x").unwrap(), 0.5);
+
+        let cov = g.attr_covariance(NodeId(1), "x", "y").unwrap();
+        // sigma_x = 0.5, sigma_y = 1/3, so cov = rho*sx*sy = 0.5*(1/6) = 1/12
+        assert!((cov - (1.0 / 12.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn belief_graph_rejects_invalid_attr_correlation() {
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData {
+            id: NodeId(1),
+            label: Arc::from("N"),
+            attrs: HashMap::from([(
+                "x".into(),
+                GaussianPosterior {
+                    mean: 0.0,
+                    precision: 1.0,
+                },
+            )]),
+        });
+        g.ensure_owned();
+
+        let err = g
+            .set_attr_correlation(NodeId(1), "x", "x", 0.8)
+            .expect_err("self-correlation must be 1");
+        assert!(err.to_string().contains("self-correlation"));
+    }
+
+    #[test]
+    fn rebuild_with_edges_preserves_attr_correlations() {
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData {
+            id: NodeId(1),
+            label: Arc::from("N"),
+            attrs: HashMap::from([
+                (
+                    "x".into(),
+                    GaussianPosterior {
+                        mean: 0.0,
+                        precision: 1.0,
+                    },
+                ),
+                (
+                    "y".into(),
+                    GaussianPosterior {
+                        mean: 0.0,
+                        precision: 1.0,
+                    },
+                ),
+            ]),
+        });
+        g.insert_node(NodeData {
+            id: NodeId(2),
+            label: Arc::from("N"),
+            attrs: HashMap::from([(
+                "x".into(),
+                GaussianPosterior {
+                    mean: 0.0,
+                    precision: 1.0,
+                },
+            )]),
+        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1),
+            NodeId(1),
+            NodeId(2),
+            "R".into(),
+            BetaPosterior {
+                alpha: 1.0,
+                beta: 1.0,
+            },
+        ));
+        g.ensure_owned();
+        g.set_attr_correlation(NodeId(1), "x", "y", -0.3).unwrap();
+
+        let rebuilt = g
+            .rebuild_with_edges(&[g.node(NodeId(1)).unwrap().clone()], &[EdgeId(1)])
+            .unwrap();
+        assert_eq!(rebuilt.attr_correlation(NodeId(1), "x", "y").unwrap(), -0.3);
     }
 
     // ============================================================================

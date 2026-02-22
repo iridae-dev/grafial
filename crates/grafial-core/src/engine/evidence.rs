@@ -6,7 +6,7 @@
 //! - Applying evidence observations to update posteriors
 //! - Managing competing edge groups for categorical posteriors
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 #[cfg(all(not(feature = "parallel"), feature = "rayon"))]
@@ -20,8 +20,8 @@ use crate::engine::graph::{
     EdgeId, EdgePosterior, GaussianPosterior, NodeId,
 };
 use grafial_frontend::ast::{
-    BeliefModel, CategoricalPrior, EdgeBeliefDecl, EvidenceDef, EvidenceMode, ObserveStmt,
-    PosteriorType, Schema,
+    BeliefModel, CategoricalPrior, EdgeBeliefDecl, EvidenceDef, EvidenceMode, NodeBeliefDecl,
+    ObserveStmt, PosteriorType, Schema,
 };
 use grafial_ir::{EvidenceIR, ProgramIR};
 
@@ -512,6 +512,7 @@ fn create_node_if_needed(
                 node_type, model.name
             ))
         })?;
+    let fixed_correlations = extract_fixed_gaussian_correlations(node_belief, &model.name)?;
 
     // Initialize attributes from belief model
     let mut attrs = HashMap::new();
@@ -558,8 +559,83 @@ fn create_node_if_needed(
     // Create node
     let node_id = graph.add_node(node_type.to_string(), attrs);
     node_map.insert((node_type.to_string(), label.to_string()), node_id);
+    for ((left_attr, right_attr), rho) in fixed_correlations {
+        graph.set_attr_correlation(node_id, &left_attr, &right_attr, rho)?;
+    }
 
     Ok(node_id)
+}
+
+fn extract_fixed_gaussian_correlations(
+    node_belief: &NodeBeliefDecl,
+    model_name: &str,
+) -> Result<HashMap<(String, String), f64>, ExecError> {
+    let declared_attrs: HashSet<&str> = node_belief
+        .attrs
+        .iter()
+        .map(|(attr_name, _)| attr_name.as_str())
+        .collect();
+    let mut correlations: HashMap<(String, String), f64> = HashMap::new();
+
+    for (attr_name, posterior) in &node_belief.attrs {
+        let PosteriorType::Gaussian { params } = posterior else {
+            continue;
+        };
+
+        for (param_name, value) in params {
+            let Some(other_attr) = param_name.strip_prefix("corr_") else {
+                continue;
+            };
+
+            if other_attr.is_empty() {
+                return Err(ExecError::ValidationError(format!(
+                    "Invalid Gaussian correlation parameter '{}' on '{}.{}' in belief model '{}'",
+                    param_name, node_belief.node_type, attr_name, model_name
+                )));
+            }
+            if !declared_attrs.contains(other_attr) {
+                return Err(ExecError::ValidationError(format!(
+                    "Correlation parameter '{}.{} = {}' references unknown attribute '{}' in belief model '{}'",
+                    node_belief.node_type, param_name, value, other_attr, model_name
+                )));
+            }
+            if !value.is_finite() || !(-1.0..=1.0).contains(value) {
+                return Err(ExecError::ValidationError(format!(
+                    "Correlation '{}.{}' must be finite and in [-1, 1], got {}",
+                    node_belief.node_type, param_name, value
+                )));
+            }
+            if other_attr == attr_name && (*value - 1.0).abs() > 1e-12 {
+                return Err(ExecError::ValidationError(format!(
+                    "Self-correlation '{}.{}' must be exactly 1, got {}",
+                    node_belief.node_type, attr_name, value
+                )));
+            }
+
+            let pair_key = if attr_name.as_str() <= other_attr {
+                (attr_name.clone(), other_attr.to_string())
+            } else {
+                (other_attr.to_string(), attr_name.clone())
+            };
+
+            if let Some(prev) = correlations.insert(pair_key.clone(), *value) {
+                if (prev - value).abs() > 1e-12 {
+                    return Err(ExecError::ValidationError(format!(
+                        "Conflicting correlation declarations for '{}.{}' and '{}.{}' in belief model '{}': {} vs {}",
+                        node_belief.node_type,
+                        pair_key.0,
+                        node_belief.node_type,
+                        pair_key.1,
+                        model_name,
+                        prev,
+                        value
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(correlations)
 }
 
 /// Creates an edge with the appropriate posterior type from the belief model.

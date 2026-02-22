@@ -181,3 +181,80 @@ fn build_graph_from_evidence_handles_absent_edge() {
         prob
     );
 }
+
+#[test]
+fn build_graph_from_evidence_initializes_fixed_attr_correlations() {
+    let program = ProgramAst {
+        schemas: vec![Schema {
+            name: "S".into(),
+            nodes: vec![NodeDef {
+                name: "N".into(),
+                attrs: vec![
+                    AttrDef {
+                        name: "x".into(),
+                        ty: "Real".into(),
+                    },
+                    AttrDef {
+                        name: "y".into(),
+                        ty: "Real".into(),
+                    },
+                ],
+            }],
+            edges: vec![EdgeDef { name: "E".into() }],
+        }],
+        belief_models: vec![BeliefModel {
+            name: "M".into(),
+            on_schema: "S".into(),
+            nodes: vec![NodeBeliefDecl {
+                node_type: "N".into(),
+                attrs: vec![
+                    (
+                        "x".into(),
+                        PosteriorType::Gaussian {
+                            params: vec![
+                                ("prior_mean".into(), 0.0),
+                                ("prior_precision".into(), 1.0),
+                                ("corr_y".into(), 0.35),
+                            ],
+                        },
+                    ),
+                    (
+                        "y".into(),
+                        PosteriorType::Gaussian {
+                            params: vec![
+                                ("prior_mean".into(), 0.0),
+                                ("prior_precision".into(), 1.0),
+                            ],
+                        },
+                    ),
+                ],
+            }],
+            edges: vec![EdgeBeliefDecl {
+                edge_type: "E".into(),
+                exist: PosteriorType::Bernoulli {
+                    params: vec![("prior".into(), 0.5), ("pseudo_count".into(), 2.0)],
+                },
+            }],
+            body_src: "".into(),
+        }],
+        evidences: vec![],
+        rules: vec![],
+        flows: vec![],
+    };
+
+    let evidence = EvidenceDef {
+        name: "Ev".into(),
+        on_model: "M".into(),
+        observations: vec![ObserveStmt::Attribute {
+            node: ("N".into(), "n1".into()),
+            attr: "x".into(),
+            value: 1.0,
+            precision: None,
+        }],
+        body_src: "".into(),
+    };
+
+    let graph = build_graph_from_evidence(&evidence, &program).unwrap();
+    let node_id = graph.nodes()[0].id;
+    assert_eq!(graph.attr_correlation(node_id, "x", "y").unwrap(), 0.35);
+}

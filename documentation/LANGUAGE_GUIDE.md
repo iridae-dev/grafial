@@ -94,6 +94,22 @@ Parameter aliases accepted by parser:
 - Gaussian: `mean` -> `prior_mean`, `precision` -> `prior_precision`
 - Bernoulli: `weight` -> `pseudo_count`
 
+Additional Gaussian parameters:
+
+- `observation_precision=<positive number>`: default precision used when evidence omits `(precision=...)`.
+- `corr_<other_attr>=rho`: fixed attribute correlation (`rho` in `[-1, 1]`) for multivariate comparisons/covariance.
+
+Example fixed correlation:
+
+```grafial
+belief_model CorrelatedBeliefs on MySchema {
+  node Entity {
+    x ~ Gaussian(prior_mean=0.0, prior_precision=1.0, corr_y=0.4)
+    y ~ Gaussian(prior_mean=0.0, prior_precision=1.0)
+  }
+}
+```
+
 ### 4.1 Categorical Edges
 
 ```grafial
@@ -278,7 +294,10 @@ Supported:
 - `prob(edge_var)`
 - `prob(A.attr > B.attr)` (supports `< <= > >=` comparisons)
 - `prob_correlated(A.attr > B.attr, rho=...)` (correlation-aware comparison probability)
+  - if `rho` is omitted and both operands are attributes on the same node, uses the model's fixed `corr_<attr>` value.
 - `credible(event, p=0.95, rho=0.0)` (returns true when posterior event probability is at least `p`)
+- `corr(A.attr, A.other_attr)` (fixed correlation for node attributes; defaults to `0.0` when unspecified)
+- `cov(A.attr, A.other_attr)` (covariance implied by posterior variances and fixed correlation)
 - `degree(A, min_prob=0.5)`
 - `winner(A, ROUTES_TO, epsilon=0.01)`
 - `entropy(A, ROUTES_TO)`

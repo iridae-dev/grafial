@@ -24,7 +24,7 @@
 //! - Comparisons: `<`, `<=`, `>`, `>=`, `==`, `!=`
 //! - Logical: `and`, `or`, `not`
 //! - Special functions: `prob(edge)`, `prob_correlated(A.attr > B.attr, rho=...)`,
-//!   `credible(event, p=...)`, `degree(node)`, `E[node.attr]`
+//!   `credible(event, p=...)`, `corr(A.x, A.y)`, `cov(A.x, A.y)`, `degree(node)`, `E[node.attr]`
 //!
 //! ## Performance
 //!
@@ -141,6 +141,14 @@ struct RuleExprContext<'a> {
     globals: &'a HashMap<String, f64>,
 }
 
+#[derive(Debug, Clone)]
+struct GaussianOperand {
+    mean: f64,
+    variance: f64,
+    node_id: Option<NodeId>,
+    attr: Option<String>,
+}
+
 impl<'a> ExprContext for RuleExprContext<'a> {
     fn resolve_var(&self, name: &str) -> Option<f64> {
         // Check locals first, then globals, then node/edge variables
@@ -171,6 +179,8 @@ impl<'a> ExprContext for RuleExprContext<'a> {
             "credible" => self.eval_credible_function(pos_args, all_args, graph),
             "variance" => self.eval_variance_function(pos_args, all_args, graph),
             "stddev" => self.eval_stddev_function(pos_args, all_args, graph),
+            "corr" => self.eval_corr_function(pos_args, all_args, graph),
+            "cov" => self.eval_cov_function(pos_args, all_args, graph),
             "ci_lo" => self.eval_ci_function(pos_args, all_args, graph, true),
             "ci_hi" => self.eval_ci_function(pos_args, all_args, graph, false),
             "effective_n" => self.eval_effective_n_function(pos_args, all_args, graph),
@@ -309,6 +319,50 @@ impl<'a> RuleExprContext<'a> {
                 "stddev() requires a field expression".into(),
             )),
         }
+    }
+
+    /// Evaluates corr(NodeVar.attr, NodeVar.attr) - fixed Gaussian correlation.
+    fn eval_corr_function(
+        &self,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        self.ensure_positional_only(all_args, "corr")?;
+        if pos_args.len() != 2 {
+            return Err(ExecError::ValidationError(
+                "corr() expects two positional NodeVar.attr arguments".into(),
+            ));
+        }
+        let (left_node, left_attr) = self.extract_node_field_operand(&pos_args[0], "corr")?;
+        let (right_node, right_attr) = self.extract_node_field_operand(&pos_args[1], "corr")?;
+
+        if left_node != right_node {
+            return Ok(0.0);
+        }
+        graph.attr_correlation(left_node, &left_attr, &right_attr)
+    }
+
+    /// Evaluates cov(NodeVar.attr, NodeVar.attr) - covariance under fixed-correlation Gaussian semantics.
+    fn eval_cov_function(
+        &self,
+        pos_args: &[ExprAst],
+        all_args: &[CallArg],
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        self.ensure_positional_only(all_args, "cov")?;
+        if pos_args.len() != 2 {
+            return Err(ExecError::ValidationError(
+                "cov() expects two positional NodeVar.attr arguments".into(),
+            ));
+        }
+        let (left_node, left_attr) = self.extract_node_field_operand(&pos_args[0], "cov")?;
+        let (right_node, right_attr) = self.extract_node_field_operand(&pos_args[1], "cov")?;
+
+        if left_node != right_node {
+            return Ok(0.0);
+        }
+        graph.attr_covariance(left_node, &left_attr, &right_attr)
     }
 
     /// Evaluates ci_lo/ci_hi(NodeVar.attr, p) assuming Normal posterior
@@ -480,7 +534,7 @@ impl<'a> RuleExprContext<'a> {
                 Ok(result)
             }
             ExprAst::Binary { op, left, right } => {
-                self.eval_prob_comparison(*op, left, right, 0.0, "prob", graph)
+                self.eval_prob_comparison(*op, left, right, Some(0.0), "prob", graph)
             }
             _ => Err(ExecError::Internal(
                 "prob(): argument must be an edge variable or comparison".into(),
@@ -490,7 +544,8 @@ impl<'a> RuleExprContext<'a> {
 
     /// Evaluates prob_correlated(lhs > rhs, rho=...) for Gaussian comparison probabilities.
     ///
-    /// `prob(...)` remains the independence form; use this for explicit non-zero correlation.
+    /// If `rho` is omitted and both operands reference attributes on the same node,
+    /// the graph's fixed attribute correlation is used. Otherwise defaults to independence.
     fn eval_prob_correlated_function(
         &self,
         pos_args: &[ExprAst],
@@ -503,12 +558,12 @@ impl<'a> RuleExprContext<'a> {
             ));
         }
 
-        let mut rho = 0.0f64;
+        let mut rho: Option<f64> = None;
         for arg in all_args {
             match arg {
                 CallArg::Positional(_) => {}
                 CallArg::Named { name, value } if name == "rho" => {
-                    rho = eval_expr_core(value, graph, self)?;
+                    rho = Some(eval_expr_core(value, graph, self)?);
                 }
                 CallArg::Named { name, .. } => {
                     return Err(ExecError::ValidationError(format!(
@@ -519,10 +574,12 @@ impl<'a> RuleExprContext<'a> {
             }
         }
 
-        if !rho.is_finite() || !(-1.0..=1.0).contains(&rho) {
-            return Err(ExecError::ValidationError(
-                "prob_correlated(): rho must be finite and in [-1, 1]".into(),
-            ));
+        if let Some(rho_val) = rho {
+            if !rho_val.is_finite() || !(-1.0..=1.0).contains(&rho_val) {
+                return Err(ExecError::ValidationError(
+                    "prob_correlated(): rho must be finite and in [-1, 1]".into(),
+                ));
+            }
         }
 
         match &pos_args[0] {
@@ -541,15 +598,25 @@ impl<'a> RuleExprContext<'a> {
         op: grafial_frontend::ast::BinaryOp,
         left: &ExprAst,
         right: &ExprAst,
-        rho: f64,
+        rho: Option<f64>,
         fn_name: &str,
         graph: &BeliefGraph,
     ) -> Result<f64, ExecError> {
         use grafial_frontend::ast::BinaryOp::*;
         match op {
             Gt | Ge | Lt | Le => {
-                let (m_l, v_l) = self.extract_mean_var(left, graph)?;
-                let (m_r, v_r) = self.extract_mean_var(right, graph)?;
+                let left_operand = self.extract_gaussian_operand(left, graph)?;
+                let right_operand = self.extract_gaussian_operand(right, graph)?;
+                let m_l = left_operand.mean;
+                let m_r = right_operand.mean;
+                let v_l = left_operand.variance;
+                let v_r = right_operand.variance;
+
+                let rho = if let Some(explicit) = rho {
+                    explicit
+                } else {
+                    self.infer_operand_correlation(&left_operand, &right_operand, graph)?
+                };
                 let m = m_l - m_r;
                 let cov = rho * (v_l.max(0.0) * v_r.max(0.0)).sqrt();
                 let s2 = v_l + v_r - (2.0 * cov);
@@ -608,7 +675,7 @@ impl<'a> RuleExprContext<'a> {
         }
 
         let mut threshold = 0.95f64;
-        let mut rho = 0.0f64;
+        let mut rho: Option<f64> = None;
         for arg in all_args {
             match arg {
                 CallArg::Positional(_) => {}
@@ -616,7 +683,7 @@ impl<'a> RuleExprContext<'a> {
                     threshold = eval_expr_core(value, graph, self)?;
                 }
                 CallArg::Named { name, value } if name == "rho" => {
-                    rho = eval_expr_core(value, graph, self)?;
+                    rho = Some(eval_expr_core(value, graph, self)?);
                 }
                 CallArg::Named { name, .. } => {
                     return Err(ExecError::ValidationError(format!(
@@ -632,10 +699,12 @@ impl<'a> RuleExprContext<'a> {
                 "credible(): p must be finite and in [0, 1]".into(),
             ));
         }
-        if !rho.is_finite() || !(-1.0..=1.0).contains(&rho) {
-            return Err(ExecError::ValidationError(
-                "credible(): rho must be finite and in [-1, 1]".into(),
-            ));
+        if let Some(rho_val) = rho {
+            if !rho_val.is_finite() || !(-1.0..=1.0).contains(&rho_val) {
+                return Err(ExecError::ValidationError(
+                    "credible(): rho must be finite and in [-1, 1]".into(),
+                ));
+            }
         }
 
         let event_prob = match &pos_args[0] {
@@ -643,9 +712,14 @@ impl<'a> RuleExprContext<'a> {
                 let eid = self.resolve_edge_var(var_name)?;
                 graph.prob_mean(eid)?
             }
-            ExprAst::Binary { op, left, right } => {
-                self.eval_prob_comparison(*op, left, right, rho, "credible", graph)?
-            }
+            ExprAst::Binary { op, left, right } => self.eval_prob_comparison(
+                *op,
+                left,
+                right,
+                Some(rho.unwrap_or(0.0)),
+                "credible",
+                graph,
+            )?,
             _ => {
                 return Err(ExecError::ValidationError(
                     "credible(): event must be an edge variable or comparison".into(),
@@ -656,20 +730,48 @@ impl<'a> RuleExprContext<'a> {
         Ok((event_prob >= threshold) as i32 as f64)
     }
 
-    /// Helper: extract mean and variance for simple expressions: node.attr or number
-    fn extract_mean_var(
+    fn extract_node_field_operand(
+        &self,
+        expr: &ExprAst,
+        fn_name: &str,
+    ) -> Result<(NodeId, String), ExecError> {
+        match expr {
+            ExprAst::Field { target, field } => match &**target {
+                ExprAst::Var(var_name) => Ok((self.resolve_node_var(var_name)?, field.clone())),
+                _ => Err(ExecError::ValidationError(format!(
+                    "{}(): arguments must reference node variables",
+                    fn_name
+                ))),
+            },
+            _ => Err(ExecError::ValidationError(format!(
+                "{}(): arguments must be NodeVar.attr",
+                fn_name
+            ))),
+        }
+    }
+
+    /// Helper: extract Gaussian operand metadata for comparison probability functions.
+    fn extract_gaussian_operand(
         &self,
         expr: &ExprAst,
         graph: &BeliefGraph,
-    ) -> Result<(f64, f64), ExecError> {
+    ) -> Result<GaussianOperand, ExecError> {
         match expr {
-            ExprAst::Number(x) => Ok((*x, 0.0)),
+            ExprAst::Number(x) => Ok(GaussianOperand {
+                mean: *x,
+                variance: 0.0,
+                node_id: None,
+                attr: None,
+            }),
             ExprAst::Field { target, field } => match &**target {
                 ExprAst::Var(var_name) => {
                     let nid = self.resolve_node_var(var_name)?;
-                    let m = graph.expectation(nid, field)?;
-                    let v = graph.variance(nid, field)?;
-                    Ok((m, v))
+                    Ok(GaussianOperand {
+                        mean: graph.expectation(nid, field)?,
+                        variance: graph.variance(nid, field)?,
+                        node_id: Some(nid),
+                        attr: Some(field.clone()),
+                    })
                 }
                 _ => Err(ExecError::ValidationError(
                     "prob(): comparison must reference node variables".into(),
@@ -678,6 +780,22 @@ impl<'a> RuleExprContext<'a> {
             _ => Err(ExecError::ValidationError(
                 "prob(): only supports node.attr or numeric in comparisons".into(),
             )),
+        }
+    }
+
+    fn infer_operand_correlation(
+        &self,
+        left: &GaussianOperand,
+        right: &GaussianOperand,
+        graph: &BeliefGraph,
+    ) -> Result<f64, ExecError> {
+        match (&left.node_id, &left.attr, &right.node_id, &right.attr) {
+            (Some(left_node), Some(left_attr), Some(right_node), Some(right_attr))
+                if left_node == right_node =>
+            {
+                graph.attr_correlation(*left_node, left_attr, right_attr)
+            }
+            _ => Ok(0.0),
         }
     }
 
@@ -1746,6 +1864,34 @@ mod tests {
         g
     }
 
+    fn create_same_node_correlated_graph(rho: f64) -> BeliefGraph {
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData {
+            id: NodeId(1),
+            label: Arc::from("Person"),
+            attrs: HashMap::from([
+                (
+                    "x".into(),
+                    GaussianPosterior {
+                        mean: 0.1,
+                        precision: 1.0,
+                    },
+                ),
+                (
+                    "y".into(),
+                    GaussianPosterior {
+                        mean: 0.0,
+                        precision: 1.0,
+                    },
+                ),
+            ]),
+        });
+        g.ensure_owned();
+        g.set_attr_correlation(NodeId(1), "x", "y", rho)
+            .expect("set attr correlation");
+        g
+    }
+
     // ============================================================================
     // eval_expr Tests (now using shared evaluator)
     // ============================================================================
@@ -2026,6 +2172,109 @@ mod tests {
 
         let err = eval_expr_core(&expr, &g, &ctx).expect_err("invalid rho should fail");
         assert!(err.to_string().contains("rho"));
+    }
+
+    #[test]
+    fn eval_prob_correlated_uses_model_correlation_when_rho_omitted() {
+        let g = create_same_node_correlated_graph(0.8);
+        let mut bindings = MatchBindings::default();
+        bindings.node_vars.insert("A".into(), NodeId(1));
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
+        };
+
+        let cmp = ExprAst::Binary {
+            op: BinaryOp::Gt,
+            left: Box::new(ExprAst::Field {
+                target: Box::new(ExprAst::Var("A".into())),
+                field: "x".into(),
+            }),
+            right: Box::new(ExprAst::Field {
+                target: Box::new(ExprAst::Var("A".into())),
+                field: "y".into(),
+            }),
+        };
+
+        let p_independent = eval_expr_core(
+            &ExprAst::Call {
+                name: "prob".into(),
+                args: vec![CallArg::Positional(cmp.clone())],
+            },
+            &g,
+            &ctx,
+        )
+        .expect("prob");
+
+        let p_inferred = eval_expr_core(
+            &ExprAst::Call {
+                name: "prob_correlated".into(),
+                args: vec![CallArg::Positional(cmp)],
+            },
+            &g,
+            &ctx,
+        )
+        .expect("prob_correlated inferred");
+
+        assert!(
+            p_inferred > p_independent,
+            "positive inferred correlation should increase P(A.x > A.y)"
+        );
+    }
+
+    #[test]
+    fn eval_corr_and_cov_functions_read_graph_correlation() {
+        let g = create_same_node_correlated_graph(0.4);
+        let mut bindings = MatchBindings::default();
+        bindings.node_vars.insert("A".into(), NodeId(1));
+        let locals = Locals::new();
+        let ctx = RuleExprContext {
+            bindings: &bindings,
+            locals: &locals,
+            globals: &HashMap::new(),
+        };
+
+        let corr = eval_expr_core(
+            &ExprAst::Call {
+                name: "corr".into(),
+                args: vec![
+                    CallArg::Positional(ExprAst::Field {
+                        target: Box::new(ExprAst::Var("A".into())),
+                        field: "x".into(),
+                    }),
+                    CallArg::Positional(ExprAst::Field {
+                        target: Box::new(ExprAst::Var("A".into())),
+                        field: "y".into(),
+                    }),
+                ],
+            },
+            &g,
+            &ctx,
+        )
+        .expect("corr");
+        assert!((corr - 0.4).abs() < 1e-12);
+
+        let cov = eval_expr_core(
+            &ExprAst::Call {
+                name: "cov".into(),
+                args: vec![
+                    CallArg::Positional(ExprAst::Field {
+                        target: Box::new(ExprAst::Var("A".into())),
+                        field: "x".into(),
+                    }),
+                    CallArg::Positional(ExprAst::Field {
+                        target: Box::new(ExprAst::Var("A".into())),
+                        field: "y".into(),
+                    }),
+                ],
+            },
+            &g,
+            &ctx,
+        )
+        .expect("cov");
+        assert!((cov - 0.4).abs() < 1e-12);
     }
 
     #[test]

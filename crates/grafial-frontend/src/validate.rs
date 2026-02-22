@@ -23,7 +23,7 @@
 //!
 //! Validation is separate from parsing to provide clear, actionable error messages.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use pest::Parser;
 
@@ -328,7 +328,13 @@ fn validate_belief_model(
                 )
             })?;
 
+        let declared_attr_names: HashSet<&str> = node_decl
+            .attrs
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
         let mut attrs_seen = HashSet::new();
+        let mut correlation_specs: HashMap<(String, String), f64> = HashMap::new();
         for (attr_name, posterior) in &node_decl.attrs {
             if !schema_node.attrs.iter().any(|a| a.name == *attr_name) {
                 return Err(validation_error(
@@ -355,6 +361,56 @@ fn validate_belief_model(
             match posterior {
                 PosteriorType::Gaussian { params } => {
                     validate_gaussian_params(params, &target, &context, range)?;
+                    for (param_name, value) in params {
+                        let Some(other_attr) = param_name.strip_prefix("corr_") else {
+                            continue;
+                        };
+
+                        if !declared_attr_names.contains(other_attr) {
+                            return Err(validation_error(
+                                format!(
+                                    "{} Gaussian correlation '{}' references unknown attribute '{}'",
+                                    target, param_name, other_attr
+                                ),
+                                Some(&context),
+                                range,
+                            ));
+                        }
+
+                        if other_attr == attr_name && (*value - 1.0).abs() > 1e-12 {
+                            return Err(validation_error(
+                                format!(
+                                    "{} Gaussian self-correlation must be 1, got {}",
+                                    target, value
+                                ),
+                                Some(&context),
+                                range,
+                            ));
+                        }
+
+                        let pair = if attr_name.as_str() <= other_attr {
+                            (attr_name.clone(), other_attr.to_string())
+                        } else {
+                            (other_attr.to_string(), attr_name.clone())
+                        };
+                        if let Some(prev) = correlation_specs.insert(pair.clone(), *value) {
+                            if (prev - value).abs() > 1e-12 {
+                                return Err(validation_error(
+                                    format!(
+                                        "Conflicting Gaussian correlation values for '{}.{}' and '{}.{}': {} vs {}",
+                                        node_decl.node_type,
+                                        pair.0,
+                                        node_decl.node_type,
+                                        pair.1,
+                                        prev,
+                                        value
+                                    ),
+                                    Some(&context),
+                                    range,
+                                ));
+                            }
+                        }
+                    }
                 }
                 other => {
                     return Err(validation_error(
@@ -516,6 +572,8 @@ fn validate_gaussian_params(
 ) -> Result<(), FrontendError> {
     let mut seen_prior_mean = false;
     let mut seen_prior_precision = false;
+    let mut seen_observation_precision = false;
+    let mut seen_corr_targets = HashSet::new();
 
     for (name, val) in params {
         if !val.is_finite() {
@@ -565,6 +623,62 @@ fn validate_gaussian_params(
                     ));
                 }
                 seen_prior_precision = true;
+            }
+            "observation_precision" => {
+                if seen_observation_precision {
+                    return Err(validation_error(
+                        format!(
+                            "{} GaussianPosterior parameter 'observation_precision' declared multiple times",
+                            target
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+                if *val <= 0.0 {
+                    return Err(validation_error(
+                        format!(
+                            "{} GaussianPosterior 'observation_precision' must be > 0, got {}",
+                            target, val
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+                seen_observation_precision = true;
+            }
+            corr_name if corr_name.starts_with("corr_") => {
+                let suffix = &corr_name["corr_".len()..];
+                if suffix.is_empty() {
+                    return Err(validation_error(
+                        format!(
+                            "{} GaussianPosterior correlation parameter '{}' must specify a target attribute",
+                            target, corr_name
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+                if !(-1.0..=1.0).contains(val) {
+                    return Err(validation_error(
+                        format!(
+                            "{} GaussianPosterior correlation '{}' must be in [-1, 1], got {}",
+                            target, corr_name, val
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
+                if !seen_corr_targets.insert(suffix.to_string()) {
+                    return Err(validation_error(
+                        format!(
+                            "{} GaussianPosterior correlation '{}' declared multiple times",
+                            target, corr_name
+                        ),
+                        Some(context),
+                        range,
+                    ));
+                }
             }
             other => {
                 return Err(validation_error(
@@ -1061,6 +1175,18 @@ fn validate_rule_call(
             context,
             range,
         ),
+        "corr" | "cov" => {
+            if !named.map.is_empty() || pos.len() != 2 {
+                return Err(validation_error(
+                    format!("{}(): expected two positional NodeVar.attr arguments", name),
+                    Some(context),
+                    range,
+                ));
+            }
+            validate_node_field_expr(pos[0], &scope.node_vars, context, range, name)?;
+            validate_node_field_expr(pos[1], &scope.node_vars, context, range, name)?;
+            Ok(())
+        }
         "ci_lo" | "ci_hi" | "quantile" => {
             if !named.map.is_empty() || pos.len() != 2 {
                 return Err(validation_error(
@@ -2756,6 +2882,56 @@ belief_model M on S {
     }
 
     #[test]
+    fn validate_belief_model_accepts_gaussian_correlation_params() {
+        let src = r#"
+schema S { node N { x: Real; y: Real; } edge E {} }
+belief_model M on S {
+  node N {
+    x ~ Gaussian(prior_mean=0.0, prior_precision=1.0, corr_y=0.4)
+    y ~ Gaussian(prior_mean=0.0, prior_precision=1.0, corr_x=0.4, observation_precision=2.0)
+  }
+  edge E { exist ~ Bernoulli(prior=0.5, pseudo_count=2.0) }
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        validate_program(&ast).expect("should accept correlation params");
+    }
+
+    #[test]
+    fn validate_belief_model_rejects_out_of_range_gaussian_correlation() {
+        let src = r#"
+schema S { node N { x: Real; y: Real; } edge E {} }
+belief_model M on S {
+  node N {
+    x ~ Gaussian(prior_mean=0.0, prior_precision=1.0, corr_y=1.5)
+    y ~ Gaussian(prior_mean=0.0, prior_precision=1.0)
+  }
+  edge E { exist ~ Bernoulli(prior=0.5, pseudo_count=2.0) }
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        let err = validate_program(&ast).expect_err("should reject out-of-range correlation");
+        assert!(err.to_string().contains("correlation"));
+    }
+
+    #[test]
+    fn validate_belief_model_rejects_unknown_gaussian_correlation_target() {
+        let src = r#"
+schema S { node N { x: Real; y: Real; } edge E {} }
+belief_model M on S {
+  node N {
+    x ~ Gaussian(prior_mean=0.0, prior_precision=1.0, corr_z=0.2)
+    y ~ Gaussian(prior_mean=0.0, prior_precision=1.0)
+  }
+  edge E { exist ~ Bernoulli(prior=0.5, pseudo_count=2.0) }
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        let err = validate_program(&ast).expect_err("should reject unknown corr target");
+        assert!(err.to_string().contains("unknown attribute"));
+    }
+
+    #[test]
     fn validate_belief_model_rejects_boundary_bernoulli_prior() {
         let src = r#"
 schema S { node N { x: Real } edge E {} }
@@ -2793,6 +2969,20 @@ belief_model M on S {
         let ast = crate::parser::parse_program(src).expect("parse");
         let err = validate_program(&ast).expect_err("should reject non-Gaussian node posterior");
         assert!(err.to_string().contains("must use GaussianPosterior"));
+    }
+
+    #[test]
+    fn validate_rule_with_corr_and_cov_functions() {
+        let src = r#"
+schema S { node N { x: Real; y: Real; } edge E {} }
+belief_model M on S {}
+rule R on M {
+  pattern (A:N)-[e:E]->(B:N)
+  where corr(A.x, A.y) > -1.0 and cov(A.x, A.y) <= 10.0
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        validate_program(&ast).expect("corr/cov should validate");
     }
 
     #[test]

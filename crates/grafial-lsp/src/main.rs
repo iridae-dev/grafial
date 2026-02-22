@@ -640,8 +640,10 @@ fn builtin_hover(token: &str) -> Option<lsp::HoverContents> {
     let t = token.trim_matches(|c: char| c == '[' || c == ']');
     let docs = match t {
         "prob" => Some(("prob(target) -> Real", "Probability of a boolean/edge event.\n\nExamples:\n- prob(E) where E is an edge variable\n- prob(A.attr > 0) for boolean expressions")),
-        "prob_correlated" => Some(("prob_correlated(A.attr > B.attr, rho=...) -> Real", "Gaussian comparison probability with explicit correlation.\n\nUse `prob(...)` for independence semantics and `prob_correlated(...)` when covariance should be modeled.")),
+        "prob_correlated" => Some(("prob_correlated(A.attr > B.attr, rho=...) -> Real", "Gaussian comparison probability with optional correlation.\n\nIf `rho` is omitted and both operands are attributes on the same node, the model's fixed attribute correlation is used.")),
         "credible" => Some(("credible(event, p=0.95, rho=0.0) -> Bool", "Credibility gate for edge/comparison events.\n\nReturns true when posterior event probability is at least `p`. For comparison events, `rho` adjusts covariance.")),
+        "corr" => Some(("corr(A.attr, A.other_attr) -> Real", "Returns fixed Gaussian attribute correlation for a node (defaults to 0 for unspecified pairs).")),
+        "cov" => Some(("cov(A.attr, A.other_attr) -> Real", "Returns covariance implied by posterior variances and fixed attribute correlation.")),
         "E" => Some(("E[expr] -> Real", "Expectation (mean) of an expression under the current posterior.\n\nExamples:\n- E[A.score]\n- E[entropy(C)]")),
         "winner" => Some(("winner(C) -> String", "Maximum a posteriori category label for categorical posterior C.")),
         "entropy" => Some(("entropy(X) -> Real", "Shannon entropy of a discrete distribution X (in nats).")),
