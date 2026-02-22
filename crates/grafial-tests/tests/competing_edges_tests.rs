@@ -57,14 +57,19 @@ fn dirichlet_posterior_observe_chosen() {
 fn dirichlet_posterior_observe_unchosen() {
     let mut dirichlet = DirichletPosterior::new(vec![1.0, 1.0, 1.0]);
 
-    // Observe category 0 as unchosen: distributes 1.0 uniformly among others
-    // For 3 categories, each other gets 1.0 / (3-1) = 0.5
-    dirichlet.observe_unchosen(0);
+    // For K>2 this update is non-conjugate and should be rejected.
+    let result = dirichlet.observe_unchosen(0);
+    assert!(result.is_err());
+    assert_eq!(dirichlet.concentrations, vec![1.0, 1.0, 1.0]);
+}
 
-    // After: [1.0, 1.5, 1.5]
-    assert_eq!(dirichlet.concentrations[0], 1.0);
-    assert_eq!(dirichlet.concentrations[1], 1.5);
-    assert_eq!(dirichlet.concentrations[2], 1.5);
+#[test]
+fn dirichlet_posterior_observe_unchosen_binary_group() {
+    let mut dirichlet = DirichletPosterior::new(vec![2.0, 2.0]);
+
+    // In a binary group, "category 0 unchosen" means category 1 was chosen.
+    dirichlet.observe_unchosen(0).unwrap();
+    assert_eq!(dirichlet.concentrations, vec![2.0, 3.0]);
 }
 
 #[test]
@@ -209,6 +214,76 @@ fn create_test_graph_with_competing_edges() -> BeliefGraph {
     graph
 }
 
+fn create_test_graph_with_three_competing_edges() -> BeliefGraph {
+    let mut graph = BeliefGraph::default();
+
+    graph.insert_node(NodeData {
+        id: NodeId(1),
+        label: "Server".into(),
+        attrs: HashMap::new(),
+    });
+    graph.insert_node(NodeData {
+        id: NodeId(2),
+        label: "Server".into(),
+        attrs: HashMap::new(),
+    });
+    graph.insert_node(NodeData {
+        id: NodeId(3),
+        label: "Server".into(),
+        attrs: HashMap::new(),
+    });
+    graph.insert_node(NodeData {
+        id: NodeId(4),
+        label: "Server".into(),
+        attrs: HashMap::new(),
+    });
+
+    let posterior = DirichletPosterior::uniform(3, 3.0);
+    let group = CompetingEdgeGroup::new(
+        CompetingGroupId(1),
+        NodeId(1),
+        "ROUTES_TO".into(),
+        vec![NodeId(2), NodeId(3), NodeId(4)],
+        posterior,
+    );
+    graph
+        .competing_groups_mut()
+        .insert(CompetingGroupId(1), group);
+
+    graph.insert_edge(EdgeData {
+        id: EdgeId(1),
+        src: NodeId(1),
+        dst: NodeId(2),
+        ty: "ROUTES_TO".into(),
+        exist: EdgePosterior::Competing {
+            group_id: CompetingGroupId(1),
+            category_index: 0,
+        },
+    });
+    graph.insert_edge(EdgeData {
+        id: EdgeId(2),
+        src: NodeId(1),
+        dst: NodeId(3),
+        ty: "ROUTES_TO".into(),
+        exist: EdgePosterior::Competing {
+            group_id: CompetingGroupId(1),
+            category_index: 1,
+        },
+    });
+    graph.insert_edge(EdgeData {
+        id: EdgeId(3),
+        src: NodeId(1),
+        dst: NodeId(4),
+        ty: "ROUTES_TO".into(),
+        exist: EdgePosterior::Competing {
+            group_id: CompetingGroupId(1),
+            category_index: 2,
+        },
+    });
+
+    graph
+}
+
 #[test]
 fn belief_graph_get_competing_group() {
     let graph = create_test_graph_with_competing_edges();
@@ -336,12 +411,28 @@ fn belief_graph_observe_edge_chosen() {
 fn belief_graph_observe_edge_unchosen() {
     let mut graph = create_test_graph_with_competing_edges();
 
-    // Observe edge 1 as unchosen (so category 0 is not chosen)
+    // Binary case: edge 1 unchosen implies edge 2 was chosen.
     graph.observe_edge_unchosen(EdgeId(1)).unwrap();
 
     // Category 0 should have lower probability, category 1 should have higher
     let probs = graph.prob_vector(NodeId(1), "ROUTES_TO").unwrap();
     assert!(probs[0] < probs[1]);
+}
+
+#[test]
+fn belief_graph_observe_edge_unchosen_rejects_nonbinary_group() {
+    let mut graph = create_test_graph_with_three_competing_edges();
+    let probs_before = graph.prob_vector(NodeId(1), "ROUTES_TO").unwrap();
+
+    let result = graph.observe_edge_unchosen(EdgeId(1));
+    assert!(result.is_err());
+
+    // No posterior update should occur on rejected non-conjugate evidence.
+    let probs_after = graph.prob_vector(NodeId(1), "ROUTES_TO").unwrap();
+    assert_eq!(probs_before.len(), probs_after.len());
+    for (before, after) in probs_before.iter().zip(probs_after.iter()) {
+        assert!((before - after).abs() < 1e-12);
+    }
 }
 
 #[test]

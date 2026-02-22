@@ -371,27 +371,32 @@ impl DirichletPosterior {
 
     /// Updates the posterior with an observation that a category was not chosen.
     ///
-    /// Distributes probability mass uniformly among all other categories.
-    /// This is a rare operation used when observing negative evidence (that a specific
-    /// category was not chosen, but we don't know which one was).
+    /// For binary categorical distributions (K=2), this is equivalent to observing
+    /// the other category as chosen, so we apply an exact conjugate update.
+    ///
+    /// For K>2, observing only "not category i" yields likelihood `1 - π_i`, which is
+    /// not conjugate to a Dirichlet prior. In that case, this method returns an error.
     ///
     /// # Arguments
     ///
     /// * `category_index` - Index of the unchosen category
-    pub fn observe_unchosen(&mut self, category_index: usize) {
-        assert!(
-            category_index < self.concentrations.len(),
-            "Category index out of bounds"
-        );
-        let k = self.concentrations.len();
-        if k > 1 {
-            let increment = 1.0 / (k - 1) as f64;
-            for (i, alpha) in self.concentrations.iter_mut().enumerate() {
-                if i != category_index {
-                    *alpha += increment;
-                }
-            }
+    pub fn observe_unchosen(&mut self, category_index: usize) -> Result<(), ExecError> {
+        if category_index >= self.concentrations.len() {
+            return Err(ExecError::ValidationError(
+                "Category index out of bounds".into(),
+            ));
         }
+
+        let k = self.concentrations.len();
+        if k != 2 {
+            return Err(ExecError::ValidationError(
+                "observe_unchosen is only conjugate for binary categorical groups; use observe_chosen with an explicit chosen category for K>2".into(),
+            ));
+        }
+
+        let chosen_index = 1 - category_index;
+        self.observe_chosen(chosen_index);
+        Ok(())
     }
 
     /// Forces a specific category to be chosen with very high certainty.
@@ -2550,7 +2555,11 @@ impl BeliefGraph {
         Ok(())
     }
 
-    /// Observes a competing edge as unchosen (distributes probability to other categories).
+    /// Observes a competing edge as unchosen.
+    ///
+    /// This update is only conjugate for binary competing groups (K=2), where
+    /// "edge i unchosen" implies the other edge was chosen. For K>2, this returns
+    /// a validation error and requires explicit chosen-category evidence.
     ///
     /// # Arguments
     ///
@@ -2584,7 +2593,7 @@ impl BeliefGraph {
             .competing_groups
             .get_mut(&group_id)
             .ok_or_else(|| ExecError::Internal("missing competing group".into()))?;
-        group.posterior.observe_unchosen(category_index);
+        group.posterior.observe_unchosen(category_index)?;
         Ok(())
     }
 
