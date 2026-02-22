@@ -1015,6 +1015,7 @@ fn validate_flow_inner(
                     Transform::ApplyRule { .. } => {}
                     Transform::ApplyRuleset { .. } => {}
                     Transform::Snapshot { .. } => {}
+                    Transform::InferBeliefs => {}
                     Transform::PruneEdges {
                         edge_type,
                         predicate,

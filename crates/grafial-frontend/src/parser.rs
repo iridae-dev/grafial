@@ -1741,6 +1741,7 @@ fn build_pipeline_expr(pair: pest::iterators::Pair<Rule>) -> Result<GraphExpr, F
             Rule::apply_rule_tr
             | Rule::apply_ruleset_tr
             | Rule::snapshot_tr
+            | Rule::infer_beliefs_tr
             | Rule::prune_edges_tr => {
                 transforms.push(build_transform(t)?);
             }
@@ -1789,6 +1790,7 @@ fn build_transform(pair: pest::iterators::Pair<Rule>) -> Result<Transform, Front
             let name = name.trim_matches('"').to_string();
             Ok(Transform::Snapshot { name })
         }
+        Rule::infer_beliefs_tr => Ok(Transform::InferBeliefs),
         Rule::prune_edges_tr => {
             let mut it = pair.into_inner();
             let edge_type = it
@@ -2717,6 +2719,29 @@ mod tests {
         match &flow.graphs[1].expr {
             GraphExpr::Pipeline { .. } => {
                 // Success
+            }
+            _ => panic!("Expected pipeline"),
+        }
+    }
+
+    #[test]
+    fn parse_graph_pipeline_with_infer_beliefs() {
+        let src = r#"
+            schema S { node N {} edge E {} }
+            belief_model M on S {}
+            flow F on M {
+                graph base = from_evidence Ev
+                graph inferred = base |> infer_beliefs
+            }
+        "#;
+
+        let result = parse_program(src).expect("parse");
+        let flow = &result.flows[0];
+        assert_eq!(flow.graphs.len(), 2);
+
+        match &flow.graphs[1].expr {
+            GraphExpr::Pipeline { transforms, .. } => {
+                assert_eq!(transforms, &vec![Transform::InferBeliefs]);
             }
             _ => panic!("Expected pipeline"),
         }

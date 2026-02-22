@@ -17,6 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::sync::Mutex;
 
+use crate::engine::belief_propagation::run_loopy_belief_propagation;
 use crate::engine::errors::ExecError;
 use crate::engine::evidence::build_graph_from_evidence_ir;
 #[cfg(not(feature = "jit"))]
@@ -1184,7 +1185,9 @@ fn collect_referenced_rules(flow: &FlowIR) -> HashSet<String> {
                     TransformIR::ApplyRuleset { rules } => {
                         referenced.extend(rules.iter().cloned());
                     }
-                    TransformIR::Snapshot { .. } | TransformIR::PruneEdges { .. } => {}
+                    TransformIR::Snapshot { .. }
+                    | TransformIR::InferBeliefs
+                    | TransformIR::PruneEdges { .. } => {}
                 }
             }
         }
@@ -1377,6 +1380,7 @@ fn apply_transform<E: FlowExprEvaluator>(
             ctx.result.snapshots.insert(name.clone(), snapshot_graph);
             Ok(graph.clone())
         }
+        TransformIR::InferBeliefs => run_loopy_belief_propagation(graph),
         TransformIR::PruneEdges {
             edge_type,
             predicate,

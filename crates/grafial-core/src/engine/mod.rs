@@ -13,6 +13,7 @@ pub mod aot_flows;
 #[cfg(feature = "aot")]
 pub mod aot_integration;
 pub mod arena_allocator;
+pub mod belief_propagation;
 pub mod errors;
 pub mod evidence;
 pub mod expr_eval;

@@ -55,6 +55,8 @@ pub enum TransformIR {
     ApplyRuleset { rules: Vec<String> },
     /// Save a snapshot of the current graph state.
     Snapshot { name: String },
+    /// Run loopy belief propagation over independent edges.
+    InferBeliefs,
     /// Prune edges of a given type based on a predicate expression.
     PruneEdges {
         edge_type: String,
@@ -71,6 +73,7 @@ impl TransformIR {
                 rules: rules.clone(),
             },
             Self::Snapshot { name } => Transform::Snapshot { name: name.clone() },
+            Self::InferBeliefs => Transform::InferBeliefs,
             Self::PruneEdges {
                 edge_type,
                 predicate,
@@ -229,6 +232,7 @@ impl From<&FlowDef> for FlowIR {
                                 Transform::Snapshot { name } => {
                                     TransformIR::Snapshot { name: name.clone() }
                                 }
+                                Transform::InferBeliefs => TransformIR::InferBeliefs,
                                 Transform::PruneEdges {
                                     edge_type,
                                     predicate,
@@ -330,6 +334,7 @@ mod tests {
                         Transform::ApplyRule {
                             rule: "Rule1".into(),
                         },
+                        Transform::InferBeliefs,
                         Transform::PruneEdges {
                             edge_type: "LINK".into(),
                             predicate: ExprAst::Bool(true),
@@ -354,15 +359,17 @@ mod tests {
         } = &ir.graphs[0].expr
         {
             assert_eq!(start_graph, "base");
-            assert_eq!(transforms.len(), 2);
+            assert_eq!(transforms.len(), 3);
 
             assert!(matches!(
                 &transforms[0],
                 TransformIR::ApplyRule { rule, mode_override } if rule == "Rule1" && mode_override.is_none()
             ));
 
+            assert!(matches!(&transforms[1], TransformIR::InferBeliefs));
+
             assert!(matches!(
-                &transforms[1],
+                &transforms[2],
                 TransformIR::PruneEdges { edge_type, predicate } if edge_type == "LINK" && matches!(predicate, ExprIR::Bool(true))
             ));
         } else {

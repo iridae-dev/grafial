@@ -130,10 +130,11 @@ from_graph_expr = { KW_from_graph ~ string }
 pipeline_expr = { ident ~ (pipe_op ~ transform)+ }
 pipe_op = { "|>" }
 
-transform = _{ apply_rule_tr | apply_ruleset_tr | snapshot_tr | prune_edges_tr }
+transform = _{ apply_rule_tr | apply_ruleset_tr | snapshot_tr | infer_beliefs_tr | prune_edges_tr }
 apply_rule_tr = { KW_apply_rule ~ ident }
 apply_ruleset_tr = { KW_apply_ruleset ~ "{" ~ ident ~ ("," ~ ident)* ~ "}" }
 snapshot_tr = { KW_snapshot ~ string }
+infer_beliefs_tr = { KW_infer_beliefs }
 prune_edges_tr = { KW_prune_edges ~ ident ~ KW_where ~ expr }
 
 metric_stmt = { KW_metric ~ ident ~ "=" ~ (metric_builder_expr | expr) }
@@ -203,6 +204,7 @@ kw_from_graph_tok = @{ "from_graph" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_apply_rule_tok = @{ "apply_rule" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_apply_ruleset_tok = @{ "apply_ruleset" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_snapshot_tok = @{ "snapshot" ~ !(ASCII_ALPHANUMERIC | "_") }
+kw_infer_beliefs_tok = @{ "infer_beliefs" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_prune_edges_tok = @{ "prune_edges" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_metric_tok = @{ "metric" ~ !(ASCII_ALPHANUMERIC | "_") }
 kw_nodes_tok = @{ "nodes" ~ !(ASCII_ALPHANUMERIC | "_") }
@@ -244,6 +246,7 @@ KW_from_graph = _{ kw_from_graph_tok }
 KW_apply_rule = _{ kw_apply_rule_tok }
 KW_apply_ruleset = _{ kw_apply_ruleset_tok }
 KW_snapshot = _{ kw_snapshot_tok }
+KW_infer_beliefs = _{ kw_infer_beliefs_tok }
 KW_prune_edges = _{ kw_prune_edges_tok }
 KW_metric = _{ kw_metric_tok }
 KW_nodes = _{ kw_nodes_tok }

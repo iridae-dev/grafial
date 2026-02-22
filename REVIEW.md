@@ -28,10 +28,11 @@ After a comprehensive Bayesian and graph-theoretic review of the Grafial project
 **Fix Required**: Comprehensive test suite with known analytical solutions.
 **Resolution Implemented**: Added analytical conjugate-update tests in `/crates/grafial-tests/tests/bayesian_updates_tests.rs` (single/multi-step Gaussian updates, Beta count/mean/variance formulas, Dirichlet count and mean formulas, and binary `unchosen` equivalence).
 
-### 4. No Belief Propagation Implementation
+### 4. No Belief Propagation Implementation ✅ COMPLETED (2026-02-22)
 **Severity**: CRITICAL
 **Issue**: Despite being a "belief graph" system, there's no implementation of graph-based inference (message passing, junction trees, loopy BP).
 **Fix Required**: Implement at least one belief propagation algorithm for connected graphs.
+**Resolution Implemented**: Added a first-class `infer_beliefs` flow transform and deterministic loopy sum-product belief propagation for independent edges in `/crates/grafial-core/src/engine/belief_propagation.rs`, with frontend/IR/runtime wiring and parser + integration coverage.
 
 ### 5. Numerical Precision Loss
 **Location**: `/crates/grafial-core/src/engine/graph.rs:184-191`
@@ -78,7 +79,7 @@ After a comprehensive Bayesian and graph-theoretic review of the Grafial project
 ### Immediate Priority (1-2 months)
 1. Fix Dirichlet update mathematics
 2. Add comprehensive test coverage for all posteriors
-3. Implement basic belief propagation (sum-product algorithm)
+3. ✅ Implemented basic belief propagation (sum-product algorithm) via `infer_beliefs`
 4. Fix numerical stability issues
 5. Lock category sets at model definition
 

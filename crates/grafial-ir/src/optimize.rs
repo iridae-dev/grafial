@@ -92,6 +92,7 @@ fn optimize_transform(transform: &TransformIR) -> Option<TransformIR> {
             }),
         },
         TransformIR::Snapshot { name } => Some(TransformIR::Snapshot { name: name.clone() }),
+        TransformIR::InferBeliefs => Some(TransformIR::InferBeliefs),
         TransformIR::PruneEdges {
             edge_type,
             predicate,
@@ -146,7 +147,9 @@ fn collect_referenced_rules(flows: &[FlowIR]) -> HashSet<&str> {
                                 referenced.insert(rule.as_str());
                             }
                         }
-                        TransformIR::Snapshot { .. } | TransformIR::PruneEdges { .. } => {}
+                        TransformIR::Snapshot { .. }
+                        | TransformIR::InferBeliefs
+                        | TransformIR::PruneEdges { .. } => {}
                     }
                 }
             }
@@ -449,6 +452,7 @@ mod tests {
                         TransformIR::ApplyRuleset {
                             rules: vec!["R1".into()],
                         },
+                        TransformIR::InferBeliefs,
                         TransformIR::PruneEdges {
                             edge_type: "REL".into(),
                             predicate: ExprIR::Bool(false),
@@ -471,13 +475,14 @@ mod tests {
             panic!("expected pipeline");
         };
 
-        assert_eq!(transforms.len(), 2);
+        assert_eq!(transforms.len(), 3);
         assert!(matches!(
             &transforms[0],
             TransformIR::ApplyRule { rule, mode_override } if rule == "R1" && mode_override.is_none()
         ));
+        assert!(matches!(&transforms[1], TransformIR::InferBeliefs));
         assert!(matches!(
-            &transforms[1],
+            &transforms[2],
             TransformIR::PruneEdges { edge_type, predicate } if edge_type == "REL" && *predicate == ExprIR::Bool(true)
         ));
     }

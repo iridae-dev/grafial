@@ -319,6 +319,8 @@ pub enum Transform {
         /// The snapshot name (for later retrieval)
         name: String,
     },
+    /// Run loopy belief propagation over independent edge beliefs
+    InferBeliefs,
     /// Remove edges matching a predicate
     PruneEdges {
         /// The edge type to prune

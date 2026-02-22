@@ -472,6 +472,101 @@ fn run_flow_empty_pipeline_clones_graph() {
 }
 
 #[test]
+fn run_flow_infer_beliefs_transform_smooths_connected_edges() {
+    fn connected_edge_builder(_: &EvidenceDef) -> Result<BeliefGraph, ExecError> {
+        use std::sync::Arc;
+
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData {
+            id: NodeId(1),
+            label: Arc::from("Node"),
+            attrs: HashMap::new(),
+        });
+        g.insert_node(NodeData {
+            id: NodeId(2),
+            label: Arc::from("Node"),
+            attrs: HashMap::new(),
+        });
+        g.insert_node(NodeData {
+            id: NodeId(3),
+            label: Arc::from("Node"),
+            attrs: HashMap::new(),
+        });
+        g.insert_edge(EdgeData {
+            id: EdgeId(1),
+            src: NodeId(1),
+            dst: NodeId(2),
+            ty: Arc::from("LINK"),
+            exist: EdgePosterior::independent(BetaPosterior {
+                alpha: 9.0,
+                beta: 1.0,
+            }),
+        });
+        g.insert_edge(EdgeData {
+            id: EdgeId(2),
+            src: NodeId(1),
+            dst: NodeId(3),
+            ty: Arc::from("LINK"),
+            exist: EdgePosterior::independent(BetaPosterior {
+                alpha: 1.0,
+                beta: 9.0,
+            }),
+        });
+        g.ensure_owned();
+        Ok(g)
+    }
+
+    let prog = ProgramAst {
+        schemas: vec![],
+        belief_models: vec![],
+        evidences: vec![EvidenceDef {
+            name: "Ev".into(),
+            on_model: "M".into(),
+            body_src: "".into(),
+            observations: vec![],
+        }],
+        rules: vec![],
+        flows: vec![FlowDef {
+            name: "InferBeliefs".into(),
+            on_model: "M".into(),
+            graphs: vec![
+                GraphDef {
+                    name: "base".into(),
+                    expr: GraphExpr::FromEvidence {
+                        evidence: "Ev".into(),
+                    },
+                },
+                GraphDef {
+                    name: "inferred".into(),
+                    expr: GraphExpr::Pipeline {
+                        start: "base".into(),
+                        transforms: vec![Transform::InferBeliefs],
+                    },
+                },
+            ],
+            metrics: vec![],
+            exports: vec![],
+            metric_exports: vec![],
+            metric_imports: vec![],
+        }],
+    };
+
+    let result =
+        run_flow_with_builder(&prog, "InferBeliefs", &connected_edge_builder, None).expect("flow");
+    let base = result.graphs.get("base").expect("base graph");
+    let inferred = result.graphs.get("inferred").expect("inferred graph");
+
+    assert_eq!(base.edges().len(), inferred.edges().len());
+    let base_high = base.prob_mean(EdgeId(1)).expect("base edge 1");
+    let base_low = base.prob_mean(EdgeId(2)).expect("base edge 2");
+    let inferred_high = inferred.prob_mean(EdgeId(1)).expect("inferred edge 1");
+    let inferred_low = inferred.prob_mean(EdgeId(2)).expect("inferred edge 2");
+
+    assert!(inferred_high < base_high);
+    assert!(inferred_low > base_low);
+}
+
+#[test]
 fn run_flow_errors_on_bad_export() {
     let prog = ProgramAst {
         schemas: vec![],
