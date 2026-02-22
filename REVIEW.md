@@ -22,10 +22,11 @@ After a comprehensive Bayesian and graph-theoretic review of the Grafial project
 **Fix Required**: Categories must be fixed at model definition time, or use nonparametric models (Dirichlet Process).
 **Resolution Implemented**: Competing-group category sets are now fixed before posterior updates by precomputing categories per `(source, edge_type)` from evidence, initializing Dirichlet priors over that full fixed set, and rejecting any out-of-set category insertion.
 
-### 3. Zero Test Coverage for Bayesian Updates
+### 3. Zero Test Coverage for Bayesian Updates ✅ COMPLETED (2026-02-22)
 **Severity**: CRITICAL
 **Issue**: No unit tests validate the correctness of core probabilistic computations (Gaussian, Beta, Dirichlet posteriors).
 **Fix Required**: Comprehensive test suite with known analytical solutions.
+**Resolution Implemented**: Added analytical conjugate-update tests in `/crates/grafial-tests/tests/bayesian_updates_tests.rs` (single/multi-step Gaussian updates, Beta count/mean/variance formulas, Dirichlet count and mean formulas, and binary `unchosen` equivalence).
 
 ### 4. No Belief Propagation Implementation
 **Severity**: CRITICAL

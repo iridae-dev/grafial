@@ -43,6 +43,10 @@ path = "tests/property_tests.rs"
 name = "examples_tests"
 path = "tests/examples_tests.rs"
 
+[[test]]
+name = "bayesian_updates_tests"
+path = "tests/bayesian_updates_tests.rs"
+
 [dependencies]
 grafial-core = { path = "../grafial-core", features = ["serde"] }
 grafial-frontend = { path = "../grafial-frontend" }
