@@ -11,6 +11,9 @@ on:
         required: true
         default: "0.1.0"
 
+permissions:
+  contents: read
+
 jobs:
   set-version:
     runs-on: ubuntu-latest
@@ -120,8 +123,6 @@ jobs:
 
   build-wheels:
     needs: set-version
-    permissions:
-      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -195,8 +196,6 @@ jobs:
     needs: [set-version, build-wheels]
     runs-on: ubuntu-latest
     if: vars.PUBLISH_TO_PYPI == 'true'
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v4
 
