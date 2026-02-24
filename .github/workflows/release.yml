@@ -4,18 +4,31 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.1.0 or v0.1.0)"
+        required: true
+        default: "0.1.0"
 
 jobs:
   set-version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
-      - name: Set version from tag
+      - name: Set version from tag or input
         id: version
         run: |
-          ver="${GITHUB_REF#refs/tags/v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ver="${{ github.event.inputs.version }}"
+            ver="${ver#v}"
+          else
+            ver="${GITHUB_REF#refs/tags/v}"
+          fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=v${ver}" >> "$GITHUB_OUTPUT"
 
   build-binaries:
     needs: set-version
@@ -168,7 +181,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && needs.set-version.outputs.tag || github.ref_name }}
           name: Grafial ${{ needs.set-version.outputs.version }}
           draft: false
           generate_release_notes: true
