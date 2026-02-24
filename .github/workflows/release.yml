@@ -193,6 +193,8 @@ jobs:
     needs: [set-version, build-wheels]
     runs-on: ubuntu-latest
     if: vars.PUBLISH_TO_PYPI == 'true'
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
