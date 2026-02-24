@@ -7,7 +7,7 @@ be updated as new evidence arrives.
 This repository is a monorepo containing the language frontend, IR, execution engine,
 CLI, Python bindings, tests, and benchmarks.
 
-[![Release](https://github.com/iridae-dev/grafial/actions/workflows/release.yml/badge.svg)](https://github.com/iridae-dev/grafial/actions/workflows/release.yml)
+[![All Tests](https://github.com/iridae-dev/grafial/actions/workflows/phase6-release-gate.yml/badge.svg)](https://github.com/iridae-dev/grafial/actions/workflows/phase6-release-gate.yml) [![Release](https://github.com/iridae-dev/grafial/actions/workflows/release.yml/badge.svg)](https://github.com/iridae-dev/grafial/actions/workflows/release.yml)
 
 
 ## Install
