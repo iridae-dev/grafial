@@ -1,0 +1,203 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  set-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Set version from tag
+        id: version
+        run: |
+          ver="${GITHUB_REF#refs/tags/v}"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+  build-binaries:
+    needs: set-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            suffix: x86_64-unknown-linux-gnu
+            ext: tar.gz
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            suffix: aarch64-apple-darwin
+            ext: tar.gz
+          - runner: macos-14
+            target: x86_64-apple-darwin
+            suffix: x86_64-apple-darwin
+            ext: tar.gz
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: x86_64-pc-windows-msvc
+            ext: zip
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version in manifests
+        shell: bash
+        env:
+          VERSION: ${{ needs.set-version.outputs.version }}
+        run: ./scripts/set_version.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build CLI and LSP
+        run: |
+          cargo build -p grafial-cli -p grafial-lsp --release --target ${{ matrix.target }}
+
+      - name: Strip binaries
+        if: runner.os != 'Windows'
+        run: |
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            strip target/${{ matrix.target }}/release/grafial 2>/dev/null || true
+            strip target/${{ matrix.target }}/release/grafial-lsp 2>/dev/null || true
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            strip target/${{ matrix.target }}/release/grafial 2>/dev/null || true
+            strip target/${{ matrix.target }}/release/grafial-lsp 2>/dev/null || true
+          fi
+
+      - name: Package artifacts (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          VERSION="${{ needs.set-version.outputs.version }}"
+          SUFFIX="${{ matrix.suffix }}"
+          BIN_DIR="target/${{ matrix.target }}/release"
+          tar czvf "grafial-$VERSION-$SUFFIX.tar.gz" -C "$BIN_DIR" grafial
+          tar czvf "grafial-lsp-$VERSION-$SUFFIX.tar.gz" -C "$BIN_DIR" grafial-lsp
+
+      - name: Package artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VERSION = "${{ needs.set-version.outputs.version }}"
+          $SUFFIX = "${{ matrix.suffix }}"
+          $BIN_DIR = "target/${{ matrix.target }}/release"
+          Compress-Archive -Path "$BIN_DIR/grafial.exe" -DestinationPath "grafial-$VERSION-$SUFFIX.zip"
+          Compress-Archive -Path "$BIN_DIR/grafial-lsp.exe" -DestinationPath "grafial-lsp-$VERSION-$SUFFIX.zip"
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grafial-cli-${{ matrix.suffix }}
+          path: |
+            grafial-${{ needs.set-version.outputs.version }}-${{ matrix.suffix }}.*
+
+      - name: Upload LSP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grafial-lsp-${{ matrix.suffix }}
+          path: |
+            grafial-lsp-${{ needs.set-version.outputs.version }}-${{ matrix.suffix }}.*
+
+  build-wheels:
+    needs: set-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            python-version: "3.11"
+          - runner: macos-14
+            python-version: "3.11"
+          - runner: windows-latest
+            python-version: "3.11"
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version in manifests
+        shell: bash
+        env:
+          VERSION: ${{ needs.set-version.outputs.version }}
+        run: ./scripts/set_version.sh
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build wheels
+        working-directory: crates/grafial-python
+        run: pip install maturin && maturin build --release --out dist
+
+      - name: Build sdist
+        if: matrix.runner == 'ubuntu-22.04'
+        working-directory: crates/grafial-python
+        run: maturin sdist --out dist
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.runner }}
+          path: crates/grafial-python/dist/*
+
+  release:
+    needs: [set-version, build-binaries, build-wheels]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Grafial ${{ needs.set-version.outputs.version }}
+          draft: false
+          generate_release_notes: true
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-pypi:
+    needs: [set-version, build-wheels]
+    runs-on: ubuntu-latest
+    if: secrets.PYPI_API_TOKEN != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version in manifests
+        shell: bash
+        env:
+          VERSION: ${{ needs.set-version.outputs.version }}
+        run: ./scripts/set_version.sh
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: crates/grafial-python/dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        working-directory: crates/grafial-python
+        run: |
+          pip install maturin
+          maturin publish --non-interactive --username __token__ --password ${{ secrets.PYPI_API_TOKEN }}

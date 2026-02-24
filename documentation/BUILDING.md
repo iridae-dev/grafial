@@ -8,6 +8,14 @@ This document describes how to build and install the Grafial engine and CLI tool
 - **Cargo**: Included with Rust installation
 - **Nix** (optional): For development environment with pinned toolchains (see `shell.nix`)
 
+## Install from Releases
+
+Pre-built binaries and Python wheels are available on [GitHub Releases](https://github.com/iridae-dev/grafial/releases). No Rust toolchain required.
+
+- **CLI:** Download `grafial-<version>-<platform>.tar.gz` (or `.zip` on Windows), extract, and add the binary to your PATH.
+- **Python:** Download the wheel for your platform and run `pip install grafial-*.whl`, or use `pip install grafial` once published to PyPI.
+- **LSP:** Download `grafial-lsp-<version>-<platform>.*` for VS Code extension support.
+
 ## Building the Workspace
 
 Grafial is organized as a Cargo workspace with multiple crates. Build all crates:

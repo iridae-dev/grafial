@@ -47,6 +47,10 @@ Use imperative, scoped messages where possible, for example:
 - `feat(engine): add metric registry`
 - `fix(frontend): reject invalid prob() targets`
 
+## Releasing
+
+Push a tag `v*` (e.g. `v0.1.0`) to trigger the release workflow. It builds CLI, LSP, and Python wheels, creates a GitHub Release, and attaches all artifacts. To publish to PyPI automatically, add `PYPI_API_TOKEN` (a PyPI API token from [pypi.org/manage/account/token](https://pypi.org/manage/account/token/)) to the repo's GitHub secrets.
+
 ## Reporting Bugs
 
 Open a GitHub issue with:

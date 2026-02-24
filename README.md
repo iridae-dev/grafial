@@ -7,6 +7,14 @@ be updated as new evidence arrives.
 This repository is a monorepo containing the language frontend, IR, execution engine,
 CLI, Python bindings, tests, and benchmarks.
 
+## Install
+
+**CLI:** Download the latest `grafial-<version>-<platform>.tar.gz` (or `.zip` on Windows) from [Releases](https://github.com/iridae-dev/grafial/releases), extract, and add the binary to your PATH.
+
+**Python:** `pip install grafial` (after publishing to PyPI) or download the wheel from [Releases](https://github.com/iridae-dev/grafial/releases) and run `pip install grafial-*.whl`.
+
+**VS Code:** Install the Grafial extension from `crates/grafial-vscode`; download `grafial-lsp` from [Releases](https://github.com/iridae-dev/grafial/releases) or build with `cargo build -p grafial-lsp --release`.
+
 ## What Grafial Gives You
 
 - A declarative DSL for probabilistic graph programs.
@@ -33,7 +41,7 @@ Common flow transforms:
 - `prune_edges EdgeType where prob(edge) < threshold` (or `weight(edge)` predicates for weighted edges)
 - `snapshot "name"`
 
-## Quick Start
+## Quick Start (build from source)
 
 Prerequisites:
 
