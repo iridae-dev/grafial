@@ -49,7 +49,7 @@ Use imperative, scoped messages where possible, for example:
 
 ## Releasing
 
-Push a tag `v*` (e.g. `v0.1.0`) to trigger the release workflow. It builds CLI, LSP, and Python wheels, creates a GitHub Release, and attaches all artifacts. To publish to PyPI automatically, add `PYPI_API_TOKEN` (a PyPI API token from [pypi.org/manage/account/token](https://pypi.org/manage/account/token/)) to the repo's GitHub secrets.
+Push a tag `v*` (e.g. `v0.1.0`) to trigger the release workflow. It builds CLI, LSP, and Python wheels, creates a GitHub Release, and attaches all artifacts. To publish to PyPI automatically, set repository variable `PUBLISH_TO_PYPI` to `true` and add secret `PYPI_API_TOKEN` (from [pypi.org/manage/account/token](https://pypi.org/manage/account/token/)).
 
 ## Reporting Bugs
 
