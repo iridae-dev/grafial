@@ -1,4 +1,4 @@
-name: Phase 6 Release Gate
+name: All Tests
 
 on:
   pull_request:
