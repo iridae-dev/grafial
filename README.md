@@ -7,6 +7,9 @@ be updated as new evidence arrives.
 This repository is a monorepo containing the language frontend, IR, execution engine,
 CLI, Python bindings, tests, and benchmarks.
 
+[![Release](https://github.com/iridae-dev/grafial/actions/workflows/release.yml/badge.svg)](https://github.com/iridae-dev/grafial/actions/workflows/release.yml)
+
+
 ## Install
 
 **CLI:** Download the latest `grafial-<version>-<platform>.tar.gz` (or `.zip` on Windows) from [Releases](https://github.com/iridae-dev/grafial/releases), extract, and add the binary to your PATH.
