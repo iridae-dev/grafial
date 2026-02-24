@@ -120,6 +120,8 @@ jobs:
 
   build-wheels:
     needs: set-version
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
