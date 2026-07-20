@@ -2,6 +2,9 @@
 //!
 //! Phase 1 scaffold: expose `compile()` and `Program` wrapper.
 
+// PyO3 0.22 + recent clippy falsely flags `PyResult<T>` return types as useless_conversion.
+#![allow(clippy::useless_conversion)]
+
 use std::sync::Arc;
 
 use grafial_core::ExecError;
