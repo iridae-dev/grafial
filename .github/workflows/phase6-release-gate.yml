@@ -36,6 +36,26 @@ jobs:
           cargo test -p grafial-core --features "parallel vectorized"
           cargo test -p grafial-tests --features parallel
 
+  wasm-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with wasm target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo builds
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run grafial-wasm native API tests
+        run: cargo test -p grafial-wasm
+
+      - name: Build grafial-wasm for wasm32
+        run: cargo build -p grafial-wasm --target wasm32-unknown-unknown --release
+
   python-bindings-tests:
     runs-on: ubuntu-latest
     steps:

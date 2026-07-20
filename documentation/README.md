@@ -5,7 +5,9 @@ This folder contains contributor and user-facing documentation for Grafial.
 ## Documents
 
 - `documentation/BUILDING.md`
-  - Build/install instructions for workspace crates, CLI usage, tests, and Python bindings.
+  - Build/install instructions for workspace crates, CLI usage, tests, Python bindings, and the WebAssembly package.
+- `crates/grafial-wasm/README.md`
+  - Browser/WebAssembly JSON API for parsing, inspecting, and executing Grafial programs (foundation for visual tooling).
 - `documentation/LANGUAGE_GUIDE.md`
   - DSL syntax, semantics, canonical style, and examples.
 - `documentation/ENGINE_ARCHITECTURE.md`

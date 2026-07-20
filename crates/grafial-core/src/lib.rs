@@ -9,8 +9,9 @@ pub mod storage;
 // Re-export commonly used types
 pub use engine::errors::ExecError;
 pub use engine::flow_exec::{
-    run_flow, run_flow_ir, run_flow_ir_with_backend, CraneliftJitExecutionBackend,
-    InterpreterExecutionBackend, IrExecutionBackend, JitConfig, JitProfile,
+    flow_needs_prior, run_flow, run_flow_ir, run_flow_ir_with_backend, run_flow_with_dependencies,
+    CraneliftJitExecutionBackend, InterpreterExecutionBackend, IrExecutionBackend, JitConfig,
+    JitProfile,
 };
 pub use engine::graph::BeliefGraph;
 pub use grafial_ir::ProgramIR;

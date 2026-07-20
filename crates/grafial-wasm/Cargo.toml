@@ -1,0 +1,19 @@
+[package]
+name = "grafial-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "WebAssembly bindings for Grafial: parse, inspect, and execute programs in the browser"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+grafial-core = { path = "../grafial-core", features = ["serde"] }
+grafial-frontend = { path = "../grafial-frontend" }
+serde_json.workspace = true
+wasm-bindgen.workspace = true
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O2"]

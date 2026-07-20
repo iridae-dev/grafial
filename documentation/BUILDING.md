@@ -165,6 +165,31 @@ Run performance benchmarks:
 cargo bench -p grafial-benches
 ```
 
+## Building for WebAssembly
+
+The `grafial-wasm` crate compiles the frontend and interpreter engine to
+WebAssembly for browser use (parsing, validation, linting, program-structure
+introspection, and flow execution — see `crates/grafial-wasm/README.md` for
+the JSON API).
+
+```bash
+# One-time setup
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack
+
+# Build the browser package (output: crates/grafial-wasm/pkg/)
+./scripts/build_wasm.sh            # ES module for browsers
+./scripts/build_wasm.sh bundler    # for webpack/vite
+./scripts/build_wasm.sh nodejs     # CommonJS for Node
+
+# Sanity checks without wasm-pack
+cargo test -p grafial-wasm                                       # native API tests
+cargo build -p grafial-wasm --target wasm32-unknown-unknown      # wasm compile
+```
+
+Native-only engine features (`jit`, `aot`, `parallel`) are not available on
+wasm; the wasm build uses the default interpreter path.
+
 ## Development Environment
 
 ### Using Nix (Recommended)

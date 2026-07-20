@@ -350,6 +350,43 @@ pub fn run_flow(
     run_flow_ir(&lowered, flow_name, prior)
 }
 
+/// True if the flow consumes outputs of earlier flows (`from_graph` or `import_metric`).
+pub fn flow_needs_prior(flow: &grafial_frontend::ast::FlowDef) -> bool {
+    !flow.metric_imports.is_empty()
+        || flow
+            .graphs
+            .iter()
+            .any(|g| matches!(g.expr, grafial_frontend::ast::GraphExpr::FromGraph { .. }))
+}
+
+/// Executes a flow, first executing any preceding flows in program order when
+/// the target flow imports graphs or metrics from prior flow results.
+///
+/// Flows in a program run top-to-bottom, each seeing the accumulated
+/// exports/snapshots/metric-exports of its predecessors. This helper mirrors
+/// those semantics for callers that request a single flow by name (CLI, wasm).
+pub fn run_flow_with_dependencies(
+    program: &ProgramAst,
+    flow_name: &str,
+) -> Result<FlowResult, ExecError> {
+    let target_idx = program
+        .flows
+        .iter()
+        .position(|f| f.name == flow_name)
+        .ok_or_else(|| ExecError::Internal(format!("unknown flow '{}'", flow_name)))?;
+
+    if !flow_needs_prior(&program.flows[target_idx]) {
+        return run_flow(program, flow_name, None);
+    }
+
+    let mut prior: Option<FlowResult> = None;
+    for flow in &program.flows[..target_idx] {
+        let result = run_flow(program, &flow.name, prior.as_ref())?;
+        prior = Some(result);
+    }
+    run_flow(program, flow_name, prior.as_ref())
+}
+
 /// Runs a named flow from lowered IR.
 pub fn run_flow_ir(
     program: &ProgramIR,

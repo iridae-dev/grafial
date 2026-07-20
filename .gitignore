@@ -45,3 +45,6 @@ tmp/
 
 # Claude/editor sessions
 .claude/
+
+# wasm-pack output
+crates/grafial-wasm/pkg/

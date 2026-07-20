@@ -8,6 +8,7 @@ members = [
     "crates/grafial-tests",
     "crates/grafial-benches",
     "crates/grafial-lsp",
+    "crates/grafial-wasm",
 ]
 resolver = "2"
 
@@ -37,6 +38,7 @@ crossbeam-channel = "0.5"
 parking_lot = "0.12"
 num_cpus = "1"
 pyo3 = "0.21"
+wasm-bindgen = "0.2"
 cranelift-codegen = "0.125"
 cranelift-frontend = "0.125"
 cranelift-jit = "0.125"

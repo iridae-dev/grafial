@@ -7,8 +7,8 @@
 
 use clap::Parser;
 use grafial_core::engine::flow_exec::FlowResult;
-use grafial_core::{parse_and_validate, run_flow, ExecError};
-use grafial_frontend::ast::{FlowDef, GraphExpr, ProgramAst};
+use grafial_core::{flow_needs_prior, parse_and_validate, run_flow, ExecError};
+use grafial_frontend::ast::ProgramAst;
 use grafial_frontend::{
     collect_lint_suppressions, format_canonical_style, lint_canonical_style, lint_is_suppressed,
     CanonicalStyleLint,
@@ -142,20 +142,11 @@ fn main() {
     }
 }
 
-/// True if the flow consumes outputs of earlier flows (`from_graph` or `import_metric`).
-fn flow_needs_prior(flow: &FlowDef) -> bool {
-    !flow.metric_imports.is_empty()
-        || flow
-            .graphs
-            .iter()
-            .any(|g| matches!(g.expr, GraphExpr::FromGraph { .. }))
-}
-
 /// Execute a flow, first executing any preceding flows in program order when the
 /// target flow imports graphs or metrics from prior flow results.
 ///
-/// This mirrors the language semantics used by the release gate: flows in a program
-/// run top-to-bottom, each seeing the accumulated exports/snapshots of its predecessors.
+/// Same semantics as `grafial_core::run_flow_with_dependencies`, but reports
+/// prerequisite-flow progress on stderr.
 fn run_flow_with_dependencies(
     program: &ProgramAst,
     flow_name: &str,
