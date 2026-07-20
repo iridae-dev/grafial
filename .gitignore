@@ -48,3 +48,6 @@ tmp/
 
 # wasm-pack output
 crates/grafial-wasm/pkg/
+
+# Python virtualenvs
+.venv/

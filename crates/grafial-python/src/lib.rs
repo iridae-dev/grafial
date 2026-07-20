@@ -382,6 +382,13 @@ impl PyNodeView {
         self.node_id.to_string()
     }
 
+    /// Human-readable instance name from evidence (e.g. "Alice"), if set.
+    #[getter]
+    pub fn name(&self) -> Option<String> {
+        let nid = grafial_core::engine::graph::NodeId(self.node_id);
+        self.graph.node_name(nid).map(str::to_string)
+    }
+
     /// Expected value of attribute.
     #[allow(non_snake_case)]
     pub fn E(&self, attr: &str) -> PyResult<f64> {
@@ -436,6 +443,20 @@ impl PyEdgeView {
     #[getter]
     pub fn dst(&self) -> String {
         self.dst.to_string()
+    }
+
+    /// Instance name of the source node from evidence (e.g. "Alice"), if set.
+    #[getter]
+    pub fn src_name(&self) -> Option<String> {
+        let nid = grafial_core::engine::graph::NodeId(self.src);
+        self.graph.node_name(nid).map(str::to_string)
+    }
+
+    /// Instance name of the destination node from evidence, if set.
+    #[getter]
+    pub fn dst_name(&self) -> Option<String> {
+        let nid = grafial_core::engine::graph::NodeId(self.dst);
+        self.graph.node_name(nid).map(str::to_string)
     }
 
     #[getter]

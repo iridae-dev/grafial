@@ -299,3 +299,58 @@ fn build_graph_from_evidence_initializes_fixed_attr_correlations() {
     let node_id = graph.nodes()[0].id;
     assert_eq!(graph.attr_correlation(node_id, "x", "y").unwrap(), 0.35);
 }
+
+#[test]
+fn node_instance_names_are_retained_and_survive_transforms() {
+    // Evidence instance names ("Alice") must be queryable on the built graph
+    // and survive rule application and edge pruning (graph rebuilds).
+    let source = r#"
+schema Social {
+  node Person { score: Real }
+  edge REL { }
+}
+
+belief_model SocialBeliefs on Social {
+  node Person { score ~ Gaussian(mean=0.0, precision=1.0) }
+  edge REL { exist ~ Bernoulli(prior=0.5, weight=2.0) }
+}
+
+evidence Ev on SocialBeliefs {
+  Person { "Alice" { score: 1.0 }, "Bob" { score: 2.0 }, "Carol" { score: 3.0 } }
+  REL(Person -> Person) { "Alice" -> "Bob"; "Bob" -/> "Carol" }
+}
+
+rule Boost on SocialBeliefs {
+  for (P:Person) where E[P.score] < 2.0 => {
+    non_bayesian_nudge P.score to E[P.score] + 1.0 variance=preserve
+  }
+}
+
+flow Demo on SocialBeliefs {
+  graph base = from_evidence Ev
+  graph boosted = base |> apply_rule Boost
+  graph pruned = boosted |> prune_edges REL where prob(edge) < 0.5
+  export pruned as "out"
+}
+"#;
+
+    let program = grafial_core::parse_and_validate(source).expect("parse");
+    let result = grafial_core::run_flow(&program, "Demo", None).expect("run");
+
+    let graph = result.exports.get("out").expect("export 'out'");
+    let mut names: Vec<Option<&str>> = graph
+        .nodes()
+        .iter()
+        .map(|n| graph.node_name(n.id))
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![Some("Alice"), Some("Bob"), Some("Carol")],
+        "instance names must survive apply_rule and prune_edges"
+    );
+
+    // The prune rebuilt the graph: Bob-/>Carol (P = 1/3) was removed, the
+    // Alice->Bob edge (P = 2/3) kept — and names still resolve.
+    assert_eq!(graph.edges().len(), 1);
+}

@@ -76,6 +76,8 @@ def test_node_and_edge_views_cover_exposed_methods():
     node = nodes[0]
     assert isinstance(node.id, str)
     assert node.label == "Entity"
+    assert node.name in ("A", "B")
+    assert sorted(n.name for n in nodes) == ["A", "B"]
     assert node.has_attr("value")
     assert isinstance(node.E("value"), float)
     assert isinstance(node.Var("value"), float)
@@ -91,6 +93,8 @@ def test_node_and_edge_views_cover_exposed_methods():
     edge = edges[0]
     assert isinstance(edge.src, str)
     assert isinstance(edge.dst, str)
+    assert edge.src_name == "A"
+    assert edge.dst_name == "B"
     assert edge.type == "CONNECTED"
     assert edge.is_independent()
     assert not edge.is_competing()

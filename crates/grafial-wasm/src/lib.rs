@@ -281,6 +281,7 @@ pub mod api {
                 json!({
                     "id": n.id.0,
                     "label": n.label.as_ref(),
+                    "name": graph.node_name(n.id),
                     "attrs": attrs,
                 })
             })
@@ -497,6 +498,16 @@ flow Second on SocialBeliefs {
         // with existence probability 2/3 (Beta(1,1) + one present observation).
         let graph = &value["exports"]["second_graph"];
         assert_eq!(graph["nodes"].as_array().unwrap().len(), 2);
+
+        // Evidence instance names are exposed for UI labeling.
+        let mut names: Vec<&str> = graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["name"].as_str().unwrap())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["Alice", "Bob"]);
         let edge = &graph["edges"][0];
         let prob = edge["prob"].as_f64().unwrap();
         assert!((prob - 2.0 / 3.0).abs() < 1e-9, "prob = {}", prob);

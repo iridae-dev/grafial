@@ -948,6 +948,12 @@ pub(crate) struct BeliefGraphInner {
     ///
     /// Keys are `(node_id, "attr_a|attr_b")` with lexicographically normalized pair order.
     pub(crate) node_attr_correlations: FxHashMap<(NodeId, String), f64>,
+    /// Human-readable instance names for nodes (e.g. evidence labels like "Alice").
+    ///
+    /// Cold metadata for tooling and bindings; not used by inference. Nodes
+    /// created without a name (e.g. via `add_node`) have no entry.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) node_names: FxHashMap<NodeId, String>,
     /// Optional Gaussian posteriors for continuous edge weights.
     ///
     /// Keys are edge IDs. Missing entry means the edge type does not model weight.
@@ -1166,6 +1172,7 @@ impl BeliefGraphInner {
             edges: Vec::new(),
             competing_groups: FxHashMap::default(),
             node_attr_correlations: FxHashMap::default(),
+            node_names: FxHashMap::default(),
             edge_weight_posteriors: FxHashMap::default(),
             node_index: FxHashMap::default(),
             edge_index: FxHashMap::default(),
@@ -1719,6 +1726,26 @@ impl BeliefGraph {
         id
     }
 
+    /// Returns the human-readable instance name for a node, if one was set
+    /// (e.g. the evidence label `"Alice"`). This is tooling metadata; nodes
+    /// created without a name return `None`.
+    pub fn node_name(&self, id: NodeId) -> Option<&str> {
+        self.inner.node_names.get(&id).map(String::as_str)
+    }
+
+    /// Sets the human-readable instance name for a node.
+    ///
+    /// Names are cold metadata stored on the shared base graph (not the
+    /// copy-on-write delta), so this commits pending deltas first. Intended
+    /// for graph construction time (evidence building); calling it on a
+    /// widely shared graph clones the base.
+    pub fn set_node_name(&mut self, id: NodeId, name: String) {
+        self.ensure_owned();
+        let inner =
+            Arc::get_mut(&mut self.inner).expect("ensure_owned guarantees exclusive ownership");
+        inner.node_names.insert(id, name);
+    }
+
     /// Add an independent edge and update the index. Returns the EdgeId.
     pub fn add_edge(
         &mut self,
@@ -1831,6 +1858,7 @@ impl BeliefGraph {
         rebuilt.ensure_owned();
         if !self.inner.node_attr_correlations.is_empty()
             || !self.inner.edge_weight_posteriors.is_empty()
+            || !self.inner.node_names.is_empty()
         {
             let rebuilt_inner =
                 Arc::get_mut(&mut rebuilt.inner).expect("ensure_owned guarantees ownership");
@@ -1840,6 +1868,13 @@ impl BeliefGraph {
                         rebuilt_inner
                             .node_attr_correlations
                             .insert((*node_id, pair_key.clone()), *rho);
+                    }
+                }
+            }
+            if !self.inner.node_names.is_empty() {
+                for (node_id, name) in &self.inner.node_names {
+                    if node_ids.contains(node_id) {
+                        rebuilt_inner.node_names.insert(*node_id, name.clone());
                     }
                 }
             }

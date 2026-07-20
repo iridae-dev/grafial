@@ -709,8 +709,10 @@ fn create_node_if_needed(
         attrs.insert(attr_def.name.clone(), posterior);
     }
 
-    // Create node
+    // Create node, retaining the evidence instance name (e.g. "Alice") as
+    // tooling metadata.
     let node_id = graph.add_node(node_type.to_string(), attrs);
+    graph.set_node_name(node_id, label.to_string());
     node_map.insert((node_type.to_string(), label.to_string()), node_id);
     for ((left_attr, right_attr), rho) in fixed_correlations {
         graph.set_attr_correlation(node_id, &left_attr, &right_attr, rho)?;

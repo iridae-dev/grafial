@@ -61,8 +61,9 @@ Returns:
 
 - `metrics`, `metric_exports`: scalar values
 - `graphs`, `exports`, `snapshots`: every belief graph fully serialized —
-  nodes (`id`, `label`, posterior `attrs` with `mean`/`variance`) and edges
-  (`id`, `src`, `dst`, `type`, existence `prob`)
+  nodes (`id`, type `label`, evidence instance `name` like `"Alice"` or null,
+  posterior `attrs` with `mean`/`variance`) and edges (`id`, `src`, `dst`,
+  `type`, existence `prob`)
 - `intervention_audit`: which rules fired, match and action counts
 - `inference_diagnostics`: belief-propagation convergence data
 
@@ -88,10 +89,9 @@ Returns:
 
 - The engine's JIT (`jit`/`aot`, Cranelift) and `parallel` features are
   native-only; this crate uses the interpreter path, which is the default.
-- Belief graphs identify nodes by numeric `id` and type `label`. The instance
-  names used in evidence (`"Alice"`) are not currently retained by the engine
-  (the Python bindings share this limitation) — a visual UI will need engine
-  support for instance names to label nodes meaningfully. Planned follow-up.
+- Node `name` is the evidence instance label (`"Alice"`); nodes created by
+  other means (e.g. programmatic construction) have `name: null`, so fall
+  back to `label #id` when rendering.
 - The pure-Rust API lives in `grafial_wasm::api` and returns
   `serde_json::Value`; it is unit-tested natively (`cargo test -p
   grafial-wasm`), so CI does not need a browser.
