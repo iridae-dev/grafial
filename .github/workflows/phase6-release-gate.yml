@@ -23,7 +23,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo builds
-        uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Assert workspace versions agree
         run: ./scripts/assert_versions.sh
@@ -63,7 +63,7 @@ jobs:
           toolchain: "1.83"
 
       - name: Cache cargo builds
-        uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Build and test on MSRV
         run: |
@@ -81,7 +81,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo builds
-        uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Run grafial-wasm native API tests
         run: cargo test -p grafial-wasm
@@ -118,7 +118,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Cache cargo builds
-        uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Build Python extension and run pytest
         working-directory: crates/grafial-python
