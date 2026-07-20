@@ -318,7 +318,8 @@ export function genFlow(doc) {
   }
   for (const m of doc.metrics ?? []) {
     if (!m.expr || !m.expr.trim()) throw new Error(`metric ${m.name}: expression required`);
-    lines.push(`  metric ${ident(m.name, 'metric')} = ${m.expr.trim()}`);
+    const on = m.on_graph ? ` on ${ident(m.on_graph, 'graph')}` : '';
+    lines.push(`  metric ${ident(m.name, 'metric')}${on} = ${m.expr.trim()}`);
   }
   for (const e of doc.exports ?? []) {
     lines.push(`  export ${ident(e.graph, 'graph')} as ${JSON.stringify(e.alias)}`);

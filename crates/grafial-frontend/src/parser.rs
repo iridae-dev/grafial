@@ -1958,24 +1958,28 @@ fn build_select_model_expr(pair: pest::iterators::Pair<Rule>) -> Result<GraphExp
 }
 
 fn build_metric_stmt(pair: pest::iterators::Pair<Rule>) -> Result<MetricDef, FrontendError> {
-    let mut it = pair.into_inner();
-    let name = it
-        .find(|p| p.as_rule() == Rule::ident)
-        .ok_or_else(|| FrontendError::ParseError("Missing metric name".to_string()))?
-        .as_str()
-        .to_string();
-    // Accept either expr or metric_builder_expr
+    let mut idents: Vec<String> = Vec::new();
     let mut expr_opt: Option<ExprAst> = None;
-    for p in it {
+    for p in pair.into_inner() {
         match p.as_rule() {
+            Rule::ident => idents.push(p.as_str().to_string()),
             Rule::expr => expr_opt = Some(build_expr(p)),
             Rule::metric_builder_expr => expr_opt = Some(build_metric_builder_expr(p)?),
             _ => {}
         }
     }
+    let name = idents
+        .first()
+        .cloned()
+        .ok_or_else(|| FrontendError::ParseError("Missing metric name".to_string()))?;
+    let on_graph = idents.get(1).cloned();
     let expr = expr_opt
         .ok_or_else(|| FrontendError::ParseError("Missing metric expression".to_string()))?;
-    Ok(MetricDef { name, expr })
+    Ok(MetricDef {
+        name,
+        on_graph,
+        expr,
+    })
 }
 
 /// Desugars a metric builder pipeline into existing metric calls.

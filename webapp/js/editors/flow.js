@@ -110,19 +110,24 @@ export function renderFlowEditor(body, name, ctx) {
     });
     if (doc.metrics.length === 0) return;
     const table = el(metricsHost, 'table', 'sheet');
-    table.innerHTML = '<tr><th>Name</th><th>Expression</th><th></th></tr>';
+    table.innerHTML = '<tr><th>Name</th><th>On graph</th><th>Expression</th><th></th></tr>';
     for (const m of doc.metrics) {
       const tr = el(table, 'tr');
       const nameIn = inputCell(tr, m.name);
+      const graphIn = comboCell(tr, ['', ...graphNames()], m.on_graph ?? '');
       const exprIn = inputCell(tr, m.expr);
-      readers.push(() => { m.name = nameIn.value.trim(); m.expr = exprIn.value; });
+      readers.push(() => {
+        m.name = nameIn.value.trim();
+        m.on_graph = graphIn.value.trim() || null;
+        m.expr = exprIn.value;
+      });
       rowButton(el(tr, 'td', 'row-actions'), '✕', () => {
         doc.metrics = doc.metrics.filter((x) => x !== m);
         renderMetrics();
       });
     }
     el(metricsHost, 'div', 'hint').textContent =
-      'Metrics are evaluated against the LAST graph defined above. Note: avg() over an empty set is a runtime error — guard with an epsilon.';
+      'Prefer `metric m on <graph> = ...`. Without an explicit target, metrics evaluate against the LAST graph. Note: avg() over an empty set is a runtime error — guard with an epsilon.';
   };
   renderMetrics();
 

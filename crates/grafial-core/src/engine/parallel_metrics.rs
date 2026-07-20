@@ -273,14 +273,17 @@ mod tests {
         let metrics = vec![
             MetricDefIR {
                 name: "m1".to_string(),
+                on_graph: None,
                 expr: ExprIR::Number(1.0),
             },
             MetricDefIR {
                 name: "m2".to_string(),
+                on_graph: None,
                 expr: ExprIR::Number(2.0),
             },
             MetricDefIR {
                 name: "m3".to_string(),
+                on_graph: None,
                 expr: ExprIR::Var("metric_m1".to_string()), // Depends on m1 via metric_ prefix
             },
         ];
@@ -301,10 +304,12 @@ mod tests {
         let metrics = vec![
             MetricDefIR {
                 name: "m1".to_string(),
+                on_graph: None,
                 expr: ExprIR::Var("metric_m2".to_string()), // m1 depends on m2
             },
             MetricDefIR {
                 name: "m2".to_string(),
+                on_graph: None,
                 expr: ExprIR::Var("metric_m1".to_string()), // m2 depends on m1 - circular!
             },
         ];

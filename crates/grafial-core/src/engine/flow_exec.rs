@@ -1463,8 +1463,7 @@ fn apply_transform<E: FlowExprEvaluator>(
                 let r = ctx.rules_by_name.get(rule_name).ok_or_else(|| {
                     ExecError::Internal(format!("unknown rule '{}' in ruleset", rule_name))
                 })?;
-                let (next, audit) =
-                    run_rule_with_globals_audit(&current, r, ctx.rule_globals)?;
+                let (next, audit) = run_rule_with_globals_audit(&current, r, ctx.rule_globals)?;
                 ctx.result.intervention_audit.push(InterventionAuditEvent {
                     flow: ctx.flow_name.to_string(),
                     graph: ctx.graph_name.to_string(),
@@ -1518,7 +1517,10 @@ fn apply_transform<E: FlowExprEvaluator>(
     }
 }
 
-/// Evaluates metrics against the last defined graph.
+/// Evaluates metrics against their bound graphs.
+///
+/// Each metric may declare an explicit target with `metric m on g = ...`.
+/// Metrics without an explicit target evaluate against the last defined graph.
 ///
 /// Metrics are evaluated in dependency order (earlier metrics are available to later ones).
 /// Imported metrics from prior flows are available to all metric expressions.
@@ -1538,10 +1540,6 @@ fn evaluate_metrics<E: FlowExprEvaluator>(
         .ok_or_else(|| ExecError::Internal("no graphs defined for metric evaluation".into()))?
         .name
         .as_str();
-    let target_graph = result
-        .graphs
-        .get(last_graph_name)
-        .ok_or_else(|| ExecError::Internal("metric target graph missing".into()))?;
 
     // Sequential metric evaluation.
     let registry = MetricRegistry::with_builtins();
@@ -1566,6 +1564,14 @@ fn evaluate_metrics<E: FlowExprEvaluator>(
                 continue;
             }
         }
+
+        let target_name = m.on_graph.as_deref().unwrap_or(last_graph_name);
+        let target_graph = result.graphs.get(target_name).ok_or_else(|| {
+            ExecError::Internal(format!(
+                "metric '{}' target graph '{}' missing",
+                m.name, target_name
+            ))
+        })?;
 
         let v = expr_evaluator.eval_metric_expr(
             &flow.name,
@@ -2316,10 +2322,12 @@ mod tests {
             metrics: vec![
                 grafial_ir::MetricDefIR {
                     name: "m1".into(),
+                    on_graph: None,
                     expr: ExprIR::Number(1.0),
                 },
                 grafial_ir::MetricDefIR {
                     name: "m2".into(),
+                    on_graph: None,
                     expr: ExprIR::Binary {
                         op: grafial_ir::BinaryOpIR::Add,
                         left: Box::new(ExprIR::Var("m1".into())),
@@ -2328,6 +2336,7 @@ mod tests {
                 },
                 grafial_ir::MetricDefIR {
                     name: "m3".into(),
+                    on_graph: None,
                     expr: ExprIR::Number(999.0),
                 },
             ],
@@ -2421,10 +2430,12 @@ mod tests {
                 metrics: vec![
                     grafial_ir::MetricDefIR {
                         name: "m1".into(),
+                        on_graph: None,
                         expr: ExprIR::Number(1.0),
                     },
                     grafial_ir::MetricDefIR {
                         name: "m2".into(),
+                        on_graph: None,
                         expr: ExprIR::Binary {
                             op: grafial_ir::BinaryOpIR::Add,
                             left: Box::new(ExprIR::Var("m1".into())),
@@ -2433,6 +2444,7 @@ mod tests {
                     },
                     grafial_ir::MetricDefIR {
                         name: "m3".into(),
+                        on_graph: None,
                         expr: ExprIR::Call {
                             name: "avg_degree".into(),
                             args: vec![

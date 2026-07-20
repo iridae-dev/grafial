@@ -142,6 +142,8 @@ impl GraphDefIR {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricDefIR {
     pub name: String,
+    /// Optional explicit graph target. When absent, evaluate against the last graph.
+    pub on_graph: Option<String>,
     pub expr: ExprIR,
 }
 
@@ -150,6 +152,7 @@ impl MetricDefIR {
     pub fn to_ast(&self) -> MetricDef {
         MetricDef {
             name: self.name.clone(),
+            on_graph: self.on_graph.clone(),
             expr: self.expr.to_ast(),
         }
     }
@@ -299,6 +302,7 @@ impl From<&FlowDef> for FlowIR {
                 .iter()
                 .map(|m| MetricDefIR {
                     name: m.name.clone(),
+                    on_graph: m.on_graph.clone(),
                     expr: ExprIR::from(&m.expr),
                 })
                 .collect(),
@@ -465,6 +469,7 @@ mod tests {
             }],
             metrics: vec![MetricDef {
                 name: "score".into(),
+                on_graph: None,
                 expr: ExprAst::Call {
                     name: "mean".into(),
                     args: vec![
@@ -518,6 +523,7 @@ mod tests {
             }],
             metrics: vec![MetricDef {
                 name: "m".into(),
+                on_graph: None,
                 expr: ExprAst::Bool(true),
             }],
             exports: vec![ExportDef {

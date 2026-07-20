@@ -1553,6 +1553,18 @@ fn validate_flow_inner(
             flow: flow.name.clone(),
             metric: m.name.clone(),
         };
+        if let Some(graph_name) = &m.on_graph {
+            if !all_graph_names.contains(graph_name.as_str()) {
+                return Err(validation_error(
+                    format!(
+                        "flow '{}' metric '{}' references unknown graph '{}'",
+                        flow.name, m.name, graph_name
+                    ),
+                    Some(&ctx),
+                    range,
+                ));
+            }
+        }
         validate_metric_shape(&m.expr, Some(&ctx), range)?;
         validate_metric_expr_scoped(
             &m.expr,
@@ -3005,6 +3017,7 @@ mod tests {
                 graphs: vec![],
                 metrics: vec![MetricDef {
                     name: "m".into(),
+                    on_graph: None,
                     expr: ExprAst::Call {
                         name: "sum_nodes".into(),
                         args: vec![], // missing required args
@@ -3082,7 +3095,6 @@ rule R on M {
         assert!(err.to_string().contains("mode"));
     }
 
-    #[test]
     #[test]
     fn validate_belief_model_rejects_non_positive_gaussian_prior_precision() {
         let src = r#"

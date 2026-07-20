@@ -366,6 +366,9 @@ pub enum Transform {
 pub struct MetricDef {
     /// The metric variable name
     pub name: String,
+    /// Optional explicit graph target (`metric m on g = ...`).
+    /// When absent, the metric evaluates against the last graph in the flow.
+    pub on_graph: Option<String>,
     /// The metric expression to evaluate
     pub expr: ExprAst,
 }

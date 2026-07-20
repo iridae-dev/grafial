@@ -413,6 +413,7 @@ mod tests {
             metrics: vec![
                 MetricDefIR {
                     name: "m1".into(),
+                    on_graph: None,
                     expr: ExprIR::Binary {
                         op: BinaryOpIR::Add,
                         left: Box::new(ExprIR::Number(2.0)),
@@ -421,6 +422,7 @@ mod tests {
                 },
                 MetricDefIR {
                     name: "m2".into(),
+                    on_graph: None,
                     expr: ExprIR::Binary {
                         op: BinaryOpIR::Mul,
                         left: Box::new(ExprIR::Var("m1".into())),

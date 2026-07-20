@@ -30,6 +30,8 @@ pub const LINT_STAT_CIRCULAR_UPDATE: &str = "stat_circular_update";
 pub const LINT_STAT_DELETE_EXPLANATION: &str = "stat_delete_explanation";
 /// Stable lint code: explanatory suppress diagnostic.
 pub const LINT_STAT_SUPPRESS_EXPLANATION: &str = "stat_suppress_explanation";
+/// Stable lint code: metrics without an explicit graph target in a multi-graph flow.
+pub const LINT_STAT_IMPLICIT_METRIC_GRAPH: &str = "stat_implicit_metric_graph";
 
 /// Lint severity used by frontend statistical lints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -997,6 +999,23 @@ fn emit_flow_lints(
                     format!(
                         "Flow '{}' metric '{}' divides by a very small literal",
                         flow.name, metric.name
+                    ),
+                    metric_range,
+                    LintSeverity::Warning,
+                );
+            }
+            if flow.graphs.len() > 1 && metric.on_graph.is_none() {
+                let last = flow
+                    .graphs
+                    .last()
+                    .map(|g| g.name.as_str())
+                    .unwrap_or("<unknown>");
+                push_lint(
+                    out,
+                    LINT_STAT_IMPLICIT_METRIC_GRAPH,
+                    format!(
+                        "Flow '{}' metric '{}' has no explicit graph target; it will evaluate against the last graph '{}'. Use `metric {} on <graph> = ...` to bind explicitly.",
+                        flow.name, metric.name, last, metric.name
                     ),
                     metric_range,
                     LintSeverity::Warning,

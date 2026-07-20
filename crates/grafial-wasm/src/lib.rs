@@ -249,6 +249,7 @@ pub mod api {
             })).collect::<Vec<_>>(),
             "metrics": flow.metrics.iter().map(|m| json!({
                 "name": m.name,
+                "on_graph": m.on_graph,
                 "expr": expr_to_source(&m.expr),
             })).collect::<Vec<_>>(),
             "exports": flow.exports.iter().map(|e| json!({
@@ -433,6 +434,19 @@ fn to_js(value: &serde_json::Value) -> Result<String, JsError> {
 #[wasm_bindgen]
 pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Build identity for bug reports: package version, optional git commit, wasm crate version.
+#[wasm_bindgen]
+pub fn build_identity() -> String {
+    serde_json::json!({
+        "grafial_version": env!("CARGO_PKG_VERSION"),
+        "wasm_crate_version": env!("CARGO_PKG_VERSION"),
+        "git_commit": option_env!("GRAFIAL_GIT_COMMIT").unwrap_or("unknown"),
+        "git_describe": option_env!("GRAFIAL_GIT_DESCRIBE").unwrap_or("unknown"),
+        "examples_corpus": option_env!("GRAFIAL_EXAMPLES_CORPUS").unwrap_or("crates/grafial-examples"),
+    })
+    .to_string()
 }
 
 /// Parse + validate + lint a program. Returns JSON:
