@@ -184,7 +184,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Build wheel (and sdist once on Linux/3.11)
-        uses: PyO3/maturin-action@aef21716ff3dcae8a1c301d23ec3e4446972a6e3 # v1.49.1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           command: build
           args: --release --out dist ${{ (matrix.os == 'ubuntu-22.04' && matrix.python-version == '3.11') && '--sdist' || '' }}
