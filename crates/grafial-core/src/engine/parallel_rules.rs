@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::engine::errors::ExecError;
 use crate::engine::graph::BeliefGraph;
-use crate::engine::rule_exec::run_rule_for_each_with_globals_audit;
+use crate::engine::rule_exec::run_rule_with_globals_audit;
 use grafial_ir::RuleIR;
 
 /// Result of rule-application execution.
@@ -49,7 +49,7 @@ pub fn apply_rules_parallel(
 
     for rule_ir in rules {
         let rule = rule_ir.to_ast();
-        let (next, audit) = run_rule_for_each_with_globals_audit(&current, &rule, &globals)?;
+        let (next, audit) = run_rule_with_globals_audit(&current, &rule, &globals)?;
         if audit.matched_bindings > 0 {
             matched_rules += 1;
             batch_count += 1;

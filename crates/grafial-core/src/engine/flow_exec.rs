@@ -25,7 +25,7 @@ use crate::engine::expr_eval::{eval_binary_op, eval_unary_op};
 use crate::engine::expr_eval::{eval_expr_core, ExprContext};
 use crate::engine::graph::{BeliefGraph, EdgeId};
 use crate::engine::model_selection::{select_best_graph, EdgeModelCriterion};
-use crate::engine::rule_exec::run_rule_for_each_with_globals_audit;
+use crate::engine::rule_exec::run_rule_with_globals_audit;
 use crate::metrics::{eval_metric_expr, MetricContext, MetricRegistry};
 use grafial_frontend::ast::RuleDef;
 use grafial_frontend::{CallArg, ExprAst, ProgramAst};
@@ -1444,7 +1444,7 @@ fn apply_transform<E: FlowExprEvaluator>(
                 .rules_by_name
                 .get(rule)
                 .ok_or_else(|| ExecError::Internal(format!("unknown rule '{}'", rule)))?;
-            let (next, audit) = run_rule_for_each_with_globals_audit(graph, r, ctx.rule_globals)?;
+            let (next, audit) = run_rule_with_globals_audit(graph, r, ctx.rule_globals)?;
             ctx.result.intervention_audit.push(InterventionAuditEvent {
                 flow: ctx.flow_name.to_string(),
                 graph: ctx.graph_name.to_string(),
@@ -1464,7 +1464,7 @@ fn apply_transform<E: FlowExprEvaluator>(
                     ExecError::Internal(format!("unknown rule '{}' in ruleset", rule_name))
                 })?;
                 let (next, audit) =
-                    run_rule_for_each_with_globals_audit(&current, r, ctx.rule_globals)?;
+                    run_rule_with_globals_audit(&current, r, ctx.rule_globals)?;
                 ctx.result.intervention_audit.push(InterventionAuditEvent {
                     flow: ctx.flow_name.to_string(),
                     graph: ctx.graph_name.to_string(),

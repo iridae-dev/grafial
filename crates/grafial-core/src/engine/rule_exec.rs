@@ -1711,9 +1711,45 @@ pub fn run_rule(
     rule: &RuleDef,
     globals: &HashMap<String, f64>,
 ) -> Result<BeliefGraph, ExecError> {
+    run_rule_with_globals_audit(input, rule, globals).map(|(graph, _)| graph)
+}
+
+/// Mode-aware rule execution with audit metadata for flow transforms.
+///
+/// Honors `mode: for_each` (default) and `mode: fixpoint`.
+pub fn run_rule_with_globals_audit(
+    input: &BeliefGraph,
+    rule: &RuleDef,
+    globals: &HashMap<String, f64>,
+) -> Result<(BeliefGraph, RuleExecutionAudit), ExecError> {
     match rule.mode.as_deref() {
-        Some("fixpoint") => run_rule_fixpoint(input, rule, globals),
-        Some("for_each") | None => run_rule_for_each_with_globals(input, rule, globals),
+        Some("fixpoint") => {
+            let mut current = input.clone();
+            for _iteration in 0..MAX_FIXPOINT_ITERATIONS {
+                let (next, audit) = run_rule_for_each_with_globals_audit(&current, rule, globals)?;
+                let last_audit = RuleExecutionAudit {
+                    rule_name: audit.rule_name,
+                    mode: "fixpoint".into(),
+                    matched_bindings: audit.matched_bindings,
+                    actions_executed: audit.actions_executed,
+                };
+                let max_change = compute_max_change(&current, &next);
+                if max_change < FIXPOINT_TOLERANCE {
+                    return Ok((next, last_audit));
+                }
+                current = next;
+            }
+
+            Err(ExecError::Execution(format!(
+                "Fixpoint rule '{}' did not converge after {} iterations",
+                rule.name, MAX_FIXPOINT_ITERATIONS
+            )))
+        }
+        Some("for_each") | None => {
+            let (graph, mut audit) = run_rule_for_each_with_globals_audit(input, rule, globals)?;
+            audit.mode = "for_each".into();
+            Ok((graph, audit))
+        }
         Some(other) => Err(ExecError::ValidationError(format!(
             "unknown rule mode: '{}' (expected 'for_each' or 'fixpoint')",
             other
