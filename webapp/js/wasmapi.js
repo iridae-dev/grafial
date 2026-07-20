@@ -9,6 +9,14 @@ export async function initWasm() {
   return mod.version();
 }
 
+export function buildIdentity() {
+  try {
+    return JSON.parse(mod.build_identity());
+  } catch {
+    return { grafial_version: mod.version(), git_commit: 'unknown' };
+  }
+}
+
 export function check(source) {
   return JSON.parse(mod.check(source));
 }

@@ -1,6 +1,6 @@
 // Composer bootstrap and wiring.
 
-import { initWasm } from './wasmapi.js';
+import { initWasm, buildIdentity } from './wasmapi.js';
 import { state, subscribe, setSource, undo, redo, loadInitial, select } from './state.js';
 import { starterProgram } from './codegen.js';
 import { renderMap } from './map.js';
@@ -15,14 +15,16 @@ const EXAMPLES = [
 ];
 
 async function main() {
+  let version;
   try {
-    await initWasm();
+    version = await initWasm();
   } catch (err) {
     console.error(err);
     document.getElementById('boot-error').hidden = false;
     return;
   }
 
+  initAbout(version);
   initInspector();
   initTabs();
   initToolbar();
@@ -31,6 +33,21 @@ async function main() {
 
   subscribe((event) => renderAll(event));
   loadInitial(starterProgram());
+}
+
+
+function initAbout(version) {
+  const identity = buildIdentity();
+  const short = `${identity.grafial_version || version} · ${(identity.git_commit || 'unknown').slice(0, 7)}`;
+  const buildEl = document.getElementById('status-build');
+  if (buildEl) buildEl.textContent = short;
+  const dialog = document.getElementById('about-dialog');
+  const pre = document.getElementById('about-identity');
+  const btn = document.getElementById('btn-about');
+  if (pre) pre.textContent = JSON.stringify(identity, null, 2);
+  if (btn && dialog) {
+    btn.addEventListener('click', () => dialog.showModal());
+  }
 }
 
 // --- rendering -----------------------------------------------------------------

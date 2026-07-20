@@ -56,7 +56,19 @@
     <span id="status-lints"></span>
     <span class="spacer"></span>
     <span id="status-hint"></span>
+    <button type="button" id="btn-about" title="Build identity">About</button>
+    <span id="status-build"></span>
   </footer>
+
+  <dialog id="about-dialog">
+    <form method="dialog">
+      <h2>About Grafial Composer</h2>
+      <pre id="about-identity"></pre>
+      <p><a href="https://grafial.iridae.com/" target="_blank" rel="noopener">Hosted Composer</a>
+         · <a href="https://github.com/iridae-dev/grafial" target="_blank" rel="noopener">Source</a></p>
+      <button value="ok">Close</button>
+    </form>
+  </dialog>
 
   <div id="boot-error" hidden>
     <h2>WebAssembly package not found</h2>
