@@ -11,6 +11,11 @@ def test_minimal_flow_exports_graph(tmp_path):
     g = ctx.get_graph("output")
     assert g is not None
 
+    # Computed metrics are visible even without export_metric
+    assert "total" in ctx.metrics
+    assert isinstance(ctx.get_metric("total"), float)
+    assert ctx.get_metric("total") == ctx.metrics["total"]
+
     # Basic iteration works
     nodes = list(g.nodes())
     edges = list(g.edges())

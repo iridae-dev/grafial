@@ -15,6 +15,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$REPO_ROOT/dist/composer}"
+# Keep OUT absolute: wasm-pack runs from crates/grafial-wasm, so a relative
+# path would mkdir under that crate and then fail when copying from repo root.
+case "$OUT" in
+  /*) ;;
+  *) OUT="$REPO_ROOT/$OUT" ;;
+esac
 
 echo "Building wasm package..."
 cd "$REPO_ROOT/crates/grafial-wasm"

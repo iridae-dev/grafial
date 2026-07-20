@@ -113,7 +113,8 @@ fn map_exec_error(err: ExecError) -> PyErr {
 #[pyclass(name = "Context")]
 pub struct PyContext {
     graphs: HashMap<String, Py<PyBeliefGraph>>, // exported graphs
-    metrics: HashMap<String, f64>,              // exported metrics
+    /// Computed flow metrics (plus any `export_metric` aliases).
+    metrics: HashMap<String, f64>,
     inference_diagnostics: Vec<PyInferenceDiagnostic>,
 }
 
@@ -179,7 +180,7 @@ impl PyContext {
         self.graphs.get(name).map(|g| g.clone_ref(py))
     }
 
-    /// Get a single exported metric by name
+    /// Get a single computed (or export-aliased) metric by name
     pub fn get_metric(&self, name: &str) -> Option<f64> {
         self.metrics.get(name).copied()
     }
@@ -212,7 +213,11 @@ impl PyContext {
             )?;
             graphs.insert(alias, handle);
         }
-        let metrics = fr.metric_exports;
+        let mut metrics = fr.metrics;
+        // Cross-flow aliases from `export_metric` overlay computed metric names.
+        for (alias, value) in fr.metric_exports {
+            metrics.insert(alias, value);
+        }
         let inference_diagnostics = fr
             .inference_diagnostics
             .into_iter()

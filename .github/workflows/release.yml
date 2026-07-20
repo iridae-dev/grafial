@@ -211,7 +211,8 @@ jobs:
           src = pathlib.Path("crates/grafial-examples/minimal.grafial").read_text()
           program = grafial.compile(src)
           ctx = grafial.run_flow(program, "MinimalFlow")
-          assert ctx.metrics, "expected metrics from MinimalFlow"
+          assert "total" in ctx.metrics, "expected metric 'total' from MinimalFlow"
+          assert ctx.get_graph("output") is not None, "expected export graph 'output'"
           print("wheel ok", sys.version.split()[0], sorted(ctx.metrics.keys()))
           PY
 
