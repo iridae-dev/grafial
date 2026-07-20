@@ -1,6 +1,6 @@
 # Troubleshooting "Activating..." Issue
 
-Replace `<repo-root>` with the absolute path to your local `baygraph` checkout.
+Replace `<repo-root>` with the absolute path to your local `grafial` checkout.
 
 If the extension is stuck in "Activating..." state:
 

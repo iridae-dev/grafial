@@ -32,11 +32,13 @@ cranelift-object = { workspace = true, optional = true }
 criterion = { workspace = true }
 
 [features]
+# Maturity: supported | experimental | scaffold/baseline only (see README)
 default = []
 tracing = ["dep:tracing"]
 serde = ["dep:serde", "dep:serde_json"]
 bincode = ["dep:bincode", "serde"]
 rayon = ["dep:rayon"]
+# experimental
 jit = [
     "dep:cranelift-codegen",
     "dep:cranelift-frontend",
@@ -45,12 +47,15 @@ jit = [
     "dep:cranelift-native",
     "dep:lazy_static",
 ]
+# supported
 vectorized = []
+# supported
 parallel = [
     "dep:rayon",
     "dep:crossbeam-channel",
     "dep:num_cpus",
 ]
+# experimental
 aot = [
     "dep:cranelift-codegen",
     "dep:cranelift-frontend",
@@ -59,10 +64,13 @@ aot = [
     "dep:cranelift-object",
     "dep:lazy_static",
 ]
+# scaffold/baseline only
 storage-experimental = []
 storage-dense-index = ["storage-experimental"]
 storage-soa = ["storage-experimental"]
+# experimental
 simd-kernels = []
+# scaffold/baseline only
 gpu-kernels = []
 
 [[bench]]

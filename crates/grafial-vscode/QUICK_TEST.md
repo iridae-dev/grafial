@@ -1,6 +1,6 @@
 # Quick Test Guide for Grafial LSP in Cursor
 
-Replace `<repo-root>` with the absolute path to your local `baygraph` checkout.
+Replace `<repo-root>` with the absolute path to your local `grafial` checkout.
 
 ## Method 1: Extension Development Host (Easiest - No Settings Needed)
 

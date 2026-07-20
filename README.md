@@ -13,13 +13,17 @@ tests, and benchmarks.
 
 ## Install
 
+**Try the Composer online:** [https://grafial.iridae.com/](https://grafial.iridae.com/)
+
 **CLI:** Download the latest `grafial-<version>-<platform>.tar.gz` (or `.zip` on Windows) from [Releases](https://github.com/iridae-dev/grafial/releases), extract, and add the binary to your PATH.
 
-**Python:** `pip install grafial` (after publishing to PyPI) or download the wheel from [Releases](https://github.com/iridae-dev/grafial/releases) and run `pip install grafial-*.whl`.
+**Python:** `pip install grafial`
 
-**VS Code:** Install the Grafial extension from `crates/grafial-vscode`; download `grafial-lsp` from [Releases](https://github.com/iridae-dev/grafial/releases) or build with `cargo build -p grafial-lsp --release`.
+**VS Code:** Install the Grafial extension from [`crates/grafial-vscode`](crates/grafial-vscode); download `grafial-lsp` from [Releases](https://github.com/iridae-dev/grafial/releases) or build with `cargo build -p grafial-lsp --release`.
 
 ## Grafial Composer (browser)
+
+**Hosted:** [https://grafial.iridae.com/](https://grafial.iridae.com/)
 
 A visual editor for loading, creating, editing, running, and saving Grafial
 programs — entirely in the browser via the WebAssembly engine build:
@@ -37,7 +41,8 @@ per-declaration editors (schema/model forms, a spreadsheet for evidence with
 CSV import, structural pipeline/rule builders with program-wide rename
 cascade), and a results view that renders posterior belief graphs
 (force-directed, labeled by evidence names), metrics, and rule-firing audits. See
-`webapp/README.md` for the design and `crates/grafial-wasm/README.md` for the
+[webapp/README.md](webapp/README.md) for the design and
+[crates/grafial-wasm/README.md](crates/grafial-wasm/README.md) for the
 underlying JSON API.
 
 ## What Grafial Gives You
@@ -73,7 +78,7 @@ Prerequisites:
 
 - Rust stable toolchain
 - Cargo
-- Optional: `nix-shell` (from `shell.nix`) for a pinned dev environment
+- Optional: `nix-shell` (from [`shell.nix`](shell.nix)) for a pinned dev environment
 
 Build and run the CLI:
 
@@ -100,7 +105,7 @@ grafial crates/grafial-examples/social.grafial --fix-style
 
 ## Example Program
 
-`crates/grafial-examples/minimal.grafial`:
+[`crates/grafial-examples/minimal.grafial`](crates/grafial-examples/minimal.grafial):
 
 ```grafial
 schema Minimal {
@@ -133,34 +138,36 @@ flow MinimalFlow on MinimalBeliefs {
 
 ## Monorepo Layout
 
-Key crates in `crates/`:
+Key crates in [`crates/`](crates/):
 
-- `grafial-frontend`: parser, AST, validation, style linting/formatting.
-- `grafial-ir`: lowered IR and optimization passes.
-- `grafial-core`: execution engine, graph model, rule/flow runtime, kernels.
-- `grafial-cli`: `grafial` command-line tool.
-- `grafial-python`: PyO3 bindings.
-- `grafial-lsp`: language server implementation.
-- `grafial-tests`: integration test crate.
-- `grafial-benches`: benchmark crate.
-- `grafial-examples`: sample `.grafial` programs.
-- `grafial-wasm`: WebAssembly bindings (JSON API for browser tooling).
+- [`grafial-frontend`](crates/grafial-frontend/): parser, AST, validation, style linting/formatting.
+- [`grafial-ir`](crates/grafial-ir/): lowered IR and optimization passes.
+- [`grafial-core`](crates/grafial-core/): execution engine, graph model, rule/flow runtime, kernels.
+- [`grafial-cli`](crates/grafial-cli/): `grafial` command-line tool.
+- [`grafial-python`](crates/grafial-python/): PyO3 bindings.
+- [`grafial-lsp`](crates/grafial-lsp/): language server implementation.
+- [`grafial-tests`](crates/grafial-tests/): integration test crate.
+- [`grafial-benches`](crates/grafial-benches/): benchmark crate.
+- [`grafial-examples`](crates/grafial-examples/): sample `.grafial` programs.
+- [`grafial-wasm`](crates/grafial-wasm/): WebAssembly bindings (JSON API for browser tooling).
 
-Plus `webapp/`: the Grafial Composer, a no-build browser app on top of
-`grafial-wasm`.
+Plus [`webapp/`](webapp/): the Grafial Composer, a no-build browser app on top of
+[`grafial-wasm`](crates/grafial-wasm/). See also the [examples index](documentation/EXAMPLES.md).
 
 ## Engine Feature Flags (grafial-core)
 
-`crates/grafial-core/Cargo.toml` defines optional features:
+[`crates/grafial-core/Cargo.toml`](crates/grafial-core/Cargo.toml) defines optional features. Maturity labels:
 
-- `parallel`: parallel evidence and metric execution paths with deterministic ruleset orchestration hooks.
-- `jit`: Cranelift-based JIT backend.
-- `aot`: ahead-of-time flow artifact compilation with runtime hash validation and compiled entrypoint execution checks.
-- `vectorized`: vectorized Bayesian evidence updates.
-- `simd-kernels`: SIMD numeric kernel dispatch (feature-gated).
-- `gpu-kernels`: GPU-staged kernel dispatch path (feature-gated host staging baseline).
-- `serde`, `bincode`, `tracing`: serialization/observability support.
-- `storage-experimental`, `storage-dense-index`, `storage-soa`: storage/index experimentation flags.
+| Feature | Maturity | Notes |
+|---|---|---|
+| `parallel` | **supported** | Parallel evidence/metric paths; deterministic ruleset orchestration |
+| `vectorized` | **supported** | Vectorized Bayesian evidence updates |
+| `serde` / `bincode` / `tracing` | **supported** | Serialization / observability |
+| `jit` | **experimental** | Cranelift JIT backend (native-only) |
+| `aot` | **experimental** | Ahead-of-time flow artifacts with hash validation (native-only) |
+| `simd-kernels` | **experimental** | SIMD numeric kernel dispatch |
+| `gpu-kernels` | **scaffold/baseline only** | Host staging path; not a production GPU runtime |
+| `storage-experimental` / `storage-dense-index` / `storage-soa` | **scaffold/baseline only** | Storage/index experiments |
 
 Examples:
 
@@ -229,15 +236,17 @@ cargo bench -p grafial-core --bench numeric_kernels --features simd-kernels,gpu-
 
 ## Documentation
 
-- Documentation index: `documentation/README.md`
-- Build/install details: `documentation/BUILDING.md`
-- Language guide: `documentation/LANGUAGE_GUIDE.md`
-- Engine internals: `documentation/ENGINE_ARCHITECTURE.md`
+- [Documentation index](documentation/README.md)
+- [Build/install details](documentation/BUILDING.md)
+- [Language guide](documentation/LANGUAGE_GUIDE.md)
+- [Probabilistic semantics (normative)](documentation/PROBABILISTIC_SEMANTICS.md)
+- [Examples index](documentation/EXAMPLES.md)
+- [Engine internals](documentation/ENGINE_ARCHITECTURE.md)
 
 ## Contributing
 
-See `CONTRIBUTING.md` (if present) for contribution and coding guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and coding guidelines.
 
 ## License
 
-MIT
+[MIT](LICENSE)

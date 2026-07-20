@@ -186,7 +186,7 @@ pip install grafial
 
 ```bash
 # In your Python project
-pip install /path/to/baygraph/crates/grafial-python
+pip install /path/to/grafial/crates/grafial-python
 ```
 
 ### Option 2: Git Repository
@@ -201,12 +201,12 @@ For active development on both projects:
 
 ```bash
 # In your Python project's virtual environment
-pip install -e /path/to/baygraph/crates/grafial-python
+pip install -e /path/to/grafial/crates/grafial-python
 ```
 
 When you modify Rust code:
 ```bash
-cd /path/to/baygraph/crates/grafial-python
+cd /path/to/grafial/crates/grafial-python
 maturin develop --release
 ```
 

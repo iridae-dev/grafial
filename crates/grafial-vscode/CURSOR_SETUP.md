@@ -1,6 +1,6 @@
 # Setting Up Grafial LSP in Cursor
 
-Replace `<repo-root>` with the absolute path to your local `baygraph` checkout.
+Replace `<repo-root>` with the absolute path to your local `grafial` checkout.
 
 ## Step 1: Build the LSP Server
 

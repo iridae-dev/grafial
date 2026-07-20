@@ -2,14 +2,37 @@
 
 Python bindings for Grafial using PyO3 and maturin.
 
-## Quick Start
+## Install (end users)
+
+```bash
+pip install grafial
+```
+
+Requires **CPython 3.11–3.13**. Release CI publishes matching wheels for Linux
+(manylinux_2_17), macOS, and Windows for each of those interpreters (plus an
+sdist). After install:
+
+```python
+import pathlib
+import grafial
+
+source = pathlib.Path("program.grafial").read_text()
+program = grafial.compile(source)
+ctx = grafial.run_flow(program, "MinimalFlow")
+print(ctx.metrics)
+print(ctx.inference_diagnostics)  # infer_beliefs convergence events, if any
+```
+
+---
+
+## Contributor / development build
 
 ### Prerequisites
 
 - Rust toolchain (install via [rustup](https://rustup.rs/))
-- Python 3.8 or later
-- [maturin](https://github.com/PyO3/maturin) (install via `pip install maturin` or `cargo install maturin`)
-- Or use [uv](https://github.com/astral-sh/uv) for Python environment management (recommended)
+- Python 3.11 or later
+- [maturin](https://github.com/PyO3/maturin) (`pip install maturin` or `cargo install maturin`)
+- Or [uv](https://github.com/astral-sh/uv) for environment management (recommended)
 
 ### Development Installation
 
@@ -170,7 +193,7 @@ pip install grafial
 
 ```bash
 # In your Python project
-pip install /path/to/baygraph/crates/grafial-python
+pip install /path/to/grafial/crates/grafial-python
 ```
 
 ### Option 2: Install from Git Repository
@@ -194,7 +217,7 @@ For active development on both projects:
 
 ```bash
 # In your Python project's virtual environment
-pip install -e /path/to/baygraph/crates/grafial-python
+pip install -e /path/to/grafial/crates/grafial-python
 ```
 
 This installs in "editable" mode, so changes to the Rust code will be reflected after rebuilding (run `maturin develop` again).

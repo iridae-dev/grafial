@@ -1,5 +1,7 @@
 # Grafial Composer
 
+**Try it online:** [https://grafial.iridae.com/](https://grafial.iridae.com/)
+
 A visual web app for loading, creating, editing, running, and saving Grafial
 programs, powered entirely in-browser by the `grafial-wasm` engine build. No
 server-side execution, no JS framework, no build step — plain ES modules.
@@ -98,6 +100,9 @@ node --test webapp/tests/pure.test.mjs
 cd crates/grafial-wasm && wasm-pack build --target nodejs --out-dir ../../webapp/tests/pkg-node
 node --test webapp/tests/roundtrip.test.mjs
 ```
+
+See also [crates/grafial-wasm/README.md](../crates/grafial-wasm/README.md) for the JSON API and the
+[examples index](../documentation/EXAMPLES.md).
 
 Layout: `js/blockedit.js` (declaration-block text surgery), `js/codegen.js`
 (document model → canonical Grafial text), `js/csv.js`, `js/state.js`

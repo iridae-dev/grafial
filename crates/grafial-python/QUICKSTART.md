@@ -39,7 +39,7 @@ cargo install maturin
 Navigate to the Python bindings directory:
 
 ```bash
-cd /path/to/baygraph/crates/grafial-python
+cd /path/to/grafial/crates/grafial-python
 ```
 
 ### Using uv (recommended)
@@ -163,19 +163,19 @@ maturin develop --release  # Release build (slower compilation, faster runtime)
 
 ```bash
 # In your other project's virtual environment
-pip install /path/to/baygraph/crates/grafial-python
+pip install /path/to/grafial/crates/grafial-python
 ```
 
 **Option 2: Editable install (for active development)**
 
 ```bash
 # In your other project's virtual environment
-pip install -e /path/to/baygraph/crates/grafial-python
+pip install -e /path/to/grafial/crates/grafial-python
 ```
 
 Then when you change the Rust code, rebuild:
 ```bash
-cd /path/to/baygraph/crates/grafial-python
+cd /path/to/grafial/crates/grafial-python
 maturin develop --release
 ```
 
@@ -241,6 +241,7 @@ maturin develop --release --python python3.11
 
 ## Next Steps
 
-- Read `README.md` for detailed documentation
-- Check `tests/` directory for more examples
-- See `../grafial-examples/` for Grafial program examples
+- Read [README.md](README.md) for detailed documentation
+- Check the [tests/](tests/) directory for more examples
+- See [../grafial-examples/](../grafial-examples/) for Grafial program examples
+- See the [examples index](../../documentation/EXAMPLES.md) and [language guide](../../documentation/LANGUAGE_GUIDE.md)

@@ -6,7 +6,7 @@ This document describes how to build and install the Grafial engine and CLI tool
 
 - **Rust**: Version 1.83 or later (install from [rustup.rs](https://rustup.rs/))
 - **Cargo**: Included with Rust installation
-- **Nix** (optional): For development environment with pinned toolchains (see `shell.nix`)
+- **Nix** (optional): For development environment with pinned toolchains (see [shell.nix](../shell.nix))
 
 ## Install from Releases
 
@@ -169,7 +169,7 @@ cargo bench -p grafial-benches
 
 The `grafial-wasm` crate compiles the frontend and interpreter engine to
 WebAssembly for browser use (parsing, validation, linting, program-structure
-introspection, and flow execution — see `crates/grafial-wasm/README.md` for
+introspection, and flow execution — see [crates/grafial-wasm/README.md](../crates/grafial-wasm/README.md) for
 the JSON API).
 
 ```bash
@@ -213,23 +213,18 @@ Ensure you have:
 
 ## Features
 
-`grafial-core` supports optional features:
+`grafial-core` optional features use the same maturity labels as the root README:
 
-- Runtime/acceleration:
-  - `parallel`: enable parallel evidence/metric/flow/graph paths plus deterministic ruleset orchestration hooks
-  - `jit`: enable Cranelift JIT backend
-  - `aot`: enable AOT artifact compilation, hash validation, and compiled-entry runtime checks
-  - `vectorized`: enable vectorized evidence update paths
-  - `simd-kernels`: enable SIMD numeric-kernel dispatch
-  - `gpu-kernels`: enable GPU-staged numeric-kernel dispatch baseline
-- Serialization/observability:
-  - `serde`: enable serde support
-  - `bincode`: enable bincode serialization (implies `serde`)
-  - `tracing`: enable tracing instrumentation
-- Storage experiments:
-  - `storage-experimental`
-  - `storage-dense-index` (implies `storage-experimental`)
-  - `storage-soa` (implies `storage-experimental`)
+| Feature | Maturity | Notes |
+|---|---|---|
+| `parallel` | **supported** | Parallel evidence/metric/flow/graph paths; deterministic ruleset orchestration |
+| `vectorized` | **supported** | Vectorized Bayesian evidence updates |
+| `serde` / `bincode` / `tracing` | **supported** | Serialization / observability (`bincode` implies `serde`) |
+| `jit` | **experimental** | Cranelift JIT backend (native-only) |
+| `aot` | **experimental** | AOT artifacts with hash validation (native-only) |
+| `simd-kernels` | **experimental** | SIMD numeric-kernel dispatch |
+| `gpu-kernels` | **scaffold/baseline only** | Host staging path; not a production GPU runtime |
+| `storage-experimental` / `storage-dense-index` / `storage-soa` | **scaffold/baseline only** | Storage/index experiments |
 
 Build with features:
 
@@ -342,19 +337,21 @@ program = grafial.compile("...")
 ctx = grafial.run_flow(program, "MyFlow")
 ```
 
-See `crates/grafial-python/README.md` for detailed documentation.
+See [crates/grafial-python/README.md](../crates/grafial-python/README.md) for detailed documentation.
 
 ## Next Steps
 
-- See `documentation/README.md` for the documentation map
-- See `LANGUAGE_GUIDE.md` for Grafial syntax and semantics
-- See `ENGINE_ARCHITECTURE.md` for engine internals
-- See `crates/grafial-python/README.md` for Python bindings documentation
-- Check `crates/grafial-examples/` for sample Grafial programs
+- See [documentation/README.md](README.md) for the documentation map
+- See [LANGUAGE_GUIDE.md](LANGUAGE_GUIDE.md) for Grafial syntax and semantics
+- See [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md) for engine internals
+- See [PROBABILISTIC_SEMANTICS.md](PROBABILISTIC_SEMANTICS.md) for normative update equations
+- See [EXAMPLES.md](EXAMPLES.md) for the examples index
+- See [crates/grafial-python/README.md](../crates/grafial-python/README.md) for Python bindings documentation
+- Check [crates/grafial-examples/](../crates/grafial-examples/) for sample Grafial programs
 
 ## Grafial Composer (browser app)
 
-The visual composer in `webapp/` runs Grafial entirely in the browser via the
+The visual composer in [`webapp/`](../webapp/) runs Grafial entirely in the browser via the
 WebAssembly package:
 
 ```bash
@@ -374,3 +371,5 @@ Headless tests for its logic modules:
 node --test webapp/tests/pure.test.mjs
 node --test webapp/tests/roundtrip.test.mjs   # needs webapp/tests/pkg-node (see webapp/README.md)
 ```
+
+See [webapp/README.md](../webapp/README.md) for Composer design details.

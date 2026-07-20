@@ -124,9 +124,8 @@ belief_model RoutingBeliefs on Routing {
 
 Notes:
 
-- Parser accepts `group_by=source` or `group_by="source"`.
-- Validation accepts `group_by="source"` and `group_by="destination"`.
-- Runtime currently supports only `group_by=source` (quoted or unquoted forms both parse to the same value).
+- Parser accepts `group_by=source` or `group_by="source"` (quoted or unquoted).
+- Validation and runtime currently support only `group_by=source`. `group_by=destination` is rejected until implemented.
 - Dynamic category discovery is supported for `prior=uniform`.
 - Dynamic category discovery is not supported for explicit `prior=[...]`.
 
@@ -246,11 +245,12 @@ rule BoostLow on SocialBeliefs {
   matches' writes within one rule application. Matches are processed in
   stable edge-ID order.
 
-### 6.4 Rule Modes (Current Runtime Behavior)
+### 6.4 Rule Modes
 
-- Parser accepts `mode: <ident>` on rules.
-- The standalone rule runner supports `for_each` (default) and `fixpoint`.
-- Flow transforms (`apply_rule`, `apply_ruleset`) currently execute rules with `for_each` semantics regardless of `mode:`.
+- Parser accepts `mode: for_each` (default) or `mode: fixpoint`.
+- Unknown modes are rejected at validation.
+- Flow transforms (`apply_rule`, `apply_ruleset`) honor the rule's declared mode.
+- `fixpoint` repeatedly applies the rule until max change < `1e-6` or 1000 iterations (non-convergence is an execution error).
 
 ## 7. Actions
 
@@ -452,9 +452,10 @@ Notes:
 
 - In `fold(...)`, `value` is the accumulator variable.
 - Metrics can reference previously computed metrics and imported metrics by name.
-- All metrics in a flow are evaluated against the LAST graph defined in that
-  flow (not the exported graph). Define your primary result graph last, or
-  keep helper/debug graphs above it.
+- Prefer an explicit graph binding: `metric score on cleaned = ...`.
+- Metrics without `on <graph>` evaluate against the LAST graph defined in that
+  flow. Multi-graph flows emit a lint (`stat_implicit_metric_graph`) when the
+  target is left implicit.
 - Division by (near-)zero in a metric expression is a hard error, which
   includes `avg(...)` over an empty node set. Guard with an epsilon
   (`x / (count + 0.0001)`) or a non-empty `where` filter when a set can be
@@ -470,6 +471,24 @@ Notes:
   transforms (rule name, match count, action count) for reproducibility/traceability hooks.
 - Runtime flow outputs include `inference_diagnostics` events for `infer_beliefs`
   (converged flag, iteration count, final max message delta, variable counts).
+
+## 13.1 `infer_beliefs` Convergence Policy
+
+Defaults (Rust/CLI/WASM/Python share the same engine defaults):
+
+| Parameter | Default | Meaning |
+|---|---:|---|
+| `max_iterations` | 32 | Synchronous message-passing rounds |
+| `damping` | 0.35 | Convex combination with previous messages |
+| `convergence_tolerance` | 1e-5 | Max absolute message delta |
+| `coupling_strength` | 0.6 | Pairwise sibling-edge coupling |
+
+Non-convergence is **not** a hard error: the transform returns the latest graph
+and emits `inference_diagnostics` with `converged=false`. Callers that require
+a converged posterior must inspect diagnostics (CLI/JSON/WASM expose them;
+Python `Context.inference_diagnostics` mirrors the same events).
+
+See [PROBABILISTIC_SEMANTICS.md](PROBABILISTIC_SEMANTICS.md) for the normative update equations.
 
 ## 14. Current Non-Goals / Not Implemented in Syntax
 

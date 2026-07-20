@@ -7,7 +7,7 @@ A concise guide to the Rust engine's internal structure for contributors and mai
 ## Monorepo Structure
 
 ```
-baygraph/
+grafial/
 ├── crates/
 │   ├── grafial-frontend/    # Parser, AST, validation
 │   ├── grafial-ir/          # Intermediate representation
@@ -392,7 +392,7 @@ pub trait MetricFn: Send + Sync + 'static {
 - Release GIL for long-running operations
 - Convert `ExecError` to Python exceptions
 
-**Status:** Implemented. See `crates/grafial-python/README.md` for documentation.
+**Status:** Implemented. See [crates/grafial-python/README.md](../crates/grafial-python/README.md) for documentation.
 
 ---
 
@@ -408,6 +408,9 @@ pub trait MetricFn: Send + Sync + 'static {
 
 ## References
 
-- **Language Guide**: `LANGUAGE_GUIDE.md` - User-facing language documentation
-- **Python Bindings**: `crates/grafial-python/README.md` - Python bindings documentation
-- **Building**: `BUILDING.md` - Build and development setup
+- **Language Guide**: [LANGUAGE_GUIDE.md](LANGUAGE_GUIDE.md) — user-facing language documentation
+- **Probabilistic semantics**: [PROBABILISTIC_SEMANTICS.md](PROBABILISTIC_SEMANTICS.md) — normative update equations
+- **Examples**: [EXAMPLES.md](EXAMPLES.md) — example corpus index
+- **Python Bindings**: [crates/grafial-python/README.md](../crates/grafial-python/README.md)
+- **Building**: [BUILDING.md](BUILDING.md) — build and development setup
+- **Composer**: [webapp/README.md](../webapp/README.md)
