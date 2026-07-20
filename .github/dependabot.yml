@@ -4,15 +4,48 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     commit-message:
       prefix: chore
       include: scope
+    groups:
+      github-actions-artifacts:
+        patterns:
+          - "actions/upload-artifact"
+          - "actions/download-artifact"
+      github-actions-release-signing:
+        patterns:
+          - "sigstore/cosign-installer"
+          - "actions/attest-build-provenance"
+          - "softprops/action-gh-release"
+      github-actions-core:
+        patterns:
+          - "actions/checkout"
+          - "actions/setup-python"
+          - "Swatinem/rust-cache"
+          - "PyO3/maturin-action"
+          - "dtolnay/rust-toolchain"
+          - "EmbarkStudios/cargo-deny-action"
+          - "anchore/sbom-action"
+          - "pypa/gh-action-pypi-publish"
+
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     commit-message:
       prefix: chore
       include: scope
+    groups:
+      cranelift:
+        patterns:
+          - "cranelift-*"
+      pest:
+        patterns:
+          - "pest"
+          - "pest_derive"
+    ignore:
+      # Snapshot wire format / API migration — handle manually.
+      - dependency-name: "bincode"
+        update-types: ["version-update:semver-major"]
