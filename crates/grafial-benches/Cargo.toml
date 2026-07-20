@@ -11,6 +11,10 @@ name = "graph_benchmarks"
 path = "benches/graph_benchmarks.rs"
 harness = false
 
+[[bin]]
+name = "baseline_probe"
+path = "src/bin/baseline_probe.rs"
+
 [dependencies]
 grafial-core = { path = "../grafial-core", features = ["serde"] }
 grafial-frontend = { path = "../grafial-frontend" }

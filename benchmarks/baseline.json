@@ -1,0 +1,61 @@
+{
+  "description": "Recorded probe baselines by graph size, density, transform, and backend. Limits are CI envelopes (not absolute perf claims). Scores are numerical goldens for model selection.",
+  "updated": "2026-07-21",
+  "probes": {
+    "bp_fanout_n8": {
+      "n_nodes": 9,
+      "n_edges": 8,
+      "density": 0.111111,
+      "transform": "infer_beliefs",
+      "backend": "loopy_sum_product",
+      "max_wall_ms": 500.0,
+      "max_bp_iterations": 64,
+      "require_converged": true
+    },
+    "bp_fanout_n64": {
+      "n_nodes": 65,
+      "n_edges": 64,
+      "density": 0.015385,
+      "transform": "infer_beliefs",
+      "backend": "loopy_sum_product",
+      "max_wall_ms": 2000.0,
+      "max_bp_iterations": 64,
+      "require_converged": true
+    },
+    "edge_aic_n32": {
+      "n_nodes": 33,
+      "n_edges": 32,
+      "density": 0.030303,
+      "transform": "select_model/edge_aic",
+      "backend": "model_selection",
+      "max_wall_ms": 200.0,
+      "score_ref": 237.015504,
+      "score_rel_tol": 1e-06
+    },
+    "edge_bic_n32": {
+      "n_nodes": 33,
+      "n_edges": 32,
+      "density": 0.030303,
+      "transform": "select_model/edge_bic",
+      "backend": "model_selection",
+      "max_wall_ms": 200.0,
+      "score_ref": 341.255356,
+      "score_rel_tol": 1e-06
+    }
+  },
+  "gates": {
+    "bayesian_updates_tests_ms": {
+      "max_ms": 120000,
+      "notes": "Legacy smoke envelope for analytical update tests."
+    }
+  },
+  "manual_baselines": {
+    "commands": [
+      "cargo bench -p grafial-benches",
+      "cargo run -p grafial-benches --bin baseline_probe --release",
+      "cargo bench -p grafial-core --bench vectorized_evidence --features vectorized",
+      "cargo bench -p grafial-core --bench parallel_execution --features parallel"
+    ],
+    "record": "When updating probes, capture n_nodes, n_edges, density, transform, backend, wall_ms, bp_iterations/converged, and score."
+  }
+}
