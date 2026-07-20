@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Grafial Composer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header id="toolbar">
+    <span class="brand">Grafial <em>Composer</em></span>
+    <button id="btn-new" title="New program">New</button>
+    <button id="btn-open" title="Open a .grafial file">Open</button>
+    <button id="btn-save" title="Save program">Save</button>
+    <select id="sel-example" title="Load a repository example">
+      <option value="">Examples…</option>
+    </select>
+    <span class="spacer"></span>
+    <nav id="tabs">
+      <button class="tab active" data-pane="program">Program</button>
+      <button class="tab" data-pane="source">Source</button>
+      <button class="tab" data-pane="results">Results</button>
+    </nav>
+    <span class="spacer"></span>
+    <button id="btn-undo" title="Undo (Ctrl+Z)">↶</button>
+    <button id="btn-redo" title="Redo (Ctrl+Shift+Z)">↷</button>
+    <select id="sel-flow" title="Flow to run"></select>
+    <button id="btn-run" class="primary" title="Run the selected flow">Run ▶</button>
+    <button id="btn-dock" title="Dock inspector to the other side">⇄</button>
+  </header>
+
+  <main id="layout" class="dock-right">
+    <section id="main-panes">
+      <div id="pane-program" class="pane active"></div>
+      <div id="pane-source" class="pane">
+        <textarea id="source-text" spellcheck="false" autocomplete="off"></textarea>
+        <div id="diagnostics"></div>
+      </div>
+      <div id="pane-results" class="pane">
+        <div class="empty-note">Run a flow to see results.</div>
+      </div>
+    </section>
+    <div id="divider" title="Drag to resize inspector"></div>
+    <aside id="inspector" class="collapsed">
+      <header>
+        <span id="inspector-title">Inspector</span>
+        <span class="spacer"></span>
+        <button id="inspector-close" title="Close">×</button>
+      </header>
+      <div id="inspector-body"></div>
+    </aside>
+  </main>
+
+  <footer id="statusbar">
+    <span id="status-validity"></span>
+    <span id="status-lints"></span>
+    <span class="spacer"></span>
+    <span id="status-hint"></span>
+  </footer>
+
+  <div id="boot-error" hidden>
+    <h2>WebAssembly package not found</h2>
+    <p>Build it, then serve the repository root:</p>
+    <pre>./scripts/serve_composer.sh</pre>
+    <p>and open <code>http://localhost:8000/webapp/</code>.</p>
+  </div>
+
+  <input type="file" id="file-open" accept=".grafial" hidden />
+  <input type="file" id="file-csv" accept=".csv,text/csv" hidden />
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

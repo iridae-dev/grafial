@@ -6,6 +6,7 @@ pub mod ast;
 pub mod errors;
 pub mod lint;
 pub mod parser;
+pub mod printer;
 pub mod style;
 pub mod validate;
 
@@ -22,5 +23,6 @@ pub use lint::{
     LINT_STAT_VARIANCE_COLLAPSE,
 };
 pub use parser::parse_program;
+pub use printer::{action_to_source, expr_to_source, number_to_source, pattern_to_source};
 pub use style::{format_canonical_style, lint_canonical_style, CanonicalStyleLint};
 pub use validate::{validate_program, validate_program_with_source};

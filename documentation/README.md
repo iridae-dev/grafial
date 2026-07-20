@@ -8,6 +8,8 @@ This folder contains contributor and user-facing documentation for Grafial.
   - Build/install instructions for workspace crates, CLI usage, tests, Python bindings, and the WebAssembly package.
 - `crates/grafial-wasm/README.md`
   - Browser/WebAssembly JSON API for parsing, inspecting, and executing Grafial programs (foundation for visual tooling).
+- `webapp/README.md`
+  - Grafial Composer: the in-browser visual editor for loading, creating, editing, running, and saving programs (`./scripts/serve_composer.sh`).
 - `documentation/LANGUAGE_GUIDE.md`
   - DSL syntax, semantics, canonical style, and examples.
 - `documentation/ENGINE_ARCHITECTURE.md`

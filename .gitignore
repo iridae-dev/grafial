@@ -51,3 +51,5 @@ crates/grafial-wasm/pkg/
 
 # Python virtualenvs
 .venv/
+webapp/tests/pkg-node/
+webapp/pkg/

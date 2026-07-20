@@ -351,3 +351,20 @@ See `crates/grafial-python/README.md` for detailed documentation.
 - See `ENGINE_ARCHITECTURE.md` for engine internals
 - See `crates/grafial-python/README.md` for Python bindings documentation
 - Check `crates/grafial-examples/` for sample Grafial programs
+
+## Grafial Composer (browser app)
+
+The visual composer in `webapp/` runs Grafial entirely in the browser via the
+WebAssembly package:
+
+```bash
+./scripts/serve_composer.sh        # builds wasm into webapp/pkg, serves repo root
+# open http://localhost:8000/webapp/
+```
+
+Headless tests for its logic modules:
+
+```bash
+node --test webapp/tests/pure.test.mjs
+node --test webapp/tests/roundtrip.test.mjs   # needs webapp/tests/pkg-node (see webapp/README.md)
+```

@@ -22,12 +22,12 @@ pub mod api {
     use grafial_core::engine::flow_exec::FlowResult;
     use grafial_core::BeliefGraph;
     use grafial_frontend::ast::{
-        CategoricalPrior, FlowDef, GraphExpr, ModelSelectionCriterion, PosteriorType, ProgramAst,
-        Transform,
+        CategoricalPrior, EvidenceMode, FlowDef, GraphExpr, ModelSelectionCriterion, ObserveStmt,
+        PosteriorType, ProgramAst, Transform,
     };
     use grafial_frontend::{
-        collect_lint_suppressions, lint_canonical_style, lint_is_suppressed,
-        lint_statistical_guardrails, LintSeverity, SourceRange,
+        action_to_source, collect_lint_suppressions, expr_to_source, lint_canonical_style,
+        lint_is_suppressed, lint_statistical_guardrails, LintSeverity, SourceRange,
     };
     use serde_json::{json, Value};
 
@@ -158,9 +158,10 @@ pub mod api {
                     Transform::ApplyRuleset { rules } => json!({ "kind": "apply_ruleset", "rules": rules }),
                     Transform::Snapshot { name } => json!({ "kind": "snapshot", "name": name }),
                     Transform::InferBeliefs => json!({ "kind": "infer_beliefs" }),
-                    Transform::PruneEdges { edge_type, .. } => json!({
+                    Transform::PruneEdges { edge_type, predicate } => json!({
                         "kind": "prune_edges",
                         "edge_type": edge_type,
+                        "predicate": expr_to_source(predicate),
                     }),
                 }).collect::<Vec<_>>(),
             }),
@@ -178,6 +179,66 @@ pub mod api {
         }
     }
 
+    fn evidence_mode_json(mode: &EvidenceMode) -> &'static str {
+        match mode {
+            EvidenceMode::Present => "present",
+            EvidenceMode::Absent => "absent",
+            EvidenceMode::Chosen => "chosen",
+            EvidenceMode::Unchosen => "unchosen",
+            EvidenceMode::ForcedChoice => "forced_choice",
+        }
+    }
+
+    /// Full structured observation detail, enabling spreadsheet-style
+    /// evidence editors to round-trip evidence declarations.
+    fn observation_json(obs: &ObserveStmt) -> Value {
+        match obs {
+            ObserveStmt::Attribute {
+                node,
+                attr,
+                value,
+                precision,
+            } => json!({
+                "kind": "attribute",
+                "node_type": node.0,
+                "node": node.1,
+                "attr": attr,
+                "value": value,
+                "precision": precision,
+            }),
+            ObserveStmt::Edge {
+                edge_type,
+                src,
+                dst,
+                mode,
+            } => json!({
+                "kind": "edge",
+                "edge_type": edge_type,
+                "src_type": src.0,
+                "src": src.1,
+                "dst_type": dst.0,
+                "dst": dst.1,
+                "mode": evidence_mode_json(mode),
+            }),
+            ObserveStmt::EdgeWeight {
+                edge_type,
+                src,
+                dst,
+                value,
+                precision,
+            } => json!({
+                "kind": "edge_weight",
+                "edge_type": edge_type,
+                "src_type": src.0,
+                "src": src.1,
+                "dst_type": dst.0,
+                "dst": dst.1,
+                "value": value,
+                "precision": precision,
+            }),
+        }
+    }
+
     fn flow_json(flow: &FlowDef) -> Value {
         json!({
             "name": flow.name,
@@ -186,7 +247,10 @@ pub mod api {
                 "name": g.name,
                 "expr": graph_expr_json(&g.expr),
             })).collect::<Vec<_>>(),
-            "metrics": flow.metrics.iter().map(|m| m.name.clone()).collect::<Vec<_>>(),
+            "metrics": flow.metrics.iter().map(|m| json!({
+                "name": m.name,
+                "expr": expr_to_source(&m.expr),
+            })).collect::<Vec<_>>(),
             "exports": flow.exports.iter().map(|e| json!({
                 "graph": e.graph,
                 "alias": e.alias,
@@ -242,6 +306,7 @@ pub mod api {
                 "name": e.name,
                 "on_model": e.on_model,
                 "observation_count": e.observations.len(),
+                "observations": e.observations.iter().map(observation_json).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "rules": ast.rules.iter().map(|r| json!({
                 "name": r.name,
@@ -253,6 +318,8 @@ pub mod api {
                     "dst": { "var": p.dst.var, "label": p.dst.label },
                 })).collect::<Vec<_>>(),
                 "has_where": r.where_expr.is_some(),
+                "where": r.where_expr.as_ref().map(expr_to_source),
+                "actions": r.actions.iter().map(action_to_source).collect::<Vec<_>>(),
                 "action_count": r.actions.len(),
             })).collect::<Vec<_>>(),
             "flows": ast.flows.iter().map(flow_json).collect::<Vec<_>>(),
@@ -472,6 +539,23 @@ flow Second on SocialBeliefs {
             "bernoulli"
         );
         assert_eq!(value["evidences"][0]["on_model"], "SocialBeliefs");
+
+        // Full observation detail for spreadsheet-style evidence editing.
+        let observations = value["evidences"][0]["observations"].as_array().unwrap();
+        assert_eq!(observations.len(), 3); // Alice.score, Bob.score, Alice->Bob
+        let alice = observations
+            .iter()
+            .find(|o| o["kind"] == "attribute" && o["node"] == "Alice")
+            .expect("Alice attribute observation");
+        assert_eq!(alice["attr"], "score");
+        assert_eq!(alice["value"], 1.0);
+        let edge = observations
+            .iter()
+            .find(|o| o["kind"] == "edge")
+            .expect("edge observation");
+        assert_eq!(edge["src"], "Alice");
+        assert_eq!(edge["dst"], "Bob");
+        assert_eq!(edge["mode"], "present");
 
         // Inter-flow dependency surface for the visual composer.
         let second = &value["flows"][1];

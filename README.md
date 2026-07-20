@@ -5,7 +5,8 @@ It is designed for systems where nodes, edges, and attributes are uncertain and 
 be updated as new evidence arrives.
 
 This repository is a monorepo containing the language frontend, IR, execution engine,
-CLI, Python bindings, tests, and benchmarks.
+CLI, Python bindings, WebAssembly bindings, a browser-based visual composer,
+tests, and benchmarks.
 
 [![All Tests](https://github.com/iridae-dev/grafial/actions/workflows/phase6-release-gate.yml/badge.svg)](https://github.com/iridae-dev/grafial/actions/workflows/phase6-release-gate.yml) [![Release](https://github.com/iridae-dev/grafial/actions/workflows/release.yml/badge.svg)](https://github.com/iridae-dev/grafial/actions/workflows/release.yml)
 
@@ -18,6 +19,24 @@ CLI, Python bindings, tests, and benchmarks.
 
 **VS Code:** Install the Grafial extension from `crates/grafial-vscode`; download `grafial-lsp` from [Releases](https://github.com/iridae-dev/grafial/releases) or build with `cargo build -p grafial-lsp --release`.
 
+## Grafial Composer (browser)
+
+A visual editor for loading, creating, editing, running, and saving Grafial
+programs — entirely in the browser via the WebAssembly engine build:
+
+```bash
+./scripts/serve_composer.sh
+# open http://localhost:8000/webapp/
+```
+
+It provides a program map with dependency edges, a dockable inspector with
+per-declaration editors (schema/model forms, a spreadsheet for evidence with
+CSV import, structural pipeline/rule builders with program-wide rename
+cascade), and a results view that renders posterior belief graphs
+(force-directed, labeled by evidence names), metrics, and rule-firing audits. See
+`webapp/README.md` for the design and `crates/grafial-wasm/README.md` for the
+underlying JSON API.
+
 ## What Grafial Gives You
 
 - A declarative DSL for probabilistic graph programs.
@@ -25,6 +44,7 @@ CLI, Python bindings, tests, and benchmarks.
 - Rule and flow execution over uncertain graphs.
 - Deterministic execution with optional performance features.
 - Tooling for CLI, Python integration, testing, and benchmarking.
+- A WebAssembly build and in-browser visual composer.
 
 ## Core Concepts
 
@@ -121,6 +141,10 @@ Key crates in `crates/`:
 - `grafial-tests`: integration test crate.
 - `grafial-benches`: benchmark crate.
 - `grafial-examples`: sample `.grafial` programs.
+- `grafial-wasm`: WebAssembly bindings (JSON API for browser tooling).
+
+Plus `webapp/`: the Grafial Composer, a no-build browser app on top of
+`grafial-wasm`.
 
 ## Engine Feature Flags (grafial-core)
 
