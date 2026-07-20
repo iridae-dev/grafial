@@ -22,7 +22,7 @@ keywords = ["bayesian", "graph", "dsl"]
 categories = ["science", "parsing"]
 
 [workspace.dependencies]
-thiserror = "1"
+thiserror = "2"
 pest = "2"
 pest_derive = "2"
 smallvec = "1.13"
