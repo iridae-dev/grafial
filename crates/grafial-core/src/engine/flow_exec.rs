@@ -1395,7 +1395,7 @@ fn select_model_graph(
         candidate_refs.push((candidate.as_str(), graph));
     }
 
-    let selected = select_best_graph(candidate_refs.into_iter(), runtime_criterion)?;
+    let selected = select_best_graph(candidate_refs, runtime_criterion)?;
     available_graphs
         .get(&selected.name)
         .cloned()

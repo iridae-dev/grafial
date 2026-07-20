@@ -1292,7 +1292,7 @@ fn build_rule(pair: pest::iterators::Pair<Rule>, _source: &str) -> Result<RuleDe
                         Rule::mode_clause => {
                             let m = b
                                 .into_inner()
-                                .last()
+                                .next_back()
                                 .ok_or_else(|| {
                                     FrontendError::ParseError("Missing mode value".to_string())
                                 })?
@@ -1740,14 +1740,12 @@ fn build_action_stmt(pair: pest::iterators::Pair<Rule>) -> Result<ActionStmt, Fr
                                 .map_err(|e| FrontendError::ParseError(e.to_string()))?,
                         );
                     }
-                    Rule::number => {
-                        if weight.is_none() {
-                            weight = Some(
-                                p.as_str()
-                                    .parse::<f64>()
-                                    .map_err(|e| FrontendError::ParseError(e.to_string()))?,
-                            );
-                        }
+                    Rule::number if weight.is_none() => {
+                        weight = Some(
+                            p.as_str()
+                                .parse::<f64>()
+                                .map_err(|e| FrontendError::ParseError(e.to_string()))?,
+                        );
                     }
                     _ => {}
                 }
@@ -2262,8 +2260,7 @@ fn build_metric_import_stmt(
         .to_string();
     // find the next ident after KW_as; easiest is to take the last ident
     let local_name = it
-        .filter(|p| p.as_rule() == Rule::ident)
-        .last()
+        .rfind(|p| p.as_rule() == Rule::ident)
         .ok_or_else(|| {
             FrontendError::ParseError("Missing local name in import_metric".to_string())
         })?

@@ -154,7 +154,7 @@ fn graph_signature(mut graph: BeliefGraph) -> Vec<String> {
 
     for node in graph.nodes() {
         let mut attrs: Vec<_> = node.attrs.iter().collect();
-        attrs.sort_by(|(left, _), (right, _)| left.cmp(right));
+        attrs.sort_by_key(|(left, _)| *left);
         for (name, posterior) in attrs {
             signature.push(format!(
                 "N|{}|{}|{}|{:.12}|{:.12}",

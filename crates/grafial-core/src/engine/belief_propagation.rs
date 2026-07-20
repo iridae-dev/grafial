@@ -209,7 +209,7 @@ pub fn run_loopy_belief_propagation_with_config_diagnostics(
     }
 
     let marginals = compute_marginals(&unary, &neighbors, &reverse, &messages);
-    for (variable, p_present) in variables.iter().zip(marginals.into_iter()) {
+    for (variable, p_present) in variables.iter().zip(marginals) {
         write_posterior_mean_preserving_strength(
             &mut output,
             variable.edge_id,

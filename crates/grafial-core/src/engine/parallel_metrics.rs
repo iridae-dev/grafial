@@ -142,15 +142,14 @@ fn extract_dependencies(expr: &ExprIR) -> HashSet<String> {
     // For now, we'll just extract variable references
     // A full implementation would recursively walk the expression tree
     match expr {
-        ExprIR::Var(name) => {
+        ExprIR::Var(name)
             // Assume variables starting with "metric_" are metric references
             // This avoids confusion with metric names that start with "m_"
-            if name.starts_with("metric_") {
+            if name.starts_with("metric_") => {
                 // Extract the actual metric name after "metric_"
                 let metric_name = name.strip_prefix("metric_").unwrap_or(name);
                 deps.insert(metric_name.to_string());
             }
-        }
         _ => {
             // TODO: Recursively extract from other expression types
         }

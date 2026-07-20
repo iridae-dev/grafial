@@ -350,9 +350,9 @@ impl ParallelFlowExecutor {
 
         // Collect results
         for _ in tasks {
-            match self.scheduler.wait_for_result() {
-                Ok(result) => self.process_result(result, results)?,
-                Err(e) => return Err(e),
+            {
+                let result = self.scheduler.wait_for_result()?;
+                self.process_result(result, results)?
             }
         }
 
