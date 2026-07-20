@@ -497,7 +497,8 @@ fn emit_prior_and_precision_lints(
         for edge_decl in &model.edges {
             match &edge_decl.exist {
                 PosteriorType::Bernoulli { params } => {
-                    let pseudo = param_value(params, "pseudo_count").unwrap_or(1.0);
+                    // Engine default pseudo_count is 2.0 (see grafial-core evidence builder)
+                    let pseudo = param_value(params, "pseudo_count").unwrap_or(2.0);
                     if pseudo > 1000.0 {
                         push_lint(
                             out,
@@ -609,7 +610,7 @@ fn emit_prior_data_conflict_lints(
         for edge_decl in &model.edges {
             if let PosteriorType::Bernoulli { params } = &edge_decl.exist {
                 let prior = param_value(params, "prior").unwrap_or(0.5);
-                let pseudo_count = param_value(params, "pseudo_count").unwrap_or(1.0);
+                let pseudo_count = param_value(params, "pseudo_count").unwrap_or(2.0);
                 edge_priors.insert(edge_decl.edge_type.clone(), (prior, pseudo_count));
             }
         }

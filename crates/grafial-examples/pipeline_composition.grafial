@@ -20,7 +20,8 @@ belief_model PipelineBeliefs on DataPipeline {
     quality_score ~ Gaussian(mean=0.5, precision=1.0)
   }
   edge RELATED {
-    exist ~ Bernoulli(prior=0.3, weight=5.0)
+    // Beta(1,1) uniform prior; n sightings give P(exist) = (1+n)/(2+n)
+    exist ~ Bernoulli(prior=0.5, weight=2.0)
   }
 }
 
@@ -33,42 +34,35 @@ evidence RawData on PipelineBeliefs {
     "R4" { raw_value: 18.7 }
   }
 
-  // Some relationships
-  RELATED(Record -> Record) { "R1" -> "R3"; "R3" -> "R4" }
+  // Some relationships, each sighted twice: P(exist) = 3/4 = 0.75
+  RELATED(Record -> Record) {
+    "R1" -> "R3"; "R1" -> "R3";
+    "R3" -> "R4"; "R3" -> "R4"
+  }
 }
 
-// Stage 1: Data Cleaning
+// Stage 1: Data Cleaning.
+// Node-only iteration (`for (R:Record)`) visits every Record regardless of
+// edges — a pattern like (R)-[e:RELATED]->(R) would only match self-edges.
 rule CleanData on PipelineBeliefs {
-  pattern
-    (R:Record)-[dummy:RELATED]->(R:Record)
-
-  where
-    // Detect sentinel values or outliers
-    E[R.raw_value] < -100.0 or E[R.raw_value] > 100.0
-
-  action {
-    // Impute missing/bad values using prior mean
+  for (R:Record)
+  where E[R.raw_value] < -100.0 or E[R.raw_value] > 100.0
+  => {
+    // Detect sentinel values or outliers; impute using the prior mean.
+    // R2's posterior raw_value is -999/1.01 ≈ -989, well below -100.
     non_bayesian_nudge R.clean_value to 0.0 variance=preserve
-    non_bayesian_nudge R.quality_score to 0.3 variance=preserve // Mark as low quality
+    non_bayesian_nudge R.quality_score to 0.3 variance=preserve
   }
-
-  mode: for_each
 }
 
 rule CopyCleanValues on PipelineBeliefs {
-  pattern
-    (R:Record)-[dummy:RELATED]->(R:Record)
-
-  where
-    // Normal values: just copy to clean_value
-    E[R.raw_value] >= -100.0 and E[R.raw_value] <= 100.0
-
-  action {
+  for (R:Record)
+  where E[R.raw_value] >= -100.0 and E[R.raw_value] <= 100.0
+  => {
+    // Normal values (R1, R3, R4): copy posterior mean to clean_value
     non_bayesian_nudge R.clean_value to E[R.raw_value] variance=preserve
-    non_bayesian_nudge R.quality_score to 0.9 variance=preserve // Mark as high quality
+    non_bayesian_nudge R.quality_score to 0.9 variance=preserve
   }
-
-  mode: for_each
 }
 
 flow CleaningStage on PipelineBeliefs {
@@ -88,6 +82,7 @@ flow CleaningStage on PipelineBeliefs {
   // Compute cleaning statistics
   metric total_records = nodes(Record) |> count()
   metric low_quality = nodes(Record) |> where(E[node.quality_score] < 0.5) |> count()
+  // Expected: R2 was flagged low-quality -> cleaning_rate = 1/4 = 0.25
   metric cleaning_rate = low_quality / total_records
 
   export cleaned_snapshot as "cleaned_graph"
@@ -100,7 +95,9 @@ rule EnrichFromNeighbors on PipelineBeliefs {
     (A:Record)-[ab:RELATED]->(B:Record)
 
   where
-    // Enrich high-quality records from their neighbors
+    // Enrich high-quality records from their neighbors.
+    // Both edges qualify: P(exist) = 0.75 and R1/R3/R4 all carry
+    // quality_score 0.9 after Stage 1.
     prob(ab) >= 0.7
     and E[A.quality_score] > 0.7
     and E[B.quality_score] > 0.7
@@ -134,8 +131,9 @@ flow EnrichmentStage on PipelineBeliefs {
   metric enriched_count = nodes(Record)
     |> where(E[node.enriched_value] != 0.0)
     |> count()
-  // Epsilon guard keeps this example executable when no records are enriched.
+  // Epsilon guard: avg over an empty set would be a division-by-zero error.
   metric avg_enriched = enriched_total / (enriched_count + 0.0001)
+  // Expected: R1, R3, R4 are enriched via the two RELATED edges
 
   // Reference imported metric
   metric enrichment_rate = 1.0 - imported_cleaning_rate
@@ -201,16 +199,10 @@ flow QualityAnalysis on PipelineBeliefs {
 
 // Advanced: Conditional branching based on metrics
 rule FlagLowQualityPipeline on PipelineBeliefs {
-  pattern
-    (R:Record)-[dummy:RELATED]->(R:Record)
-
-  where
-    // If overall quality is low, flag all records for review
-    E[R.quality_score] < 0.6
-
-  action {
+  for (R:Record)
+  where E[R.quality_score] < 0.6
+  => {
+    // If overall quality is low, flag records for review
     non_bayesian_nudge R.quality_score to E[R.quality_score] * 0.8 variance=preserve
   }
-
-  mode: for_each
 }

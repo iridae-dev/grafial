@@ -50,26 +50,26 @@ use crate::engine::errors::ExecError;
 ///
 /// This is used by legacy `force_*` operations and by high-confidence delete/suppress
 /// operations to inject very strong evidence while preserving posterior history.
-const FORCE_PRECISION: f64 = 1_000_000.0;
+pub(crate) const FORCE_PRECISION: f64 = 1_000_000.0;
 
 /// Minimum precision for Gaussian posteriors.
 ///
 /// Clips extremely small precision values to prevent division by zero in variance
 /// calculations (variance = 1/τ) and loss of significance.
-const MIN_PRECISION: f64 = 1e-6;
+pub(crate) const MIN_PRECISION: f64 = 1e-6;
 
 /// Minimum observation precision to prevent numerical issues
-const MIN_OBS_PRECISION: f64 = 1e-12;
+pub(crate) const MIN_OBS_PRECISION: f64 = 1e-12;
 
 /// Minimum Beta parameter value to enforce proper prior.
 ///
 /// Beta distribution requires α > 0 and β > 0 strictly. We enforce α ≥ 0.01, β ≥ 0.01
 /// as a numeric floor for stability and to prevent improper priors.
-const MIN_BETA_PARAM: f64 = 0.01;
+pub(crate) const MIN_BETA_PARAM: f64 = 0.01;
 
 /// Minimum Dirichlet concentration parameter to enforce proper prior
 /// Dirichlet requires all α_k > 0. We enforce α_k ≥ 0.01 for numerical stability.
-const MIN_DIRICHLET_PARAM: f64 = 0.01;
+pub(crate) const MIN_DIRICHLET_PARAM: f64 = 0.01;
 
 /// Maximum allowed deviation in standard deviations for outlier warnings.
 ///
@@ -2327,68 +2327,43 @@ impl BeliefGraph {
             }
         }
 
-        // Fallback: scan edges (base + delta-aware)
-        let mut count = 0;
-        // Base edges
+        // Fallback (pending deltas): resolve each edge's effective source and
+        // latest posterior through the delta log, then count directly. The
+        // previous incremental diffing approach silently ignored
+        // `EdgeProbChange` deltas (pushed by observe/delete/suppress), so
+        // degree counts computed on un-committed graphs used stale
+        // probabilities and disagreed with `prob_mean`.
+        let mut effective_src: FxHashMap<EdgeId, NodeId> = FxHashMap::default();
         for e in &self.inner.edges {
-            if e.src == node {
-                let prob = e
-                    .exist
+            effective_src.insert(e.id, e.src);
+        }
+        for change in &self.delta {
+            match change {
+                GraphDelta::EdgeChange { id, edge } => {
+                    effective_src.insert(*id, edge.src);
+                }
+                GraphDelta::EdgeRemoved { id } => {
+                    effective_src.remove(id);
+                }
+                _ => {}
+            }
+        }
+
+        let mut candidate_ids: Vec<EdgeId> = effective_src
+            .into_iter()
+            .filter_map(|(id, src)| (src == node).then_some(id))
+            .collect();
+        candidate_ids.sort_unstable();
+
+        let mut count = 0;
+        for id in candidate_ids {
+            if let Some(posterior) = self.get_edge_posterior_with_deltas(id) {
+                let prob = posterior
                     .mean_probability(&self.inner.competing_groups)
                     .unwrap_or(0.0);
                 if prob >= min_prob {
                     count += 1;
                 }
-            }
-        }
-
-        // Delta edges (new/modified/removed)
-        for change in &self.delta {
-            match change {
-                GraphDelta::EdgeChange { id, edge } => {
-                    if edge.src != node {
-                        continue;
-                    }
-                    let in_base = self.inner.edge_index.contains_key(id);
-                    let prob = edge
-                        .exist
-                        .mean_probability(&self.inner.competing_groups)
-                        .unwrap_or(0.0);
-                    if in_base {
-                        // Compare old vs new
-                        if let Some(&old_idx) = self.inner.edge_index.get(id) {
-                            if let Some(old_e) = self.inner.edges.get(old_idx) {
-                                let old_prob = old_e
-                                    .exist
-                                    .mean_probability(&self.inner.competing_groups)
-                                    .unwrap_or(0.0);
-                                if old_prob < min_prob && prob >= min_prob {
-                                    count += 1;
-                                } else if old_prob >= min_prob && prob < min_prob {
-                                    count -= 1;
-                                }
-                            }
-                        }
-                    } else if prob >= min_prob {
-                        count += 1;
-                    }
-                }
-                GraphDelta::EdgeRemoved { id } => {
-                    if let Some(&idx) = self.inner.edge_index.get(id) {
-                        if let Some(e) = self.inner.edges.get(idx) {
-                            if e.src == node {
-                                let prob = e
-                                    .exist
-                                    .mean_probability(&self.inner.competing_groups)
-                                    .unwrap_or(0.0);
-                                if prob >= min_prob {
-                                    count -= 1;
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {}
             }
         }
 
@@ -4329,6 +4304,41 @@ mod tests {
             g.degree_outgoing(NodeId(1), 0.35),
             0,
             "Should not count at 0.35 threshold"
+        );
+    }
+
+    #[test]
+    fn degree_outgoing_sees_pending_edge_prob_deltas() {
+        // delete_edge pushes an EdgeProbChange delta without committing it.
+        // degree_outgoing must observe the updated probability (like prob_mean
+        // does), not the stale base posterior.
+        let mut g = BeliefGraph::default();
+        g.insert_node(NodeData {
+            id: NodeId(1),
+            label: "N".into(),
+            attrs: HashMap::new(),
+        });
+        g.insert_edge(BeliefGraph::test_edge_with_beta(
+            EdgeId(1),
+            NodeId(1),
+            NodeId(2),
+            "R".into(),
+            BetaPosterior {
+                alpha: 9.0,
+                beta: 1.0,
+            },
+        ));
+        g.ensure_owned();
+        assert_eq!(g.degree_outgoing(NodeId(1), 0.5), 1);
+
+        g.delete_edge(EdgeId(1), Some("high")).unwrap();
+        assert!(!g.delta.is_empty(), "delete must leave a pending delta");
+        let prob = g.prob_mean(EdgeId(1)).unwrap();
+        assert!(prob < 0.5, "delete should drive probability near zero");
+        assert_eq!(
+            g.degree_outgoing(NodeId(1), 0.5),
+            0,
+            "degree_outgoing must agree with prob_mean on pending deltas"
         );
     }
 

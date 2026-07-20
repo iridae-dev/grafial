@@ -24,13 +24,22 @@ belief_model NetworkBeliefs on Network {
 }
 
 evidence DirectConnections on NetworkBeliefs {
-  // Source node: fully reachable at distance 0
+  // Source node: observed highly reachable at distance 0.
+  // Posterior with prior N(0, tau=0.1) and observation precision 1.0:
+  // E[reachability] = 1.0/1.1 = 0.909; E[distance] = (1 + 0)/1.01 = 0.990
   Server { "S1" { reachability: 1.0, distance: 0.0 } }
 
-  // Direct connections from source
-  CONNECTS(Server -> Server) { "S1" -> "S2"; "S2" -> "S3"; "S1" -> "S4"; "S4" -> "S5" }
+  // Direct connections from source, each sighted twice:
+  // Beta(1,1) + 2 present -> P(exist) = 3/4 = 0.75, above the 0.7 rule threshold
+  CONNECTS(Server -> Server) {
+    "S1" -> "S2"; "S1" -> "S2";
+    "S2" -> "S3"; "S2" -> "S3";
+    "S1" -> "S4"; "S1" -> "S4";
+    "S4" -> "S5"; "S4" -> "S5"
+  }
 
-  // Some uncertain edges
+  // One uncertain edge, sighted once: P(exist) = 2/3 < 0.7, so reachability
+  // never propagates across it (uncertainty gates inference)
   CONNECTS(Server -> Server) { "S3" -> "S5" }
 }
 
@@ -54,35 +63,43 @@ rule PropagateReachability on NetworkBeliefs {
     non_bayesian_nudge B.distance to E[A.distance] + 1.0 variance=preserve
   }
 
-  mode: fixpoint  // Run until convergence (no more changes above threshold)
+  // NOTE: flow transforms currently execute rules with for_each semantics
+  // (see LANGUAGE_GUIDE section 6.3); the standalone rule runner honors
+  // fixpoint. Where-clauses are evaluated against the pre-transform state, so
+  // each apply_rule advances reachability by exactly one hop; the flow below
+  // applies the rule once per hop of network diameter.
+  mode: fixpoint
 }
 
 flow ReachabilityAnalysis on NetworkBeliefs {
   graph base = from_evidence DirectConnections
 
-  // Apply fixpoint iteration to compute transitive reachability
-  // Fixpoint mode runs the rule repeatedly until:
-  // 1. No more patterns match, OR
-  // 2. Actions don't change graph significantly (convergence detected)
-  // 3. Maximum iteration limit reached (safety)
-  graph with_transitive = base |> apply_rule PropagateReachability
+  // One apply_rule per hop of network diameter (2 hops: S1->S2->S3, S1->S4->S5).
+  // Hop 1: S1 (0.909) reaches S2 and S4 -> 0.909 * 0.9 = 0.818
+  // Hop 2: S2 reaches S3, S4 reaches S5 -> 0.818 * 0.9 = 0.736
+  // S3->S5 never propagates: P(exist) = 0.667 < 0.7
+  graph hop1 = base |> apply_rule PropagateReachability
+  graph with_transitive = hop1 |> apply_rule PropagateReachability
 
-  // Expected results after convergence:
-  // S1: reachability=1.0, distance=0 (source)
-  // S2: reachability≈0.9, distance≈1 (1 hop from S1)
-  // S3: reachability≈0.81, distance≈2 (2 hops via S2)
-  // S4: reachability≈0.9, distance≈1 (1 hop from S1)
-  // S5: reachability≈0.81, distance≈2 (2 hops via S4, or S1→S4→S5)
+  // Expected posteriors:
+  // S1: reachability 0.909, distance 0.99 (source)
+  // S2: reachability 0.818, distance 1.99 (1 hop)
+  // S3: reachability 0.736, distance 2.99 (2 hops via S2)
+  // S4: reachability 0.818, distance 1.99 (1 hop)
+  // S5: reachability 0.736, distance 2.99 (2 hops via S4)
 
   metric avg_reachability = nodes(Server) |> avg(by=E[node.reachability])
+  // Expected: (0.909 + 0.818 + 0.736 + 0.818 + 0.736) / 5 = 0.803
 
   metric reachable_count = nodes(Server)
     |> where(E[node.reachability] > 0.5)
     |> count()
+  // Expected: 5 (every server is transitively reachable)
 
   metric avg_distance = nodes(Server)
     |> where(E[node.reachability] > 0.5)
     |> avg(by=E[node.distance])
+  // Expected: (0.99 + 1.99 + 2.99 + 1.99 + 2.99) / 5 = 2.19
 
   export with_transitive as "reachable"
 }

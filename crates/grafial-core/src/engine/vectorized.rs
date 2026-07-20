@@ -17,13 +17,9 @@
 //! evidence falls back to sequential scalar updates.
 
 use crate::engine::errors::ExecError;
-use crate::engine::graph::{BetaPosterior, GaussianPosterior};
-
-/// Minimum precision for Gaussian observations (same as graph.rs)
-const MIN_OBS_PRECISION: f64 = 1e-12;
-
-/// Minimum Beta parameter value (same as graph.rs)
-const MIN_BETA_PARAM: f64 = 0.01;
+use crate::engine::graph::{
+    BetaPosterior, GaussianPosterior, MIN_BETA_PARAM, MIN_OBS_PRECISION, MIN_PRECISION,
+};
 
 // ---------------------------------------------------------------------------
 // Gaussian (Normal-Normal conjugate) vectorized kernel
@@ -55,7 +51,9 @@ pub fn gaussian_batch_update(
         return Ok(*prior);
     }
 
-    let tau_old = prior.precision;
+    // Apply the same precision floor as the sequential GaussianPosterior::update
+    // so vectorized and scalar paths agree for near-zero prior precisions.
+    let tau_old = prior.precision.max(MIN_PRECISION);
     let mu_old = prior.mean;
 
     // Accumulate observation precisions and weighted values

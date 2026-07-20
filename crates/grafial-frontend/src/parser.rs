@@ -1088,11 +1088,17 @@ fn build_node_ref(pair: pest::iterators::Pair<Rule>) -> Result<(String, String),
             Ok((node_type, label))
         }
         Rule::node_ref_call => {
-            // (string | ident | number)
+            // (node_label) where node_label = string | ident | number
             let mut inner = rest.into_inner();
-            let tok = inner
+            let mut tok = inner
                 .next()
                 .ok_or_else(|| FrontendError::ParseError("Missing label in node()".to_string()))?;
+            // The grammar wraps the label in a node_label rule; descend into it.
+            if tok.as_rule() == Rule::node_label {
+                tok = tok.into_inner().next().ok_or_else(|| {
+                    FrontendError::ParseError("Empty label in node()".to_string())
+                })?;
+            }
             let label = match tok.as_rule() {
                 Rule::string => unquote_string(tok.as_str()),
                 Rule::ident | Rule::number => tok.as_str().to_string(),

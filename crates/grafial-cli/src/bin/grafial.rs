@@ -6,7 +6,9 @@
 //!   grafial <file> --flow <name> -o json  # Output results as JSON
 
 use clap::Parser;
-use grafial_core::{parse_and_validate, run_flow};
+use grafial_core::engine::flow_exec::FlowResult;
+use grafial_core::{parse_and_validate, run_flow, ExecError};
+use grafial_frontend::ast::{FlowDef, GraphExpr, ProgramAst};
 use grafial_frontend::{
     collect_lint_suppressions, format_canonical_style, lint_canonical_style, lint_is_suppressed,
     CanonicalStyleLint,
@@ -103,7 +105,7 @@ fn main() {
 
     // Execute flow if specified
     if let Some(flow_name) = &cli.flow {
-        match run_flow(&program, flow_name, None) {
+        match run_flow_with_dependencies(&program, flow_name) {
             Ok(result) => match cli.output.as_str() {
                 "json" => match serde_json::to_string_pretty(&format_flow_result(&result)) {
                     Ok(json) => println!("{}", json),
@@ -138,6 +140,43 @@ fn main() {
             println!("\nRun with --flow <name> to execute a flow");
         }
     }
+}
+
+/// True if the flow consumes outputs of earlier flows (`from_graph` or `import_metric`).
+fn flow_needs_prior(flow: &FlowDef) -> bool {
+    !flow.metric_imports.is_empty()
+        || flow
+            .graphs
+            .iter()
+            .any(|g| matches!(g.expr, GraphExpr::FromGraph { .. }))
+}
+
+/// Execute a flow, first executing any preceding flows in program order when the
+/// target flow imports graphs or metrics from prior flow results.
+///
+/// This mirrors the language semantics used by the release gate: flows in a program
+/// run top-to-bottom, each seeing the accumulated exports/snapshots of its predecessors.
+fn run_flow_with_dependencies(
+    program: &ProgramAst,
+    flow_name: &str,
+) -> Result<FlowResult, ExecError> {
+    let target_idx = program
+        .flows
+        .iter()
+        .position(|f| f.name == flow_name)
+        .ok_or_else(|| ExecError::Internal(format!("unknown flow '{}'", flow_name)))?;
+
+    if !flow_needs_prior(&program.flows[target_idx]) {
+        return run_flow(program, flow_name, None);
+    }
+
+    let mut prior: Option<FlowResult> = None;
+    for flow in &program.flows[..target_idx] {
+        eprintln!("Running prerequisite flow '{}'...", flow.name);
+        let result = run_flow(program, &flow.name, prior.as_ref())?;
+        prior = Some(result);
+    }
+    run_flow(program, flow_name, prior.as_ref())
 }
 
 fn print_style_lints(lints: &[CanonicalStyleLint]) {

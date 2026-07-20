@@ -25,85 +25,85 @@ belief_model RoutingBeliefs on PacketRouting {
 }
 
 evidence RoutingEvidence on RoutingBeliefs {
-  // Dirichlet posterior mechanics for competing choices:
-  // Initial uniform prior with pseudo_count=1.0:
-  // - If 2 destinations exist: α = [0.5, 0.5] (split pseudo_count equally)
-  // - E[π_R2] = E[π_R3] = 0.5
+  // Dirichlet posterior mechanics for competing choices.
+  //
+  // Category sets are planned UP FRONT from the whole evidence block:
+  // R1's group has destinations {R2, R3, R6} (K=3), so the uniform prior
+  // with pseudo_count=1.0 is α = [1/3, 1/3, 1/3].
+  //
+  // Each `choose` adds 1 to the chosen category's concentration.
 
-  // Router R1 chooses R2
-  choose edge ROUTES_TO(Router["R1"], Router["R2"]) 
-  // After R2 chosen: α = [1.5, 0.5] → P(R2)=0.75, P(R3)=0.25
+  // R1 routes to R2 most often (2 of 4 observations)...
+  choose edge ROUTES_TO(Router["R1"], Router["R2"])
+  choose edge ROUTES_TO(Router["R1"], Router["R2"])
+  // ...but has also been seen routing to R3 and R6 (conflicting evidence)
+  choose edge ROUTES_TO(Router["R1"], Router["R3"])
+  choose edge ROUTES_TO(Router["R1"], Router["R6"])
+  // Final: α = [7/3, 4/3, 4/3] → P(R2)=0.467, P(R3)=0.267, P(R6)=0.267
+  // Entropy = 1.06 nats: R2 leads, but routing is genuinely uncertain.
 
-  // Router R1 chooses R3 (conflicting with previous choice)
-  choose edge ROUTES_TO(Router["R1"], Router["R3"]) 
-  // After R3 chosen: α = [1.5, 1.5] → P(R2)=0.5, P(R3)=0.5
-  // Now balanced: 1 observation each + 0.5 pseudo-count each
-  // High entropy indicates uncertainty
+  // R4 always routes to R5 — a single-destination group (K=1):
+  // α = [1] + 1 = [2] → P(R5) = 1.0, entropy = 0 (deterministic route)
+  choose edge ROUTES_TO(Router["R4"], Router["R5"])
 
-  // Router R4 chooses R5
-  choose edge ROUTES_TO(Router["R4"], Router["R5"]) 
-
-  // Dynamic category discovery: R1 routes to R6 (new destination)
-  // α automatically expands: [1.5, 1.5] → [1.5, 1.5, 1.0]
-  // Preserves existing evidence, adds new category with prior only
-  choose edge ROUTES_TO(Router["R1"], Router["R6"]) 
-  // After R6 chosen: α = [1.5, 1.5, 2.0] → P(R2)≈0.3, P(R3)≈0.3, P(R6)≈0.4
+  // Latency observations (prior N(50, τ=0.1), observation precision 1.0):
+  // E[latency] = (5 + obs) / 1.1 → R1: 77.3 (slow), R2: 31.8 (fast)
+  Router {
+    "R1" { latency: 80.0 },
+    "R2" { latency: 30.0 }
+  }
 }
 
 // Rule that uses winner() - deterministic decision when there's a clear winner
 rule OptimizeLatency on RoutingBeliefs {
   pattern
     (A:Router)-[ab:ROUTES_TO]->(B:Router)
-  
+
   where
-    // Only apply if B is the clear winner (not tied)
+    // Only fires on the edge pointing at the group's winning destination.
+    // R1's winner is R2 (P=0.467, the argmax), and R2 is faster (31.8 < 77.3).
     winner(A, ROUTES_TO) == B
     and E[B.latency] < E[A.latency]
-  
+
   action {
     // Route to faster destination
     // But this is still probabilistic - we're updating beliefs, not forcing
     non_bayesian_nudge A.latency to E[A.latency] * 0.9 variance=preserve
   }
-  
+
   mode: for_each
 }
 
-// Rule that detects high uncertainty (no clear winner)
+// Rule that detects high uncertainty (no clear winner).
+// Node-only iteration: checks every router's routing entropy directly.
 rule HandleUncertainRoute on RoutingBeliefs {
-  pattern
-    (A:Router)-[dummy:ROUTES_TO]->(A:Router)  // Need pattern even if just checking entropy
-
-  where
-    // High entropy means no clear winner - routing decision is uncertain
-    // Entropy > 1.0 indicates multiple viable destinations with similar probabilities
-    entropy(A, ROUTES_TO) > 1.0
-
-  action {
+  for (A:Router) where entropy(A, ROUTES_TO) > 1.0 => {
+    // High entropy means no dominant destination. R1 qualifies:
+    // H([0.467, 0.267, 0.267]) = 1.06 nats (max for K=3 is ln 3 = 1.10).
     // Flag router for manual review by adjusting latency (proxy for attention)
     // In production, this might trigger an alert or additional data collection
     non_bayesian_nudge A.latency to E[A.latency] * 1.1 variance=preserve
   }
-
-  mode: for_each
 }
 
 flow RoutingPipeline on RoutingBeliefs {
   graph base = from_evidence RoutingEvidence
-  
-  // Apply optimization only when there's a clear winner
+
+  // Apply optimization only when there's a clear winner (fires for R1->R2)
   graph optimized = base |> apply_rule OptimizeLatency
-  
-  // Handle uncertain cases separately
+
+  // Handle uncertain cases separately (fires for R1: entropy 1.06 > 1.0)
   graph reviewed = optimized |> apply_rule HandleUncertainRoute
-  
+
   // Metrics that understand competing probabilities
   metric avg_entropy = nodes(Router)
     |> avg(by=entropy(node, ROUTES_TO))
-  
+  // Expected: only R1 has entropy (1.06); 1.06 / 6 routers ≈ 0.177
+
   metric deterministic_routes = nodes(Router)
     |> where(entropy(node, ROUTES_TO) < 0.5)
     |> count()
-  
+  // Expected: 5 (every router except R1)
+
   export reviewed as "final_routing"
 }

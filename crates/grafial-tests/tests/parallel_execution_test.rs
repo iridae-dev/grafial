@@ -235,14 +235,67 @@ mod tests {
         assert_eq!(avg, 90.0, "Unexpected average: {}", avg);
     }
 
-    #[cfg(all(feature = "parallel", not(feature = "parallel")))]
+    /// Cross-configuration parity via a shared analytical reference.
+    ///
+    /// Features cannot be toggled at runtime, so instead of comparing parallel
+    /// against sequential in one process, this test pins posteriors to their
+    /// exact hand-derived conjugate-update values. CI runs the test suite both
+    /// with default features (sequential path) and with `--features parallel`
+    /// (parallel evidence path); both builds must reproduce the same closed-form
+    /// numbers, which establishes parity through the common ground truth.
     #[test]
-    fn test_parallel_vs_sequential_parity() {
-        // This test would run if we could toggle the feature at runtime
-        // It would compare results between parallel and sequential execution
-        // to ensure they produce identical outputs
+    fn test_posteriors_match_analytical_ground_truth() {
+        let source = r#"
+        schema ParitySchema {
+            node Sensor {
+                reading: Real
+            }
+            edge LINKS {}
+        }
 
-        // Note: In practice, this test would need to be run as part of
-        // a separate test suite that compiles the code twice with different features
+        belief_model ParityModel on ParitySchema {
+            node Sensor {
+                reading ~ Gaussian(mean=0.0, precision=1.0)
+            }
+            edge LINKS {
+                exist ~ Bernoulli(prior=0.5, weight=2.0)
+            }
+        }
+
+        evidence ParityEvidence on ParityModel {
+            Sensor {
+                "A" { reading: 10.0 },
+                "B" { reading: 4.0 }
+            }
+            LINKS(Sensor -> Sensor) { "A" -> "B" }
+        }
+
+        flow ParityFlow on ParityModel {
+            graph g = from_evidence ParityEvidence
+            metric sum_reading = nodes(Sensor) |> sum(by=E[node.reading])
+            metric linked = avg_degree(Sensor, LINKS, min_prob=0.6)
+        }
+        "#;
+
+        let result = run_flow_test(source, "ParityFlow").expect("Flow execution failed");
+
+        // Gaussian conjugate update with default observation precision 1.0:
+        //   A: (1.0*0 + 1.0*10) / (1.0 + 1.0) = 5.0
+        //   B: (1.0*0 + 1.0*4)  / (1.0 + 1.0) = 2.0
+        let sum_reading = result.metrics["sum_reading"];
+        assert!(
+            (sum_reading - 7.0).abs() < 1e-12,
+            "sum_reading != analytical 7.0: {}",
+            sum_reading
+        );
+
+        // Beta(1,1) prior + one present observation = Beta(2,1), mean 2/3.
+        // 2/3 >= 0.6, so exactly one of two sensors has out-degree 1.
+        let linked = result.metrics["linked"];
+        assert!(
+            (linked - 0.5).abs() < 1e-12,
+            "avg_degree != analytical 0.5: {}",
+            linked
+        );
     }
 }

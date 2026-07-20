@@ -75,7 +75,7 @@ This installs `grafial` to `~/.cargo/bin/` (or `$CARGO_HOME/bin` if set). Make s
 To install directly from a git repository:
 
 ```bash
-cargo install --git https://github.com/iridae-dev/grafial --path crates/grafial-cli
+cargo install --git https://github.com/iridae-dev/grafial grafial-cli
 ```
 
 ## CLI Usage
@@ -300,10 +300,11 @@ Build wheels for distribution:
 
 ```bash
 cd crates/grafial-python
-maturin build --release
+maturin build --release --out dist
 ```
 
 This creates `.whl` files in `dist/` that can be installed with `pip install dist/grafial-*.whl`.
+(Without `--out`, maturin writes wheels to `target/wheels/` by default.)
 
 ### Using in Python Projects
 

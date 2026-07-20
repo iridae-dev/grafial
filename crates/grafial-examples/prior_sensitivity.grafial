@@ -37,9 +37,18 @@ belief_model StrongPrior on Measurement {
   }
 }
 
-evidence OneSensorReading on WeakPrior {
-  // One observation: reading = 10.0
+// The same single observation (reading = 10.0) is applied against each prior.
+// Evidence binds to a belief model, so each model gets its own evidence block.
+evidence WeakPriorReading on WeakPrior {
   // Assume observation_precision = 1.0 (default) → σ²_obs = 1
+  Sensor { "S1" { reading: 10.0 } }
+}
+
+evidence ModeratePriorReading on ModeratePrior {
+  Sensor { "S1" { reading: 10.0 } }
+}
+
+evidence StrongPriorReading on StrongPrior {
   Sensor { "S1" { reading: 10.0 } }
 }
 
@@ -50,7 +59,7 @@ evidence OneSensorReading on WeakPrior {
 // Result: Posterior heavily influenced by data (99% weight to observation)
 
 flow WeakPriorFlow on WeakPrior {
-  graph g = from_evidence OneSensorReading
+  graph g = from_evidence WeakPriorReading
 
   metric posterior_mean = nodes(Sensor) |> sum(by=E[node.reading])
   // Expected value: ~9.90 (very close to observed 10.0)
@@ -59,17 +68,33 @@ flow WeakPriorFlow on WeakPrior {
   export g as "weak_result"
 }
 
-// With moderate prior (reuse evidence, different belief model):
+// With moderate prior (same observation, different belief model):
 // τ_post = 1.0 + 1.0 = 2.0
 // μ_post = (1.0×0 + 1.0×10) / 2.0 = 5.0
 // Result: Prior and data have equal influence (50% each)
-// Expected value: 5.0 (midpoint between prior 0 and observation 10)
 
-// With strong prior (reuse evidence, different belief model):
+flow ModeratePriorFlow on ModeratePrior {
+  graph g = from_evidence ModeratePriorReading
+
+  metric posterior_mean = nodes(Sensor) |> sum(by=E[node.reading])
+  // Expected value: 5.0 (midpoint between prior 0 and observation 10)
+
+  export g as "moderate_result"
+}
+
+// With strong prior (same observation, different belief model):
 // τ_post = 100.0 + 1.0 = 101.0
 // μ_post = (100×0 + 1.0×10) / 101.0 = 0.099
 // Result: Posterior heavily influenced by prior (99% weight to prior)
-// Expected value: ~0.10 (very close to prior mean 0)
+
+flow StrongPriorFlow on StrongPrior {
+  graph g = from_evidence StrongPriorReading
+
+  metric posterior_mean = nodes(Sensor) |> sum(by=E[node.reading])
+  // Expected value: ~0.10 (very close to prior mean 0)
+
+  export g as "strong_result"
+}
 
 // Pedagogical lessons:
 // 1. Weak priors: Fast learning from data, but sensitive to noise

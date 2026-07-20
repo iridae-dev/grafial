@@ -27,7 +27,7 @@ use crate::engine::graph::BeliefGraph;
 use grafial_frontend::ast::{BinaryOp, ExprAst, UnaryOp};
 
 /// Epsilon for floating-point equality comparisons
-const FLOAT_EPSILON: f64 = 1e-12;
+pub(crate) const FLOAT_EPSILON: f64 = 1e-12;
 
 /// Context for expression evaluation that provides variable resolution and function calls.
 ///

@@ -398,7 +398,7 @@ impl PyNodeView {
         let nid = grafial_core::engine::graph::NodeId(self.node_id);
         self.graph
             .node(nid)
-            .and_then(|n| n.attrs.get(attr).map(|g| 1.0 / g.precision))
+            .and_then(|n| n.attrs.get(attr).map(|g| g.variance()))
             .ok_or_else(|| PyRuntimeError::new_err(format!("missing attr '{}'", attr)))
     }
 

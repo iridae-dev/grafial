@@ -998,6 +998,22 @@ fn apply_observations_sequential(
     edge_weight_observations: Vec<EdgeWeightObservationEntry>,
     attr_observations: Vec<(NodeId, String, f64, f64)>,
 ) -> Result<(), ExecError> {
+    // Categorical updates (Chosen/Unchosen/ForcedChoice) mutate the shared
+    // per-group Dirichlet posterior and do not commute across sibling edges
+    // (force_choice overwrites every concentration), so they must be applied
+    // in source order before any regrouping. Present/Absent updates are
+    // per-edge conjugate Beta updates, which commute and can be batched.
+    let mut independent_edge_observations = Vec::with_capacity(edge_observations.len());
+    for (edge_id, mode) in edge_observations {
+        match mode {
+            EvidenceMode::Chosen => graph.observe_edge_chosen(edge_id)?,
+            EvidenceMode::Unchosen => graph.observe_edge_unchosen(edge_id)?,
+            EvidenceMode::ForcedChoice => graph.observe_edge_forced_choice(edge_id)?,
+            _ => independent_edge_observations.push((edge_id, mode)),
+        }
+    }
+    let edge_observations = independent_edge_observations;
+
     // Group edge observations by EdgeId for deterministic ordering
     // Multiple observations on the same edge must be applied sequentially
     let mut edge_groups: HashMap<EdgeId, Vec<EvidenceMode>> = HashMap::new();

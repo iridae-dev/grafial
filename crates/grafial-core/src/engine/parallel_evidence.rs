@@ -30,6 +30,10 @@ pub struct ParallelEvidenceResult {
     pub node_observations: BTreeMap<NodeId, Vec<ObservationData>>,
     /// Observations organized by target edge
     pub edge_observations: BTreeMap<EdgeId, Vec<ObservationData>>,
+    /// Categorical (Chosen/Unchosen/ForcedChoice) edge observations in source
+    /// order. These mutate a shared per-group Dirichlet posterior and do not
+    /// commute across sibling edges, so they bypass per-edge grouping.
+    pub categorical_observations: Vec<(EdgeId, ObservationData)>,
     /// Statistics about parallel execution
     pub stats: ParallelStats,
 }
@@ -89,8 +93,12 @@ pub fn process_evidence_parallel(
     node_map: &HashMap<(String, String), NodeId>,
     edge_map: &HashMap<(NodeId, NodeId, String), EdgeId>,
 ) -> Result<ParallelEvidenceResult, ExecError> {
+    // Step 0: Pull out order-sensitive categorical observations.
+    let (categorical_observations, remaining) =
+        split_categorical_observations(observations, node_map, edge_map)?;
+
     // Step 1: Partition observations by target
-    let partitions = partition_observations(observations, node_map, edge_map)?;
+    let partitions = partition_observations(&remaining, node_map, edge_map)?;
 
     let stats = ParallelStats {
         observations_processed: observations.len(),
@@ -128,8 +136,75 @@ pub fn process_evidence_parallel(
     Ok(ParallelEvidenceResult {
         node_observations,
         edge_observations,
+        categorical_observations,
         stats,
     })
+}
+
+/// Resolves an edge observation's target EdgeId from the node/edge maps.
+fn resolve_edge_id(
+    src: &(String, String),
+    dst: &(String, String),
+    edge_type: &str,
+    node_map: &HashMap<(String, String), NodeId>,
+    edge_map: &HashMap<(NodeId, NodeId, String), EdgeId>,
+) -> Result<EdgeId, ExecError> {
+    let src_id = *node_map
+        .get(&(src.0.clone(), src.1.clone()))
+        .ok_or_else(|| {
+            ExecError::ValidationError(format!("Source node {}:{} not found", src.0, src.1))
+        })?;
+    let dst_id = *node_map
+        .get(&(dst.0.clone(), dst.1.clone()))
+        .ok_or_else(|| {
+            ExecError::ValidationError(format!("Destination node {}:{} not found", dst.0, dst.1))
+        })?;
+    edge_map
+        .get(&(src_id, dst_id, edge_type.to_string()))
+        .copied()
+        .ok_or_else(|| {
+            ExecError::ValidationError(format!("Edge {} not found between nodes", edge_type))
+        })
+}
+
+/// Categorical edge observations resolved to EdgeIds, in source order.
+type CategoricalObservations = Vec<(EdgeId, ObservationData)>;
+
+/// Splits categorical (order-sensitive) edge observations from the rest.
+///
+/// Returns the categorical observations, resolved to EdgeIds, in source order,
+/// plus the remaining observations for per-target partitioning.
+fn split_categorical_observations(
+    observations: &[ObserveStmt],
+    node_map: &HashMap<(String, String), NodeId>,
+    edge_map: &HashMap<(NodeId, NodeId, String), EdgeId>,
+) -> Result<(CategoricalObservations, Vec<ObserveStmt>), ExecError> {
+    let mut categorical = Vec::new();
+    let mut rest = Vec::with_capacity(observations.len());
+    for obs in observations {
+        if let ObserveStmt::Edge {
+            src,
+            dst,
+            edge_type,
+            mode,
+            ..
+        } = obs
+        {
+            let data = match mode {
+                EvidenceMode::Chosen => Some(ObservationData::EdgeChosen),
+                EvidenceMode::Unchosen => Some(ObservationData::EdgeUnchosen),
+                EvidenceMode::ForcedChoice => Some(ObservationData::EdgeForcedChoice),
+                _ => None,
+            };
+            if let Some(data) = data {
+                let edge_id = resolve_edge_id(src, dst, edge_type, node_map, edge_map)?;
+                categorical.push((edge_id, data));
+                continue;
+            }
+        }
+        rest.push(obs.clone());
+    }
+    Ok((categorical, rest))
 }
 
 /// Partition observations by their target for parallel processing.
@@ -301,7 +376,9 @@ pub fn process_evidence_parallel(
     edge_map: &HashMap<(NodeId, NodeId, String), EdgeId>,
 ) -> Result<ParallelEvidenceResult, ExecError> {
     // Fall back to sequential processing
-    let partitions = partition_observations(observations, node_map, edge_map)?;
+    let (categorical_observations, remaining) =
+        split_categorical_observations(observations, node_map, edge_map)?;
+    let partitions = partition_observations(&remaining, node_map, edge_map)?;
 
     let mut node_observations = BTreeMap::new();
     let mut edge_observations = BTreeMap::new();
@@ -327,6 +404,7 @@ pub fn process_evidence_parallel(
     Ok(ParallelEvidenceResult {
         node_observations,
         edge_observations,
+        categorical_observations,
         stats: ParallelStats {
             observations_processed: observations.len(),
             partitions_created: 1, // Sequential = 1 partition
@@ -365,11 +443,24 @@ pub fn apply_parallel_results(
                 }
                 ObservationData::EdgePresent => graph.observe_edge(edge_id, true)?,
                 ObservationData::EdgeAbsent => graph.observe_edge(edge_id, false)?,
+                // Categorical modes travel in categorical_observations; tolerate
+                // them here for any hand-built results.
                 ObservationData::EdgeChosen => graph.observe_edge_chosen(edge_id)?,
                 ObservationData::EdgeUnchosen => graph.observe_edge_unchosen(edge_id)?,
                 ObservationData::EdgeForcedChoice => graph.observe_edge_forced_choice(edge_id)?,
                 _ => {} // Edge observations should only be edge modes
             }
+        }
+    }
+
+    // Apply categorical observations in source order: force_choice overwrites
+    // the whole Dirichlet, so interleaving with sibling-edge updates matters.
+    for (edge_id, obs) in results.categorical_observations {
+        match obs {
+            ObservationData::EdgeChosen => graph.observe_edge_chosen(edge_id)?,
+            ObservationData::EdgeUnchosen => graph.observe_edge_unchosen(edge_id)?,
+            ObservationData::EdgeForcedChoice => graph.observe_edge_forced_choice(edge_id)?,
+            _ => {}
         }
     }
 

@@ -1,17 +1,18 @@
 //! Belief propagation transform for flow pipelines.
 //!
 //! This module implements deterministic loopy sum-product belief propagation over
-//! independent edge variables. Pairwise factors are induced between edges that
-//! share a node and edge type, which provides local smoothing while preserving
-//! each edge's effective sample size.
+//! independent edge variables. Pairwise factors are induced between edges of the
+//! same edge type that share a source node (fan-out) or share a destination node
+//! (fan-in). Chain-adjacent edges (one edge's destination is another's source) are
+//! intentionally NOT coupled. This provides local smoothing among sibling edges
+//! while preserving each edge's effective sample size.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::engine::errors::ExecError;
-use crate::engine::graph::{BeliefGraph, EdgeId, EdgePosterior, NodeId};
+use crate::engine::graph::{BeliefGraph, EdgeId, EdgePosterior, NodeId, MIN_BETA_PARAM};
 
-const MIN_BETA_PARAM: f64 = 0.01;
 const MIN_PROBABILITY: f64 = 1e-6;
 
 /// Configuration for loopy belief propagation.
@@ -507,9 +508,11 @@ mod tests {
                 beta: 3.0,
             }),
         });
+        // Share the source node so the two edges are actually coupled by a
+        // pairwise factor (fan-out bucket); chain-adjacent edges would not be.
         graph.insert_edge(EdgeData {
             id: EdgeId(2),
-            src: NodeId(2),
+            src: NodeId(1),
             dst: NodeId(3),
             ty: Arc::from("REL"),
             exist: EdgePosterior::independent(BetaPosterior {
@@ -529,6 +532,11 @@ mod tests {
 
         assert!((first_p1 - second_p1).abs() < 1e-12);
         assert!((first_p2 - second_p2).abs() < 1e-12);
+
+        // Smoothing must have actually happened: coupled means move toward
+        // each other relative to their independent Beta means (0.7 and 0.2).
+        assert!(first_p1 < 0.7);
+        assert!(first_p2 > 0.2);
     }
 
     #[test]

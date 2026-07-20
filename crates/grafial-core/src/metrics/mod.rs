@@ -136,7 +136,7 @@ pub fn eval_metric_expr(
                 BinaryOp::Sub => l - r,
                 BinaryOp::Mul => l * r,
                 BinaryOp::Div => {
-                    if r.abs() < 1e-15 {
+                    if r.abs() < crate::engine::expr_eval::FLOAT_EPSILON {
                         return Err(ExecError::ValidationError(
                             "division by zero in metric expression".into(),
                         ));

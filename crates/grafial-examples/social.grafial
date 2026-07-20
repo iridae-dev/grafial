@@ -24,7 +24,13 @@ evidence SocialEvidence on SocialBeliefs {
     "Carol" { some_value: 2.0 }
   }
 
-  REL(Person -> Person) { "Alice" -> "Bob"; "Bob" -> "Carol" }
+  // Each repeated observation is one Bernoulli trial. With the Beta(1,1)
+  // prior from Bernoulli(prior=0.5, weight=2.0), three 'present' sightings
+  // give Beta(4,1): P(exist) = 4/5 = 0.8 per edge.
+  REL(Person -> Person) {
+    "Alice" -> "Bob"; "Alice" -> "Bob"; "Alice" -> "Bob";
+    "Bob" -> "Carol"; "Bob" -> "Carol"; "Bob" -> "Carol"
+  }
 }
 
 // Rule: Transfer value from A to B through intermediate node B,
@@ -35,8 +41,9 @@ rule TransferAndDisconnect on SocialBeliefs {
     (B:Person)-[bc:REL]->(C:Person)
 
   where
-    // Only apply if both edges are highly probable
-    prob(ab) >= 0.9 and prob(bc) >= 0.9
+    // Only apply if both edges are highly probable.
+    // Evidence gives P = 0.8 per edge, so the Alice->Bob->Carol chain matches.
+    prob(ab) >= 0.75 and prob(bc) >= 0.75
 
   action {
     // Transfer half of A's value to B
@@ -58,11 +65,14 @@ flow Demo on SocialBeliefs {
   // Apply rule to transfer value and disconnect
   graph transferred = base |> apply_rule TransferAndDisconnect
 
-  // Prune low-probability edges (implicit 'edge' variable in where clause)
+  // Prune low-probability edges (implicit 'edge' variable in where clause).
+  // The rule drove P(Bob->Carol) to ~0 via delete, so it is pruned here;
+  // Alice->Bob survives at P = 0.8.
   graph cleaned = transferred |> prune_edges REL where prob(edge) < 0.1
 
-  // Compute average degree considering only high-probability edges
-  metric avg_degree = avg_degree(Person, REL, min_prob=0.8)
+  // Compute average degree considering only high-probability edges.
+  // One surviving edge across three people: avg_degree = 1/3.
+  metric avg_degree = avg_degree(Person, REL, min_prob=0.75)
 
   export cleaned as "demo"
 }

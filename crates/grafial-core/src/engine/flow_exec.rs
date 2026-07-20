@@ -990,7 +990,7 @@ fn eval_compiled_metric_binary(op: BinaryOpIR, left: f64, right: f64) -> Result<
         BinaryOpIR::Sub => left - right,
         BinaryOpIR::Mul => left * right,
         BinaryOpIR::Div => {
-            if right.abs() < 1e-15 {
+            if right.abs() < crate::engine::expr_eval::FLOAT_EPSILON {
                 return Err(ExecError::ValidationError(
                     "division by zero in metric expression".into(),
                 ));

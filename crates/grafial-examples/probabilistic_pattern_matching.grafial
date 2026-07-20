@@ -16,19 +16,32 @@ belief_model SocialBeliefs on SocialNetwork {
     influence ~ Gaussian(mean=0.5, precision=0.1)
     trust_level ~ Gaussian(mean=0.5, precision=0.1)
   }
-  // Friendship is uncertain - we observe connections but aren't 100% sure
-  edge FRIENDS { exist ~ Bernoulli(prior=0.1, weight=2.0) }
-  edge INFLUENCES { exist ~ Bernoulli(prior=0.05, weight=5.0) }
+  // Friendship is uncertain - we observe connections but aren't 100% sure.
+  // Beta(1,1) uniform prior: n sightings give P(exist) = (1+n)/(2+n)
+  edge FRIENDS { exist ~ Bernoulli(prior=0.5, weight=2.0) }
+  // Skeptical prior Beta(0.2, 0.8): influence claims need repeated evidence
+  edge INFLUENCES { exist ~ Bernoulli(prior=0.2, weight=1.0) }
 }
 
 evidence SocialEvidence on SocialBeliefs {
-  // Initial observations: some friendships are more certain than others
-  FRIENDS(Person -> Person) { "Alice" -> "Bob"; "Alice" -> "Bob"; "Bob" -> "Carol" }
-  
-  // Influence relationships
-  INFLUENCES(Person -> Person) { "Alice" -> "Bob" }
-  
-  // Person attributes
+  // Initial observations: some friendships are more certain than others.
+  //   Alice->Bob seen 3x -> P = 0.8 (well-established)
+  //   Bob->Carol seen once -> P = 0.667 (plausible)
+  //   Carol->Alice reported absent 3x -> Beta(1,4), P = 0.2 (probably not real)
+  FRIENDS(Person -> Person) {
+    "Alice" -> "Bob"; "Alice" -> "Bob"; "Alice" -> "Bob";
+    "Bob" -> "Carol";
+    "Carol" -/> "Alice"; "Carol" -/> "Alice"; "Carol" -/> "Alice"
+  }
+
+  // Influence relationships, each seen twice: Beta(0.2,0.8) + 2 -> P = 0.733
+  INFLUENCES(Person -> Person) {
+    "Alice" -> "Bob"; "Alice" -> "Bob";
+    "Alice" -> "Carol"; "Alice" -> "Carol"
+  }
+
+  // Person attributes. Posterior with prior N(0.5, tau=0.1), obs precision 1.0:
+  // E[influence] = (0.05 + obs) / 1.1 -> Alice 0.773, Bob 0.591, Carol 0.409
   Person {
     "Alice" { influence: 0.8 },
     "Bob"   { influence: 0.6 },
@@ -45,7 +58,9 @@ rule PropagateInfluence on SocialBeliefs {
   
   where
     // Probabilistic matching: match if P(friends) >= 0.7 AND P(influences) >= 0.6
-    // This is a soft threshold - not a hard boolean
+    // This is a soft threshold - not a hard boolean.
+    // Alice->Bob qualifies: P(friends) = 0.8, P(influences) = 0.733,
+    // and Alice (0.773) is more influential than Bob (0.591).
     prob(ab) >= 0.7
     and prob(ai) >= 0.6
     and E[A.influence] > E[B.influence]
@@ -67,8 +82,9 @@ rule IndirectInfluence on SocialBeliefs {
     (A:Person)-[ab:FRIENDS]->(B:Person)
 
   where
-    // A has high-probability influence on someone (one-hop check)
-    // For multi-hop inference, use fixpoint mode instead (see transitive_closure.grafial)
+    // A has high-probability influence on someone (one-hop check).
+    // Alice->Bob qualifies: P(friends) = 0.8, and Alice influences Carol
+    // (P = 0.733 >= 0.7, Carol != Bob) - so the exists subquery passes.
     prob(ab) >= 0.8
     and exists (A:Person)-[ax:INFLUENCES]->(X:Person) where prob(ax) >= 0.7 and X != B
 
@@ -81,21 +97,17 @@ rule IndirectInfluence on SocialBeliefs {
   mode: for_each
 }
 
-// Rule demonstrating 'not exists' for finding isolated nodes
+// Rule demonstrating 'not exists' for finding isolated nodes.
+// Node-only iteration visits every Person (an edge pattern could not bind
+// people with no edges at all).
 rule BoostIsolatedNodes on SocialBeliefs {
-  pattern
-    (A:Person)-[dummy:FRIENDS]->(A:Person)  // Self-reference pattern
-
-  where
-    // Check if A lacks strong outgoing friendships
-    not exists (A:Person)-[af:FRIENDS]->(F:Person) where prob(af) >= 0.5 and F != A
-
-  action {
-    // Boost influence for isolated but valuable nodes
+  for (A:Person)
+  where not exists (A:Person)-[af:FRIENDS]->(F:Person) where prob(af) >= 0.5 and F != A
+  => {
+    // Boost influence for isolated but valuable nodes (Carol qualifies:
+    // her only outgoing friendship claim sits at P = 0.2)
     non_bayesian_nudge A.influence to E[A.influence] * 1.1 variance=preserve
   }
-
-  mode: for_each
 }
 
 // Rule that prunes low-probability edges while preserving uncertainty
@@ -104,8 +116,9 @@ rule PruneWeakConnections on SocialBeliefs {
     (A:Person)-[ab:FRIENDS]->(B:Person)
   
   where
-    // Only remove if we're reasonably certain it doesn't exist
-    prob(ab) < 0.1
+    // Only remove if we're reasonably confident it doesn't exist.
+    // Carol->Alice (P = 0.2, three absent reports) is pruned.
+    prob(ab) < 0.25
   
   action {
     // Force absent: but this is still probabilistic (sets to near-zero, not exactly zero)
@@ -129,7 +142,8 @@ flow SocialAnalysis on SocialBeliefs {
   
   // Metrics that understand probabilistic structure
   metric avg_influence = nodes(Person) |> avg(by=E[node.influence])
-  
+
+  // Only Alice->Bob (P = 0.8) clears the bar: 1 edge / 3 people
   metric avg_strong_connections = avg_degree(Person, FRIENDS, min_prob=0.8)
   
   // Count nodes with many weak connections (uncertain structure)

@@ -18,79 +18,76 @@ belief_model TestBeliefs on ABTest {
       mean=0.1,
       precision=10.0  // τ = 10 → σ² = 0.1
       // Prior standard deviation: √0.1 ≈ 0.316
-      // 95% credible interval: [0.1 - 1.96×0.316, 0.1 + 1.96×0.316] ≈ [-0.52, 0.72]
     )
     sample_size ~ Gaussian(mean=1000.0, precision=0.01)
   }
   edge OUTPERFORMS {
-    // Does variant A outperform variant B?
+    // Candidate hypothesis "X outperforms Y".
     // Prior: 50% chance (no preference before seeing data)
     exist ~ Bernoulli(prior=0.5, weight=2.0)  // Weak prior: Beta(1, 1) uniform
   }
 }
 
-evidence VariantAData on TestBeliefs {
-  // Variant A: observed conversion rate = 0.12
-  // (e.g., 120 conversions out of 1000 impressions)
-  // With default observation precision = 1.0:
-  // τ_post = 10 + 1 = 11
-  // μ_post = (10×0.1 + 1×0.12) / 11 = 1.12/11 ≈ 0.102
-  Variant { "A" { conversion_rate: 0.12, sample_size: 1000.0 } }
-}
+// Both variants live in ONE evidence block so rules can compare them within a
+// single graph. (Separate evidence blocks would build separate graphs.)
+evidence ExperimentData on TestBeliefs {
+  // KEY MODELING POINT: observation precision should scale with sample size.
+  // A conversion rate estimated from 1000 impressions has sampling variance
+  // p(1-p)/n ≈ 0.0001, so we use precision=100 (a conservative round figure)
+  // rather than the default precision=1.
+  //
+  // Posterior for A: τ = 10 + 100 = 110, μ = (10×0.1 + 100×0.12) / 110 ≈ 0.1182
+  // Posterior for B: τ = 10 + 100 = 110, μ = (10×0.1 + 100×0.15) / 110 ≈ 0.1455
+  Variant {
+    "A" { conversion_rate: 0.12 (precision=100.0), sample_size: 1000.0 },
+    "B" { conversion_rate: 0.15 (precision=100.0), sample_size: 1000.0 }
+  }
 
-evidence VariantBData on TestBeliefs {
-  // Variant B: observed conversion rate = 0.15
-  // (e.g., 150 conversions out of 1000 impressions)
-  // τ_post = 10 + 1 = 11
-  // μ_post = (10×0.1 + 1×0.15) / 11 = 1.15/11 ≈ 0.105
-  Variant { "B" { conversion_rate: 0.15, sample_size: 1000.0 } }
+  // The hypothesis edge under test: "B outperforms A", observed once by an
+  // analyst review. Beta(1,1) + 1 present → P(exist) = 2/3.
+  OUTPERFORMS(Variant -> Variant) { "B" -> "A" }
 }
 
 // Rule to determine winner based on practical significance
 rule DetermineWinner on TestBeliefs {
   pattern
-    (A:Variant)-[dummy_a:OUTPERFORMS]->(A:Variant),
-    (B:Variant)-[dummy_b:OUTPERFORMS]->(B:Variant)
+    (W:Variant)-[wl:OUTPERFORMS]->(L:Variant)
 
   where
-    A != B
-    and E[B.conversion_rate] > E[A.conversion_rate]
-    and E[B.conversion_rate] - E[A.conversion_rate] > 0.02  // Practical significance: 2% lift
+    // Statistical direction AND practical significance (2% lift):
+    // E[B] - E[A] = 0.1455 - 0.1182 = 0.0273 > 0.02, so this fires.
+    E[W.conversion_rate] > E[L.conversion_rate]
+    and E[W.conversion_rate] - E[L.conversion_rate] > 0.02
 
   action {
-    // Mark B as winner by boosting its posterior slightly
-    // In production, this might trigger deployment or further testing
-    non_bayesian_nudge B.conversion_rate to E[B.conversion_rate] * 1.01 variance=preserve
+    // Confirm the hypothesis edge with a strong observation and mark the
+    // winner. In production, this might trigger deployment or further testing.
+    non_bayesian_nudge W.conversion_rate to E[W.conversion_rate] * 1.01 variance=preserve
   }
 
   mode: for_each
 }
 
 flow ABTestAnalysis on TestBeliefs {
-  graph a = from_evidence VariantAData
-  graph b = from_evidence VariantBData
-
-  // After Bayesian updates:
-  // A: μ_post ≈ 0.102 (prior pulls observation 0.12 down toward 0.10)
-  // B: μ_post ≈ 0.105 (prior pulls observation 0.15 down toward 0.10)
-  // Difference: 0.003 (0.3 percentage points)
+  graph experiment = from_evidence ExperimentData
 
   // Decision analysis:
-  // - Statistical difference: 0.3% (B > A)
+  // - Posterior lift: E[B] - E[A] = 0.0273 (2.73 percentage points)
   // - Practical significance threshold: 2%
-  // - Conclusion: Difference is statistically real but too small to matter
-  // - Action: Need more data OR accept no meaningful difference
+  // - Conclusion: B's lift is both statistically real and practically
+  //   significant, so DetermineWinner fires and marks B.
+  graph with_winner = experiment |> apply_rule DetermineWinner
 
-  graph with_winner = b |> apply_rule DetermineWinner
-
-  metric mean_A = nodes(Variant)
+  metric avg_conversion = nodes(Variant)
     |> where(E[node.sample_size] > 0.0)
     |> avg(by=E[node.conversion_rate])
+  // Expected: (0.1182 + 0.1455×1.01) / 2 ≈ 0.1326 (B nudged by the winner mark)
 
-  // Count variants with "good" conversion rates
+  // Count variants whose posterior clears a 12% bar: only B (0.147)
   metric good_variants = nodes(Variant)
     |> where(E[node.conversion_rate] > 0.12)
     |> count()
+  // Expected: 1
 
   export with_winner as "winner"
 }
@@ -99,37 +96,29 @@ flow ABTestAnalysis on TestBeliefs {
 // 1. Bayesian A/B testing naturally incorporates prior knowledge
 //    - Prior prevents overfitting to small samples
 //    - Prior reflects baseline conversion rates from historical data
-// 2. Can make decisions before reaching "statistical significance"
+// 2. Observation precision must reflect sample size
+//    - n=1000 impressions → sampling variance p(1-p)/n ≈ 1e-4 → precision ≈ 1e4
+//      (we use a conservative 100 here to keep the prior visibly influential)
+//    - Using the default precision=1 for aggregate data understates the
+//      evidence and the prior swamps the data
+// 3. Can make decisions before reaching "statistical significance"
 //    - No need for fixed sample sizes or p-values
 //    - Update beliefs continuously as data arrives
-// 3. Separates statistical significance from practical significance
+// 4. Separates statistical significance from practical significance
 //    - Statistical: Is there a real difference? (Bayesian credible intervals)
 //    - Practical: Does the difference matter? (Business thresholds)
-// 4. Posterior uncertainty guides sample size requirements
+// 5. Posterior uncertainty guides sample size requirements
 //    - High uncertainty → need more data
 //    - Low uncertainty → can make decision with confidence
-// 5. Natural handling of multiple comparisons
-//    - Prior regularization prevents false positives
-//    - No need for Bonferroni corrections
 
-// Advanced: Demonstrating decision-making with loss functions
+// Advanced: Demonstrating decision-making with a threshold rule.
+// Node-only iteration: fires for every Variant whose posterior clears the bar.
 rule DecideWithLoss on TestBeliefs {
-  pattern
-    (A:Variant)-[dummy:OUTPERFORMS]->(A:Variant)
-
-  where
-    // Decision rule based on expected loss
-    // Loss = (cost of wrong decision) × P(wrong decision)
-    // Here: simple threshold on posterior mean
-    E[A.conversion_rate] > 0.11
-
-  action {
-    // Deploy variant A if it clears threshold
-    // In practice, would trigger deployment pipeline
+  for (A:Variant) where E[A.conversion_rate] > 0.11 => {
+    // Deploy variant if it clears threshold.
+    // In practice, would trigger deployment pipeline.
     non_bayesian_nudge A.conversion_rate to E[A.conversion_rate] * 1.05 variance=preserve
   }
-
-  mode: for_each
 }
 
 // Additional examples (not used in flows):

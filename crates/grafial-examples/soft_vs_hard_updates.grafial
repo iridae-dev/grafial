@@ -17,19 +17,31 @@ belief_model AllocationBeliefs on ResourceAllocation {
     capacity ~ Gaussian(mean=1.0, precision=1.0)
   }
   edge ALLOCATED_TO {
-    exist ~ Bernoulli(prior=0.2, weight=5.0)
+    // Beta(1,1) uniform prior; n sightings give P(exist) = (1+n)/(2+n)
+    exist ~ Bernoulli(prior=0.5, weight=2.0)
   }
 }
 
 evidence InitialAllocation on AllocationBeliefs {
-  // Initial observations with uncertainty
-  Resource { 
+  // Initial observations with uncertainty.
+  // Posterior means with prior N(0.5, tau=0.1) and observation precision 1.0:
+  // E[allocation] = (0.05 + obs) / 1.1
+  //   R2: 0.409 (underloaded), R3: 0.864 (overloaded)
+  //   R4: 1.045, R5: 1.000 (both critically overloaded)
+  Resource {
     "R1" { allocation: 0.6 },
     "R2" { allocation: 0.4 },
-    "R3" { allocation: 0.8 }
+    "R3" { allocation: 0.9 },
+    "R4" { allocation: 1.1 },
+    "R5" { allocation: 1.05 }
   }
-  
-  ALLOCATED_TO(Resource -> Resource) { "R1" -> "R1" }
+
+  // R3 allocates to R2, seen three times: P(exist) = 4/5 = 0.8
+  // R4 allocates to R5, seen once: P(exist) = 2/3 ≈ 0.667
+  ALLOCATED_TO(Resource -> Resource) {
+    "R3" -> "R2"; "R3" -> "R2"; "R3" -> "R2";
+    "R4" -> "R5"
+  }
 }
 
 // Rule that does SOFT updates: preserves uncertainty while shifting mean
@@ -38,10 +50,11 @@ rule BalanceAllocation on AllocationBeliefs {
     (A:Resource)-[ab:ALLOCATED_TO]->(B:Resource)
   
   where
+    // R3->R2 matches: P(edge) = 0.8, E[R3] = 0.864 > 0.8, E[R2] = 0.409 < 0.5
     prob(ab) >= 0.7
     and E[A.allocation] > 0.8
     and E[B.allocation] < 0.5
-  
+
   action {
     // SOFT UPDATE: non_bayesian_nudge(... variance=preserve) shifts the posterior mean while preserving precision
     // This is NOT a full Bayesian update - it's a manual intervention for control actions
@@ -74,10 +87,12 @@ rule DisconnectOverloaded on AllocationBeliefs {
     (A:Resource)-[ab:ALLOCATED_TO]->(B:Resource)
   
   where
+    // R4->R5 matches: P(edge) = 0.667, E[R4] = 1.045 and E[R5] = 1.000 both > 0.9.
+    // Two overloaded resources should not allocate to each other.
     prob(ab) >= 0.5
     and E[A.allocation] > 0.9
     and E[B.allocation] > 0.9
-  
+
   action {
     // delete ... confidence=high: adds ~10⁹ absent pseudo-counts, pushing P(exist) near zero
     // Properties:

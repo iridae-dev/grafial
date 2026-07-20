@@ -31,6 +31,11 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace
 
+      - name: Run feature-gated engine tests (parallel, vectorized)
+        run: |
+          cargo test -p grafial-core --features "parallel vectorized"
+          cargo test -p grafial-tests --features parallel
+
   python-bindings-tests:
     runs-on: ubuntu-latest
     steps:

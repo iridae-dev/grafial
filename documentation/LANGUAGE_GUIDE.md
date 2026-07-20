@@ -98,7 +98,7 @@ Parameter aliases accepted by parser:
 
 Additional Gaussian parameters:
 
-- `observation_precision=<positive number>`: default precision used when evidence omits `(precision=...)`.
+- `observation_precision=<positive number>`: default precision used when evidence omits `(precision=...)`. If the model does not declare `observation_precision`, the engine falls back to `1.0`.
 - `corr_<other_attr>=rho`: fixed attribute correlation (`rho` in `[-1, 1]`) for multivariate comparisons/covariance.
 
 Example fixed correlation:
@@ -139,7 +139,7 @@ Evidence applies observations against a belief model.
 ```grafial
 evidence Ev on MyBeliefs {
   Entity {
-    "A" { value: 1.0 (precision=10.0), weight: 2.0 }
+    "A" { value: 1.0 (precision=10.0), weight: 2.0 },
     "B" { value: 0.2 }
   }
 
@@ -231,7 +231,22 @@ rule BoostLow on SocialBeliefs {
 }
 ```
 
-### 6.3 Rule Modes (Current Runtime Behavior)
+### 6.3 Pattern Semantics
+
+- A node variable repeated within one pattern constrains both endpoints to the
+  same node: `(A:Person)-[e:REL]->(A:Person)` matches only genuine self-edges.
+  To iterate all nodes of a type regardless of edges, use the node-only form
+  `for (A:Person) where ... => { ... }`.
+- Variables shared across multiple patterns in one rule must bind consistently
+  (a join), e.g. `(A)-[ab]->(B), (B)-[bc]->(C)` requires the same `B`.
+- `where` clauses are evaluated against the immutable pre-transform graph for
+  all matches before any action runs, so matching never depends on action
+  order.
+- Action expressions read the working copy: later matches observe earlier
+  matches' writes within one rule application. Matches are processed in
+  stable edge-ID order.
+
+### 6.4 Rule Modes (Current Runtime Behavior)
 
 - Parser accepts `mode: <ident>` on rules.
 - The standalone rule runner supports `for_each` (default) and `fixpoint`.
@@ -383,8 +398,12 @@ Transforms:
 `infer_beliefs` semantics:
 
 - Runs deterministic loopy sum-product belief propagation over independent edge beliefs.
-- Neighbor coupling is applied between edges of the same type that share a source or destination node.
+- Neighbor coupling is applied between edges of the same type that share a source node
+  (fan-out siblings) or share a destination node (fan-in siblings). Chain-adjacent edges
+  (one edge's destination is another's source) are not coupled.
 - Competing (categorical/Dirichlet) edges are not modified by this transform.
+- Gaussian node attributes are not modified by this transform; it smooths edge-existence
+  probabilities only.
 - The transform updates posterior means while preserving each edge's effective sample size.
 
 `select_model` semantics:
@@ -433,6 +452,13 @@ Notes:
 
 - In `fold(...)`, `value` is the accumulator variable.
 - Metrics can reference previously computed metrics and imported metrics by name.
+- All metrics in a flow are evaluated against the LAST graph defined in that
+  flow (not the exported graph). Define your primary result graph last, or
+  keep helper/debug graphs above it.
+- Division by (near-)zero in a metric expression is a hard error, which
+  includes `avg(...)` over an empty node set. Guard with an epsilon
+  (`x / (count + 0.0001)`) or a non-empty `where` filter when a set can be
+  empty.
 
 ## 13. Determinism and Execution Model
 

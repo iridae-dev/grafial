@@ -17,7 +17,7 @@ This folder contains contributor and user-facing documentation for Grafial.
   - Start with `README.md`.
   - Then read `documentation/LANGUAGE_GUIDE.md`.
 - Contributors:
-  - Start with `AGENTS.md`.
+  - Start with `CONTRIBUTING.md`.
   - Then read `documentation/BUILDING.md` and `documentation/ENGINE_ARCHITECTURE.md`.
 
 ## Current State

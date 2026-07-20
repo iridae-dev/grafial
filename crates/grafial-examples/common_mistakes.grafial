@@ -49,19 +49,19 @@ flow CorrectConnectivityCheck on ExampleBeliefs {
 }
 
 // ========================================
-// MISTAKE 2: Chaining multiple exists expressions
+// MISTAKE 2: Unlabeled nodes in exists patterns
 // ========================================
 
-// ❌ WRONG: Cannot chain exists with 'and exists'
-// The grammar only supports single exists expressions in where clauses
+// ❌ WRONG: exists patterns require node labels, exactly like rule patterns.
+// (Chaining `exists ... and exists ...` itself is fully supported.)
 /*
 rule BadMultiHopPattern on ExampleBeliefs {
   pattern
     (A:Item)-[ab:LINKS]->(B:Item)
 
   where
-    exists (A)-[ax:LINKS]->(X) where prob(ax) >= 0.7
-    and exists (X)-[xb:LINKS]->(B) where prob(xb) >= 0.7  // ERROR: second exists not supported
+    exists (A)-[ax:LINKS]->(X) where prob(ax) >= 0.7        // ERROR: (A) and (X) lack :Item labels
+    and exists (X)-[xb:LINKS]->(B) where prob(xb) >= 0.7    // ERROR: same problem
 
   action {
     non_bayesian_nudge B.value to E[A.value] * 0.9 variance=preserve
@@ -70,6 +70,12 @@ rule BadMultiHopPattern on ExampleBeliefs {
   mode: for_each
 }
 */
+// ✅ CORRECT form of the same where clause:
+//   exists (A:Item)-[ax:LINKS]->(X:Item) where prob(ax) >= 0.7
+//   and exists (X:Item)-[xb:LINKS]->(B:Item) where prob(xb) >= 0.7
+// Note: each exists subquery binds its own variables against the current
+// match; multi-hop *transitive* inference still needs repeated rule
+// application (see transitive_closure.grafial).
 
 // ✅ CORRECT: Use fixpoint mode for multi-hop inference
 rule CorrectMultiHopPattern on ExampleBeliefs {

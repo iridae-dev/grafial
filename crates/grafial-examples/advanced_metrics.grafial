@@ -19,15 +19,21 @@ belief_model AnalyticsBeliefs on Analytics {
     priority ~ Gaussian(mean=0.5, precision=0.5)
   }
   edge CONNECTS {
-    exist ~ Bernoulli(prior=0.3, weight=5.0)
+    // Beta(1,1) uniform prior: repeated sightings move P(exist) quickly
+    exist ~ Bernoulli(prior=0.5, weight=2.0)
   }
   edge INFLUENCES {
-    exist ~ Bernoulli(prior=0.2, weight=10.0)
+    // Skeptical prior: Beta(0.4, 1.6), P(exist) starts at 0.2
+    exist ~ Bernoulli(prior=0.2, weight=2.0)
   }
 }
 
 evidence SampleData on AnalyticsBeliefs {
-  // Entities with varying values, weights, priorities
+  // Entities with varying values, weights, priorities.
+  // NOTE: metrics below see POSTERIOR means, not these raw observations.
+  // With value ~ Gaussian(mean=10, precision=0.1) and observation precision 1.0,
+  // E[value] = (0.1*10 + 1.0*obs) / 1.1 = (1 + obs) / 1.1:
+  //   E1: 91.82, E2: 46.36, E3: 69.09, E4: 23.64, E5: 73.64
   Entity {
     "E1" { value: 100.0, weight: 2.0, priority: 0.9 },
     "E2" { value: 50.0,  weight: 1.5, priority: 0.7 },
@@ -36,11 +42,23 @@ evidence SampleData on AnalyticsBeliefs {
     "E5" { value: 80.0,  weight: 1.8, priority: 0.8 }
   }
 
-  // Connections
-  CONNECTS(Entity -> Entity) { "E1" -> "E2"; "E1" -> "E3"; "E2" -> "E4"; "E3" -> "E5" }
+  // Connections: repeated observations = more certainty.
+  // Beta(1,1) + n present observations -> P(exist) = (1+n)/(2+n):
+  //   E1->E2 seen 8x -> 0.90; E1->E3 seen 3x -> 0.80; E2->E4, E3->E5 seen once -> 0.667
+  CONNECTS(Entity -> Entity) {
+    "E1" -> "E2"; "E1" -> "E2"; "E1" -> "E2"; "E1" -> "E2";
+    "E1" -> "E2"; "E1" -> "E2"; "E1" -> "E2"; "E1" -> "E2";
+    "E1" -> "E3"; "E1" -> "E3"; "E1" -> "E3";
+    "E2" -> "E4"; "E3" -> "E5"
+  }
 
-  // Influences
-  INFLUENCES(Entity -> Entity) { "E1" -> "E2"; "E1" -> "E3"; "E2" -> "E3" }
+  // Influences: Beta(0.4, 1.6) + n present -> P = (0.4+n)/(2+n):
+  //   E1->E2, E1->E3 seen 3x -> 0.68; E2->E3 seen once -> 0.467
+  INFLUENCES(Entity -> Entity) {
+    "E1" -> "E2"; "E1" -> "E2"; "E1" -> "E2";
+    "E1" -> "E3"; "E1" -> "E3"; "E1" -> "E3";
+    "E2" -> "E3"
+  }
 }
 
 flow MetricsShowcase on AnalyticsBeliefs {
@@ -52,11 +70,11 @@ flow MetricsShowcase on AnalyticsBeliefs {
   metric total_entities = nodes(Entity) |> count()
   // Expected: 5
 
-  // Filtered count: high-value entities
+  // Filtered count: high-value entities (posterior means)
   metric high_value_count = nodes(Entity)
     |> where(E[node.value] > 60.0)
     |> count()
-  // Expected: 3 (E1=100, E3=75, E5=80)
+  // Expected: 3 (E1=91.8, E3=69.1, E5=73.6)
 
   // Multiple conditions: high value AND high priority
   metric premium_count = nodes(Entity)
@@ -66,27 +84,28 @@ flow MetricsShowcase on AnalyticsBeliefs {
 
   // ========== sum_nodes: Aggregation with Filtering ==========
 
-  // Simple sum: total value across all entities
+  // Simple sum: total value across all entities (posterior means)
   metric total_value = nodes(Entity) |> sum(by=E[node.value])
-  // Expected: 100 + 50 + 75 + 25 + 80 = 330
+  // Expected: 91.82 + 46.36 + 69.09 + 23.64 + 73.64 = 304.55
 
   // Weighted sum: value weighted by entity weight
   metric weighted_value = nodes(Entity)
     |> sum(by=E[node.value] * E[node.weight])
-  // Expected: 100×2.0 + 50×1.5 + 75×1.0 + 25×0.5 + 80×1.8
-  //         = 200 + 75 + 75 + 12.5 + 144 = 506.5
+  // Weight posteriors: E[weight] = (1 + obs) / 2 -> 1.5, 1.25, 1.0, 0.75, 1.4
+  // Expected: 91.82×1.5 + 46.36×1.25 + 69.09×1.0 + 23.64×0.75 + 73.64×1.4 = 385.59
 
-  // Filtered sum: only high-priority entities
+  // Filtered sum: only high-priority entities.
+  // Priority posteriors: E[priority] = (0.25 + obs) / 1.5 -> 0.77, 0.63, 0.5, 0.37, 0.7
   metric priority_value = nodes(Entity)
     |> where(E[node.priority] > 0.6)
     |> sum(by=E[node.value])
-  // Expected: 100 + 50 + 80 = 230 (E1, E2, E5)
+  // Expected: 91.82 + 46.36 + 73.64 = 211.82 (E1, E2, E5)
 
   // Complex contribution: priority-weighted value
   metric priority_weighted_value = nodes(Entity)
     |> sum(by=E[node.value] * E[node.priority] * E[node.weight])
-  // Expected: 100×0.9×2.0 + 50×0.7×1.5 + 75×0.5×1.0 + 25×0.3×0.5 + 80×0.8×1.8
-  //         = 180 + 52.5 + 37.5 + 3.75 + 115.2 = 388.95
+  // Expected (posterior means): 91.82×0.77×1.5 + 46.36×0.63×1.25
+  //   + 69.09×0.5×1.0 + 23.64×0.37×0.75 + 73.64×0.7×1.4 = 255.50
 
   // ========== fold_nodes: Sequential Computation with Ordering ==========
 
@@ -95,71 +114,71 @@ flow MetricsShowcase on AnalyticsBeliefs {
   metric cumulative_value = nodes(Entity)
     |> order_by(E[node.value])
     |> fold(init=0.0, step=value + E[node.value])
-  // Processing order: E1(100) → E5(80) → E3(75) → E2(50) → E4(25)
-  // Accumulation: 0 → 100 → 180 → 255 → 305 → 330
-  // Final: 330 (same as total_value, but demonstrates ordering)
+  // Processing order (posterior means): E1(91.8) → E5(73.6) → E3(69.1) → E2(46.4) → E4(23.6)
+  // Final: 304.55 (same as total_value, but demonstrates ordering)
 
   // Compound interest-style accumulation
   metric compound_value = nodes(Entity)
     |> order_by(E[node.priority])  // Process by priority
     |> fold(init=0.0, step=value + E[node.value] * (1.0 + value * 0.01))
-  // Processing order: E1(0.9) → E5(0.8) → E2(0.7) → E3(0.5) → E4(0.3)
-  // Step 1: 0 + 100×(1+0×0.01) = 100
-  // Step 2: 100 + 80×(1+100×0.01) = 100 + 80×2.0 = 260
-  // Step 3: 260 + 50×(1+260×0.01) = 260 + 50×3.6 = 440
-  // Step 4: 440 + 75×(1+440×0.01) = 440 + 75×5.4 = 845
-  // Step 5: 845 + 25×(1+845×0.01) = 845 + 25×9.45 = 1081.25
-  // Final: ~1081.25 (demonstrates compound effect)
+  // Processing order by posterior priority: E1(0.77) → E5(0.70) → E2(0.63) → E3(0.5) → E4(0.37)
+  // Each step adds E[value]×(1 + running_total×0.01), so later entities
+  // contribute more per unit of value. Final: ~919.1 (demonstrates compound effect)
 
   // Filtered fold: only consider high-value entities
   metric selective_compound = nodes(Entity)
     |> where(E[node.value] > 50.0)
     |> order_by(E[node.value])
     |> fold(init=0.0, step=value + E[node.value] * (1.0 + value * 0.005))
-  // Only processes: E1(100), E5(80), E3(75)
+  // Only processes entities with posterior value > 50: E1(91.8), E5(73.6), E3(69.1)
 
   // ========== avg_degree: Connectivity Analysis ==========
 
-  // Average degree considering all probable edges
+  // Average degree considering all probable edges.
+  // Edges at P >= 0.5: E1->E2 (0.90), E1->E3 (0.80), E2->E4 (0.667), E3->E5 (0.667)
   metric avg_connections = avg_degree(Entity, CONNECTS, min_prob=0.5)
-  // Counts edges with P(exist) >= 0.5 for each entity, then averages
+  // Expected: 4 edges / 5 entities = 0.8
 
-  // Average degree with stricter threshold
+  // Average degree with stricter threshold: only E1->E2 (0.90) qualifies
   metric avg_strong_connections = avg_degree(Entity, CONNECTS, min_prob=0.9)
-  // Only counts highly certain edges
+  // Expected: 1 edge / 5 entities = 0.2
 
-  // Different edge type
-  metric avg_influences = avg_degree(Entity, INFLUENCES, min_prob=0.7)
+  // Different edge type: E1->E2 and E1->E3 at 0.68 clear the 0.6 bar
+  metric avg_influences = avg_degree(Entity, INFLUENCES, min_prob=0.6)
+  // Expected: 2 edges / 5 entities = 0.4
 
   // ========== Metric Cross-References ==========
 
   // Derived metrics that reference other metrics
   metric avg_value = total_value / total_entities
-  // Expected: 330 / 5 = 66
+  // Expected: 304.55 / 5 = 60.9
 
   metric value_concentration = priority_value / total_value
-  // Expected: 230 / 330 ≈ 0.697 (69.7% of value in high-priority entities)
+  // Expected: 211.82 / 304.55 ≈ 0.696 (69.6% of value in high-priority entities)
 
   metric weighted_avg_value = weighted_value / (nodes(Entity) |> sum(by=E[node.weight]))
-  // Denominator: 2.0 + 1.5 + 1.0 + 0.5 + 1.8 = 6.8
-  // Expected: 506.5 / 6.8 ≈ 74.5
+  // Denominator (posterior weights): 1.5 + 1.25 + 1.0 + 0.75 + 1.4 = 5.9
+  // Expected: 385.59 / 5.9 ≈ 65.35
 
   // Composite quality score
   metric quality_score = (
     (premium_count / total_entities) * 0.4 +
     (value_concentration) * 0.3 +
-    // Add epsilon guard so this showcase example remains executable
-    // even when all edge probabilities are below the min_prob threshold.
+    // Epsilon guard keeps the ratio well-defined if a future edit
+    // leaves no edges above the min_prob thresholds.
     (avg_strong_connections / (avg_connections + 0.0001)) * 0.3
   )
   // Combines multiple metrics with weights
 
   // ========== Complex Patterns ==========
 
-  // Entities with high value but low connectivity
+  // Entities with high value but low connectivity.
+  // E1 (91.8) is excluded: out-degree 2 at min_prob=0.7 (E1->E2, E1->E3).
+  // E3 fails the value bar (69.1 < 70). E5 (73.6, out-degree 0) qualifies.
   metric isolated_high_value = nodes(Entity)
     |> where(E[node.value] > 70.0 and degree(node, min_prob=0.7) < 2.0)
     |> count()
+  // Expected: 1 (E5)
 
   // Average value of well-connected entities
   metric connected_avg_value = nodes(Entity)
@@ -207,18 +226,12 @@ flow MetricsShowcase on AnalyticsBeliefs {
 //    - Document expected values in comments
 //    - Test metrics with known data
 
-// Advanced: Multi-stage metric computation
+// Advanced: Multi-stage metric computation.
+// Node-only iteration visits every Entity; an edge pattern with a repeated
+// variable, (E)-[d:CONNECTS]->(E), would only match self-edges.
 rule TagHighValueEntities on AnalyticsBeliefs {
-  pattern
-    (E:Entity)-[dummy:CONNECTS]->(E:Entity)
-
-  where
-    E[E.value] > 70.0
-
-  action {
+  for (E:Entity) where E[E.value] > 70.0 => {
     // Boost priority for high-value entities
     non_bayesian_nudge E.priority to E[E.priority] * 1.2 variance=preserve
   }
-
-  mode: for_each
 }

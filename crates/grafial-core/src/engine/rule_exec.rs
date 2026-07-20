@@ -10,8 +10,11 @@
 //!
 //! Rules follow a pattern-match-execute model:
 //! 1. Match patterns in the graph to find variable bindings
-//! 2. Evaluate the optional `where` clause with bound variables
-//! 3. Execute actions for each successful match (for_each mode) or first match
+//! 2. Evaluate the optional `where` clause with bound variables (against the
+//!    immutable input graph, so matching never depends on action order)
+//! 3. Execute actions for each successful match (`for_each`), or repeatedly
+//!    until convergence (`fixpoint`). Action expressions read the working copy,
+//!    so later matches observe earlier matches' writes within one rule pass.
 //!
 //! Rules operate on immutable graphs: mutations are applied to a working copy (delta),
 //! and the original graph remains unchanged. The working copy is committed at the end
@@ -1527,8 +1530,15 @@ fn build_pattern_candidates(
         return Ok(Vec::new());
     };
 
+    // A repeated node variable within one pattern, e.g. (A:T)-[e:E]->(A:T),
+    // constrains both endpoints to the same node: only self-edges can match.
+    let requires_self_edge = pattern.src.var == pattern.dst.var;
+
     let mut candidates = Vec::with_capacity(candidates_for_type.len());
     for edge in candidates_for_type {
+        if requires_self_edge && edge.src != edge.dst {
+            continue;
+        }
         if matches_node_labels(graph, edge, pattern)? {
             candidates.push(*edge);
         }
@@ -2619,6 +2629,57 @@ mod tests {
         assert!(result.prob_mean(e2).unwrap() < 1e-5);
         // e1 should still be present
         assert!(result.prob_mean(e1).unwrap() > 0.5);
+    }
+
+    #[test]
+    fn repeated_node_variable_requires_self_edge() {
+        // Pattern (N:Person)-[e:REL]->(N:Person) must bind both endpoints to the
+        // same node: it may match a genuine self-edge, never an ordinary edge.
+        let mut g = BeliefGraph::default();
+        let n1 = g.add_node("Person".into(), HashMap::new());
+        let n2 = g.add_node("Person".into(), HashMap::new());
+        let strong = BetaPosterior {
+            alpha: 9.0,
+            beta: 1.0,
+        };
+        // Ordinary edge n1 -> n2 and a true self-edge n2 -> n2.
+        let _plain = g.add_edge(n1, n2, "REL".into(), strong);
+        let _self_edge = g.add_edge(n2, n2, "REL".into(), strong);
+        g.ensure_owned();
+
+        let rule = RuleDef {
+            name: "SelfOnly".into(),
+            on_model: "M".into(),
+            patterns: vec![PatternItem {
+                src: NodePattern {
+                    var: "N".into(),
+                    label: "Person".into(),
+                },
+                edge: EdgePattern {
+                    var: "e".into(),
+                    ty: "REL".into(),
+                },
+                dst: NodePattern {
+                    var: "N".into(),
+                    label: "Person".into(),
+                },
+            }],
+            where_expr: None,
+            actions: vec![ActionStmt::ForceAbsent {
+                edge_var: "e".into(),
+            }],
+            mode: Some("for_each".into()),
+        };
+
+        let (result, audit) =
+            run_rule_for_each_with_globals_audit(&g, &rule, &HashMap::new()).unwrap();
+        assert_eq!(
+            audit.matched_bindings, 1,
+            "only the self-edge should match a repeated-variable pattern"
+        );
+        // The self-edge was forced absent; the ordinary edge is untouched.
+        assert!(result.prob_mean(EdgeId(1)).unwrap() < 1e-5);
+        assert!(result.prob_mean(EdgeId(0)).unwrap() > 0.5);
     }
 
     #[test]

@@ -75,10 +75,13 @@ pub fn inv_norm_cdf(p: f64) -> f64 {
     }
 
     if p < P_LOW {
-        // Rational approximation for lower tail
+        // Rational approximation for lower tail:
+        // x = (((((c1 q + c2) q + c3) q + c4) q + c5) q + c6)
+        //     / ((((d1 q + d2) q + d3) q + d4) q + 1)
         let q = (-2.0 * p.ln()).sqrt();
-        ((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5]
-            - (((D[0] * q + D[1]) * q + D[2]) * q + D[3]).recip()
+        let num = ((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5];
+        let den = (((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0;
+        num / den
     } else if p <= P_HIGH {
         // Rational approximation for central region
         let q = p - 0.5;
@@ -86,10 +89,11 @@ pub fn inv_norm_cdf(p: f64) -> f64 {
         (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
             / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0)
     } else {
-        // Rational approximation for upper tail
+        // Rational approximation for upper tail (mirror of the lower tail)
         let q = (-2.0 * (1.0 - p).ln()).sqrt();
-        -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5]
-            - (((D[0] * q + D[1]) * q + D[2]) * q + D[3]).recip())
+        let num = ((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5];
+        let den = (((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0;
+        -(num / den)
     }
 }
 
@@ -144,5 +148,46 @@ mod tests {
         assert_eq!(pos.len(), 2);
         assert_eq!(named.len(), 1);
         assert_eq!(named[0].0, "x");
+    }
+
+    #[test]
+    fn inv_norm_cdf_matches_known_quantiles() {
+        // Reference values of Φ⁻¹(p); Acklam's approximation is accurate to ~1.15e-9,
+        // so 1e-6 comfortably covers all three branches including both tails.
+        let cases = [
+            (0.001, -3.090_232_306_167_813),
+            (0.01, -2.326_347_874_040_841),
+            (0.025, -1.959_963_984_540_054),
+            (0.5, 0.0),
+            (0.975, 1.959_963_984_540_054),
+            (0.99, 2.326_347_874_040_841),
+            (0.999, 3.090_232_306_167_813),
+        ];
+        for (p, expected) in cases {
+            let got = inv_norm_cdf(p);
+            assert!(
+                (got - expected).abs() < 1e-6,
+                "inv_norm_cdf({}) = {}, expected {}",
+                p,
+                got,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn inv_norm_cdf_round_trips_norm_cdf_in_tails() {
+        // norm_cdf is a coarser approximation (~1e-7), so allow 1e-5.
+        for p in [0.005, 0.02, 0.05, 0.5, 0.95, 0.98, 0.995] {
+            let z = inv_norm_cdf(p);
+            let back = norm_cdf(z);
+            assert!(
+                (back - p).abs() < 1e-5,
+                "round trip failed: p={}, z={}, back={}",
+                p,
+                z,
+                back
+            );
+        }
     }
 }
