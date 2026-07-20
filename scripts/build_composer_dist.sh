@@ -18,6 +18,9 @@ OUT="${1:-$REPO_ROOT/dist/composer}"
 
 echo "Building wasm package..."
 cd "$REPO_ROOT/crates/grafial-wasm"
+export GRAFIAL_GIT_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+export GRAFIAL_GIT_DESCRIBE="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo unknown)"
+export GRAFIAL_EXAMPLES_CORPUS="crates/grafial-examples"
 wasm-pack build --target web --out-dir "$REPO_ROOT/webapp/pkg" --release
 
 echo "Assembling bundle at $OUT ..."
