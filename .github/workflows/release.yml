@@ -7,12 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g. 0.1.0 or v0.1.0)"
+        description: "Version to release (e.g. 0.2.0 or v0.2.0)"
         required: true
-        default: "0.1.0"
+        default: "0.2.0"
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   set-version:
@@ -33,8 +35,12 @@ jobs:
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           echo "tag=v${ver}" >> "$GITHUB_OUTPUT"
 
-  build-binaries:
+  test-gate:
     needs: set-version
+    uses: ./.github/workflows/phase6-release-gate.yml
+
+  build-binaries:
+    needs: [set-version, test-gate]
     strategy:
       fail-fast: false
       matrix:
@@ -57,7 +63,7 @@ jobs:
             ext: zip
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set version in manifests
         shell: bash
@@ -65,13 +71,19 @@ jobs:
           VERSION: ${{ needs.set-version.outputs.version }}
         run: ./scripts/set_version.sh
 
+      - name: Assert versions agree with release tag
+        shell: bash
+        env:
+          EXPECT_VERSION: ${{ needs.set-version.outputs.version }}
+        run: ./scripts/assert_versions.sh
+
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
 
       - name: Build CLI and LSP
         run: |
@@ -80,13 +92,8 @@ jobs:
       - name: Strip binaries
         if: runner.os != 'Windows'
         run: |
-          if [[ "${{ runner.os }}" == "Linux" ]]; then
-            strip target/${{ matrix.target }}/release/grafial 2>/dev/null || true
-            strip target/${{ matrix.target }}/release/grafial-lsp 2>/dev/null || true
-          elif [[ "${{ runner.os }}" == "macOS" ]]; then
-            strip target/${{ matrix.target }}/release/grafial 2>/dev/null || true
-            strip target/${{ matrix.target }}/release/grafial-lsp 2>/dev/null || true
-          fi
+          strip target/${{ matrix.target }}/release/grafial 2>/dev/null || true
+          strip target/${{ matrix.target }}/release/grafial-lsp 2>/dev/null || true
 
       - name: Package artifacts (Unix)
         if: runner.os != 'Windows'
@@ -107,35 +114,63 @@ jobs:
           Compress-Archive -Path "$BIN_DIR/grafial.exe" -DestinationPath "grafial-$VERSION-$SUFFIX.zip"
           Compress-Archive -Path "$BIN_DIR/grafial-lsp.exe" -DestinationPath "grafial-lsp-$VERSION-$SUFFIX.zip"
 
+      - name: Install-test CLI archive (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          VERSION="${{ needs.set-version.outputs.version }}"
+          SUFFIX="${{ matrix.suffix }}"
+          mkdir -p /tmp/grafial-cli-test
+          tar xzvf "grafial-$VERSION-$SUFFIX.tar.gz" -C /tmp/grafial-cli-test
+          /tmp/grafial-cli-test/grafial --version | tee /tmp/cli-version.txt
+          grep -F "$VERSION" /tmp/cli-version.txt
+          /tmp/grafial-cli-test/grafial crates/grafial-examples/minimal.grafial --flow MinimalFlow
+          mkdir -p /tmp/grafial-lsp-test
+          tar xzvf "grafial-lsp-$VERSION-$SUFFIX.tar.gz" -C /tmp/grafial-lsp-test
+          test -x /tmp/grafial-lsp-test/grafial-lsp
+
+      - name: Install-test CLI archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VERSION = "${{ needs.set-version.outputs.version }}"
+          $SUFFIX = "${{ matrix.suffix }}"
+          New-Item -ItemType Directory -Force -Path "$env:TEMP\grafial-cli-test" | Out-Null
+          Expand-Archive -Path "grafial-$VERSION-$SUFFIX.zip" -DestinationPath "$env:TEMP\grafial-cli-test" -Force
+          $cli = Join-Path $env:TEMP "grafial-cli-test\grafial.exe"
+          & $cli --version | Tee-Object -FilePath "$env:TEMP\cli-version.txt"
+          if (-not (Select-String -Path "$env:TEMP\cli-version.txt" -Pattern $VERSION -SimpleMatch -Quiet)) {
+            throw "CLI version missing $VERSION"
+          }
+          & $cli crates\grafial-examples\minimal.grafial --flow MinimalFlow
+          New-Item -ItemType Directory -Force -Path "$env:TEMP\grafial-lsp-test" | Out-Null
+          Expand-Archive -Path "grafial-lsp-$VERSION-$SUFFIX.zip" -DestinationPath "$env:TEMP\grafial-lsp-test" -Force
+          if (-not (Test-Path "$env:TEMP\grafial-lsp-test\grafial-lsp.exe")) { throw "LSP binary missing" }
+
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: grafial-cli-${{ matrix.suffix }}
           path: |
             grafial-${{ needs.set-version.outputs.version }}-${{ matrix.suffix }}.*
 
       - name: Upload LSP artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: grafial-lsp-${{ matrix.suffix }}
           path: |
             grafial-lsp-${{ needs.set-version.outputs.version }}-${{ matrix.suffix }}.*
 
   build-wheels:
-    needs: set-version
+    needs: [set-version, test-gate]
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-22.04
-            python-version: "3.11"
-          - runner: macos-14
-            python-version: "3.11"
-          - runner: windows-latest
-            python-version: "3.11"
-    runs-on: ${{ matrix.runner }}
+        os: [ubuntu-22.04, macos-14, windows-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set version in manifests
         shell: bash
@@ -143,46 +178,155 @@ jobs:
           VERSION: ${{ needs.set-version.outputs.version }}
         run: ./scripts/set_version.sh
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Build wheel (and sdist once on Linux/3.11)
+        uses: PyO3/maturin-action@aef21716ff3dcae8a1c301d23ec3e4446972a6e3 # v1.49.1
+        with:
+          command: build
+          args: --release --out dist ${{ (matrix.os == 'ubuntu-22.04' && matrix.python-version == '3.11') && '--sdist' || '' }}
+          manylinux: ${{ matrix.os == 'ubuntu-22.04' && '2_17' || 'off' }}
+          working-directory: crates/grafial-python
+          sccache: "true"
 
-      - name: Build wheels
-        working-directory: crates/grafial-python
-        run: pip install maturin && maturin build --release --out dist
-
-      - name: Build sdist
-        if: matrix.runner == 'ubuntu-22.04'
-        working-directory: crates/grafial-python
-        run: maturin sdist --out dist
+      - name: Install-test wheel on matching interpreter
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/grafial-wheel-test"
+          if [[ -f "$RUNNER_TEMP/grafial-wheel-test/bin/activate" ]]; then
+            source "$RUNNER_TEMP/grafial-wheel-test/bin/activate"
+          else
+            source "$RUNNER_TEMP/grafial-wheel-test/Scripts/activate"
+          fi
+          python -m pip install --upgrade pip
+          python -m pip install crates/grafial-python/dist/*.whl
+          python - <<'PY'
+          import grafial, pathlib, sys
+          expected = tuple(map(int, "${{ matrix.python-version }}".split(".")))
+          assert sys.version_info[:2] == expected, (sys.version_info[:2], expected)
+          src = pathlib.Path("crates/grafial-examples/minimal.grafial").read_text()
+          program = grafial.compile(src)
+          ctx = grafial.run_flow(program, "MinimalFlow")
+          assert ctx.metrics, "expected metrics from MinimalFlow"
+          print("wheel ok", sys.version.split()[0], sorted(ctx.metrics.keys()))
+          PY
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
-          name: wheels-${{ matrix.runner }}
+          name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
           path: crates/grafial-python/dist/*
 
+  build-composer:
+    needs: [set-version, test-gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set version in manifests
+        env:
+          VERSION: ${{ needs.set-version.outputs.version }}
+        run: ./scripts/set_version.sh
+
+      - name: Install Rust toolchain with wasm target
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install pinned wasm-pack
+        run: ./scripts/install_wasm_pack.sh
+
+      - name: Build static Composer bundle
+        run: ./scripts/build_composer_dist.sh dist/composer
+
+      - name: Install-test Composer static bundle (Playwright headless)
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path("dist/composer")
+          assert (root / "index.html").is_file()
+          assert (root / "pkg" / "grafial_wasm_bg.wasm").is_file()
+          assert (root / "pkg" / "grafial_wasm.js").is_file()
+          assert list((root / "examples").glob("*.grafial")), "examples missing"
+          print("composer files ok")
+          PY
+          npm init -y >/dev/null 2>&1
+          npm install --no-save playwright@1.50.1
+          npx playwright install --with-deps chromium
+          python3 -m http.server -d dist/composer 8765 >/tmp/composer-http.log 2>&1 &
+          echo $! > /tmp/composer-http.pid
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8765/ >/dev/null && break
+            sleep 0.5
+          done
+          COMPOSER_URL=http://127.0.0.1:8765/ node scripts/composer_smoke.mjs
+          kill "$(cat /tmp/composer-http.pid)" || true
+
+      - name: Package composer archive
+        run: |
+          VERSION="${{ needs.set-version.outputs.version }}"
+          tar czvf "grafial-composer-$VERSION.tar.gz" -C dist composer
+
+      - name: Upload composer artifact
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: grafial-composer
+          path: grafial-composer-${{ needs.set-version.outputs.version }}.tar.gz
+
   release:
-    needs: [set-version, build-binaries, build-wheels]
+    needs: [set-version, build-binaries, build-wheels, build-composer]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
+      - name: Checkout for dependency SBOM
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           path: artifacts
           merge-multiple: true
 
+      - name: Generate SHA-256 checksums
+        run: |
+          cd artifacts
+          find . -type f ! -name 'SHA256SUMS' ! -name '*.cdx.json' ! -name '*.sigstore.json' -print0 \
+            | sort -z | xargs -0 sha256sum > SHA256SUMS
+
+      - name: Generate CycloneDX dependency SBOM (Syft)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: artifacts/sbom.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.8.1
+
+      - name: Keyless-sign checksum manifest (Sigstore)
+        env:
+          COSIGN_YES: "true"
+        run: |
+          cosign sign-blob \
+            --bundle artifacts/SHA256SUMS.sigstore.json \
+            artifacts/SHA256SUMS
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@520d128f165991a6c774bcb264f323e3d70747f4 # v2.2.0
+        with:
+          subject-path: |
+            artifacts/*
+
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && needs.set-version.outputs.tag || github.ref_name }}
           name: Grafial ${{ needs.set-version.outputs.version }}
@@ -193,27 +337,28 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish-pypi:
-    needs: [set-version, build-wheels]
+    needs: [set-version, test-gate, build-wheels]
     runs-on: ubuntu-latest
     if: vars.PUBLISH_TO_PYPI == 'true'
+    permissions:
+      id-token: write
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set version in manifests
-        shell: bash
-        env:
-          VERSION: ${{ needs.set-version.outputs.version }}
-        run: ./scripts/set_version.sh
-
       - name: Download wheel artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           pattern: wheels-*
-          path: crates/grafial-python/dist
+          path: dist
           merge-multiple: true
 
-      - name: Publish to PyPI
-        working-directory: crates/grafial-python
-        run: |
-          pip install maturin
-          maturin publish --non-interactive --username __token__ --password ${{ secrets.PYPI_API_TOKEN }}
+      - name: List packages to upload
+        run: ls -la dist/
+
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
+        # Prefer repository trusted-publisher OIDC. If a legacy token is configured,
+        # uncomment and set secrets.PYPI_API_TOKEN instead of (or in addition to) OIDC.
+        # password: ${{ secrets.PYPI_API_TOKEN }}
