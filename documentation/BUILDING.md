@@ -362,6 +362,12 @@ WebAssembly package:
 # open http://localhost:8000/webapp/
 ```
 
+Build a self-contained static bundle for deployment to any web host:
+
+```bash
+./scripts/build_composer_dist.sh   # -> dist/composer, upload its contents
+```
+
 Headless tests for its logic modules:
 
 ```bash

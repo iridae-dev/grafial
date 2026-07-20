@@ -53,3 +53,5 @@ crates/grafial-wasm/pkg/
 .venv/
 webapp/tests/pkg-node/
 webapp/pkg/
+dist/
+webapp/examples/

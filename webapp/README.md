@@ -67,6 +67,25 @@ example and requires byte-for-byte identical execution results.
 - **CSV import** per node type: first column = instance name, remaining
   headers must match attribute names; cells may use `value @ precision`.
 
+## Deploying as a static site
+
+```bash
+./scripts/build_composer_dist.sh          # -> dist/composer (~1.7 MB)
+```
+
+Upload the contents of `dist/composer/` to any static host (S3/CloudFront,
+Netlify, GitHub Pages, nginx, shared hosting). The bundle is fully
+self-contained — wasm engine, app, and the repository examples — uses only
+relative paths (works from any subdirectory), and runs entirely client-side.
+Hosts should serve `.wasm` as `application/wasm` for streaming instantiation
+(all major hosts do; the loader falls back if not).
+
+Local preview of the exact bundle:
+
+```bash
+python3 -m http.server -d dist/composer 8080   # http://localhost:8080/
+```
+
 ## Development
 
 Pure logic (block splicing, code generation, CSV) lives in framework-free

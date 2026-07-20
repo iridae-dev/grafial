@@ -25,8 +25,11 @@ A visual editor for loading, creating, editing, running, and saving Grafial
 programs — entirely in the browser via the WebAssembly engine build:
 
 ```bash
-./scripts/serve_composer.sh
+./scripts/serve_composer.sh                # develop locally
 # open http://localhost:8000/webapp/
+
+./scripts/build_composer_dist.sh           # static bundle -> dist/composer,
+                                           # upload to any web host
 ```
 
 It provides a program map with dependency edges, a dockable inspector with

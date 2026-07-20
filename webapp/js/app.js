@@ -197,11 +197,14 @@ function initToolbar() {
     examplesSel.value = '';
     if (!name) return;
     try {
-      const resp = await fetch(`../crates/grafial-examples/${name}.grafial`);
+      // Bundled location first (static deploys); repo location as fallback
+      // for ad-hoc dev servers pointed at the repository root.
+      let resp = await fetch(`examples/${name}.grafial`);
+      if (!resp.ok) resp = await fetch(`../crates/grafial-examples/${name}.grafial`);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       openText(await resp.text());
     } catch (err) {
-      alert(`Could not load example '${name}' — serve the repository root (./scripts/serve_composer.sh). ${err}`);
+      alert(`Could not load example '${name}'. ${err}`);
     }
   });
 }
