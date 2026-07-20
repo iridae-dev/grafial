@@ -447,11 +447,11 @@ fn validate_belief_model(
                 prior,
                 categories,
             } => {
-                // Check group_by is valid
-                if group_by != "source" && group_by != "destination" {
+                // Check group_by is valid and currently supported by the runtime.
+                if group_by != "source" {
                     return Err(validation_error(
                         format!(
-                            "CategoricalPosterior 'group_by' must be 'source' or 'destination', got '{}'",
+                            "CategoricalPosterior 'group_by' must be 'source' (got '{}'; 'destination' is not yet implemented)",
                             group_by
                         ),
                         Some(&context),
@@ -959,6 +959,21 @@ fn validate_rule_inner(
     rule: &RuleDef,
     source: Option<&RuleSourceEntry>,
 ) -> Result<(), FrontendError> {
+    if let Some(mode) = rule.mode.as_deref() {
+        if mode != "for_each" && mode != "fixpoint" {
+            return Err(validation_error(
+                format!(
+                    "Rule '{}' has unknown mode '{}' (expected 'for_each' or 'fixpoint')",
+                    rule.name, mode
+                ),
+                Some(&ValidationContext::RuleWhere {
+                    rule: rule.name.clone(),
+                }),
+                None,
+            ));
+        }
+    }
+
     let where_ctx = ValidationContext::RuleWhere {
         rule: rule.name.clone(),
     };
@@ -3037,6 +3052,37 @@ flow F on M {
         assert!(err.to_string().contains("cannot reference itself"));
     }
 
+    #[test]
+    fn validate_belief_model_rejects_categorical_group_by_destination() {
+        let src = r#"
+schema S { node N {} edge E {} }
+belief_model M on S {
+  edge E { exist ~ Categorical(group_by=destination, prior=uniform, pseudo_count=1.0) }
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        let err = validate_program(&ast).expect_err("destination grouping unsupported");
+        assert!(err.to_string().contains("group_by"));
+        assert!(err.to_string().contains("source"));
+    }
+
+    #[test]
+    fn validate_rule_rejects_unknown_mode() {
+        let src = r#"
+schema S { node N {} edge E {} }
+belief_model M on S { edge E { exist ~ Bernoulli(prior=0.5, weight=2.0) } }
+rule R on M {
+  mode: banana
+  pattern (A:N)-[e:E]->(B:N)
+  action { }
+}
+"#;
+        let ast = crate::parser::parse_program(src).expect("parse");
+        let err = validate_program(&ast).expect_err("unknown mode");
+        assert!(err.to_string().contains("mode"));
+    }
+
+    #[test]
     #[test]
     fn validate_belief_model_rejects_non_positive_gaussian_prior_precision() {
         let src = r#"

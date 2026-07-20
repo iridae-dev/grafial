@@ -656,7 +656,7 @@ fn builtin_hover(token: &str) -> Option<lsp::HoverContents> {
         // Posterior types
         "Gaussian" | "GaussianPosterior" => Some(("Gaussian(mean=..., precision=...)", "Posterior for continuous attributes.\n\nLegacy alias: `GaussianPosterior(prior_mean=..., prior_precision=...)`.")),
         "Bernoulli" | "BernoulliPosterior" => Some(("Bernoulli(prior=..., weight=...)", "Beta-Bernoulli posterior for independent edges.\n\nLegacy alias: `BernoulliPosterior(prior=..., pseudo_count=...)`.")),
-        "Categorical" | "CategoricalPosterior" => Some(("Categorical(group_by=source, prior=uniform, pseudo_count=1.0)", "Dirichlet-Categorical posterior for competing edges.\n\nLegacy alias: `CategoricalPosterior(...)`. `group_by` accepts `source` or `destination`.")),
+        "Categorical" | "CategoricalPosterior" => Some(("Categorical(group_by=source, prior=uniform, pseudo_count=1.0)", "Dirichlet-Categorical posterior for competing edges.\n\nLegacy alias: `CategoricalPosterior(...)`. Currently only `group_by=source` is supported.")),
         // Keywords
         "schema" => Some(("schema Name { ... }", "Defines node and edge types for a graph schema.")),
         "belief_model" => Some(("belief_model Name on Schema { ... }", "Associates posterior models with a schema (nodes, edges).")),

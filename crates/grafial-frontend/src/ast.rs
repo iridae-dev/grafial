@@ -91,7 +91,7 @@ pub enum PosteriorType {
     },
     /// Categorical posterior (Dirichlet-Categorical) for competing edges
     Categorical {
-        /// Grouping direction: "source" or "destination"
+        /// Grouping direction. Currently only `"source"` is supported at runtime.
         group_by: String,
         /// Prior specification: either uniform (with pseudo_count) or explicit array
         prior: CategoricalPrior,
