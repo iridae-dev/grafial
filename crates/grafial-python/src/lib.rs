@@ -106,11 +106,26 @@ fn map_exec_error(err: ExecError) -> PyErr {
     }
 }
 
-/// Flow execution context with exported graphs and metrics.
+/// Flow execution context with exported graphs, metrics, and inference diagnostics.
 #[pyclass(name = "Context")]
 pub struct PyContext {
     graphs: HashMap<String, Py<PyBeliefGraph>>, // exported graphs
     metrics: HashMap<String, f64>,              // exported metrics
+    inference_diagnostics: Vec<PyInferenceDiagnostic>,
+}
+
+#[derive(Clone)]
+struct PyInferenceDiagnostic {
+    flow: String,
+    graph: String,
+    transform: String,
+    algorithm: String,
+    iterations_run: usize,
+    max_iterations: usize,
+    converged: bool,
+    final_max_message_delta: f64,
+    variable_count: usize,
+    connected_variable_count: usize,
 }
 
 #[pymethods]
@@ -133,6 +148,29 @@ impl PyContext {
         Ok(d)
     }
 
+    /// Inference diagnostics from `infer_beliefs` transforms in this flow.
+    ///
+    /// Non-convergence is not an exception; inspect `converged` on each event.
+    #[getter]
+    pub fn inference_diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let list = PyList::empty_bound(py);
+        for d in &self.inference_diagnostics {
+            let item = PyDict::new_bound(py);
+            item.set_item("flow", &d.flow)?;
+            item.set_item("graph", &d.graph)?;
+            item.set_item("transform", &d.transform)?;
+            item.set_item("algorithm", &d.algorithm)?;
+            item.set_item("iterations_run", d.iterations_run)?;
+            item.set_item("max_iterations", d.max_iterations)?;
+            item.set_item("converged", d.converged)?;
+            item.set_item("final_max_message_delta", d.final_max_message_delta)?;
+            item.set_item("variable_count", d.variable_count)?;
+            item.set_item("connected_variable_count", d.connected_variable_count)?;
+            list.append(item)?;
+        }
+        Ok(list)
+    }
+
     /// Get a single exported graph by name
     pub fn get_graph<'py>(&self, py: Python<'py>, name: &str) -> Option<Py<PyBeliefGraph>> {
         self.graphs.get(name).map(|g| g.clone_ref(py))
@@ -145,9 +183,10 @@ impl PyContext {
 
     fn __repr__(&self) -> String {
         format!(
-            "Context(graphs={}, metrics={})",
+            "Context(graphs={}, metrics={}, inference_diagnostics={})",
             self.graphs.len(),
-            self.metrics.len()
+            self.metrics.len(),
+            self.inference_diagnostics.len()
         )
     }
 }
@@ -171,7 +210,27 @@ impl PyContext {
             graphs.insert(alias, handle);
         }
         let metrics = fr.metric_exports;
-        Ok(Self { graphs, metrics })
+        let inference_diagnostics = fr
+            .inference_diagnostics
+            .into_iter()
+            .map(|d| PyInferenceDiagnostic {
+                flow: d.flow,
+                graph: d.graph,
+                transform: d.transform,
+                algorithm: d.algorithm,
+                iterations_run: d.iterations_run,
+                max_iterations: d.max_iterations,
+                converged: d.converged,
+                final_max_message_delta: d.final_max_message_delta,
+                variable_count: d.variable_count,
+                connected_variable_count: d.connected_variable_count,
+            })
+            .collect();
+        Ok(Self {
+            graphs,
+            metrics,
+            inference_diagnostics,
+        })
     }
 }
 
