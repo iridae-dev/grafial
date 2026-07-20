@@ -24,4 +24,8 @@ rm -f "$root/Cargo.toml.bak"
 sed -i.bak '/^\[project\]$/,/^\[/ s/^version = ".*"/version = "'"$ver"'"/' "$root/crates/grafial-python/pyproject.toml"
 rm -f "$root/crates/grafial-python/pyproject.toml.bak"
 
+# grafial-lsp does not inherit workspace.package version
+sed -i.bak 's/^version = ".*"/version = "'"$ver"'"/' "$root/crates/grafial-lsp/Cargo.toml"
+rm -f "$root/crates/grafial-lsp/Cargo.toml.bak"
+
 echo "Version set to $ver"
