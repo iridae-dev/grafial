@@ -53,5 +53,5 @@ version = "1"
 version = "1"
 
 [workspace.dependencies.criterion]
-version = "0.5"
+version = "0.8"
 features = ["html_reports"]
