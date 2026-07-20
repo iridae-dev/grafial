@@ -44,7 +44,7 @@ cranelift-frontend = "0.125"
 cranelift-jit = "0.125"
 cranelift-module = "0.125"
 cranelift-native = "0.125"
-cranelift-object = "0.125"
+cranelift-object = "0.129"
 
 [workspace.dependencies.pretty_assertions]
 version = "1"
