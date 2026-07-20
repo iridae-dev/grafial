@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "grafial-benches"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "criterion",
  "grafial-core",
@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "grafial-cli"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "grafial-core",
@@ -765,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "grafial-core"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "bincode",
  "cranelift-codegen",
@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "grafial-frontend"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "pest",
  "pest_derive",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "grafial-ir"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "grafial-frontend",
  "thiserror",
@@ -809,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "grafial-lsp"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "grafial-frontend",
  "pest",
@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "grafial-python"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "grafial-core",
  "grafial-frontend",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "grafial-tests"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "grafial-core",
  "grafial-frontend",
@@ -841,7 +841,7 @@ dependencies = [
 
 [[package]]
 name = "grafial-wasm"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "grafial-core",
  "grafial-frontend",
