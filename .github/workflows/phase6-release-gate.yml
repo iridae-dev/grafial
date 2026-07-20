@@ -58,17 +58,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust MSRV 1.83
+      - name: Install Rust MSRV 1.91
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
-          toolchain: "1.83"
+          toolchain: "1.91"
 
       - name: Cache cargo builds
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Build and test on MSRV
         run: |
-          cargo +1.83 test --workspace --locked
+          cargo +1.91 test --workspace --locked
 
   wasm-build:
     runs-on: ubuntu-latest

@@ -4,7 +4,7 @@ This document describes how to build and install the Grafial engine and CLI tool
 
 ## Prerequisites
 
-- **Rust**: Version 1.83 or later (install from [rustup.rs](https://rustup.rs/))
+- **Rust**: Version 1.91 or later (install from [rustup.rs](https://rustup.rs/))
 - **Cargo**: Included with Rust installation
 - **Nix** (optional): For development environment with pinned toolchains (see [shell.nix](../shell.nix))
 
@@ -208,7 +208,7 @@ This provides:
 ### Without Nix
 
 Ensure you have:
-- Rust 1.83+ installed via `rustup`
+- Rust 1.91+ installed via `rustup`
 - Standard build tools for your platform
 
 ## Features
@@ -259,7 +259,7 @@ Workspace builds of `grafial-cli` include JSON support by default. If you are bu
 
 ### Build errors
 
-- Ensure you're using Rust 1.83 or later: `rustc --version`
+- Ensure you're using Rust 1.91 or later: `rustc --version`
 - Try cleaning and rebuilding: `cargo clean && cargo build --workspace`
 - Check that all dependencies are available: `cargo update`
 
