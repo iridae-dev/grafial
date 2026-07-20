@@ -243,6 +243,7 @@ pub struct PyBeliefGraph {
 #[pymethods]
 impl PyBeliefGraph {
     /// Iterate nodes, optionally filtered by label.
+    #[pyo3(signature = (label=None))]
     pub fn nodes(&self, label: Option<&str>) -> PyResult<Vec<PyNodeView>> {
         let mut out = Vec::new();
         for n in self.inner.nodes() {
@@ -261,6 +262,7 @@ impl PyBeliefGraph {
     }
 
     /// Iterate edges, optionally filtered by edge type.
+    #[pyo3(signature = (edge_type=None))]
     pub fn edges(&self, edge_type: Option<&str>) -> PyResult<Vec<PyEdgeView>> {
         let mut out = Vec::new();
         for e in self.inner.edges() {
@@ -281,6 +283,7 @@ impl PyBeliefGraph {
     }
 
     /// Iterate competing edge groups, optionally filtered by edge type.
+    #[pyo3(signature = (edge_type=None))]
     pub fn competing_groups(&self, edge_type: Option<&str>) -> PyResult<Vec<PyCompetingGroup>> {
         let mut out = Vec::new();
         for group in self.inner.competing_groups().values() {
@@ -370,6 +373,7 @@ impl PyBeliefGraph {
     }
 
     /// Export to NetworkX Graph, filtering edges by probability threshold
+    #[pyo3(signature = (threshold=None))]
     pub fn to_networkx(&self, py: Python<'_>, threshold: Option<f64>) -> PyResult<PyObject> {
         let threshold = threshold.unwrap_or(0.0);
         // Try import networkx
@@ -597,6 +601,7 @@ pub struct PyCompetingGroup {
 #[pymethods]
 impl PyCompetingGroup {
     /// Winner category by max probability; None if tied within epsilon
+    #[pyo3(signature = (epsilon=None))]
     pub fn winner(&self, epsilon: Option<f64>) -> Option<String> {
         let epsilon = epsilon.unwrap_or(0.01);
         // Parse source_node string back to NodeId
@@ -784,6 +789,7 @@ pub fn run_flow_with_context(
 ///
 /// Optionally accepts a prior Context for chaining. Releases the GIL during execution.
 #[pyfunction]
+#[pyo3(signature = (program, flow_name, evidence, ctx=None))]
 pub fn run_flow_with_evidence(
     py: Python<'_>,
     program: &PyProgram,
