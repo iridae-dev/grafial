@@ -3,9 +3,9 @@
   
 # Grafial
 
-Grafial is a declarative language and runtime for reasoning over uncertain graphs.
+**Model graphs where connections are hypotheses, not facts.**
 
-Use it when your domain is naturally graph-shaped, but nodes, attributes, and relationships cannot honestly be represented as fixed facts. Grafial lets you define prior beliefs, update them as evidence arrives, match graph patterns probabilistically, and assemble the resulting rules and analyses into deterministic, auditable flows.
+Grafial is a declarative language and runtime for reasoning over uncertain graphs. Use it when your domain is naturally graph-shaped, but nodes, attributes, and relationships cannot honestly be represented as fixed facts. Grafial lets you define prior beliefs, update them as evidence arrives, match graph patterns probabilistically, and assemble the resulting rules and analyses into deterministic, auditable flows.
 
 Instead of maintaining a graph alongside a separate collection of confidence scores, Bayesian updates, threshold rules, and pipeline scripts, you describe them together in a version-controlled .grafial program.
 
@@ -40,7 +40,7 @@ Open the [Grafial Composer](https://grafial.iridae.com/), select:
 
 That example starts with uncertain claims about friendships and influence:
 
-```
+```grafial
 edge FRIENDS {
   exist ~ Bernoulli(prior=0.5, weight=2.0)
 }
@@ -48,7 +48,7 @@ edge FRIENDS {
 
 Evidence can repeat or conflict:
 
-```
+```grafial
 FRIENDS(Person -> Person) {
   "Alice" -> "Bob";
   "Alice" -> "Bob";
@@ -62,7 +62,7 @@ FRIENDS(Person -> Person) {
 
 Grafial accumulates those observations into posterior beliefs. A rule can then match only relationships that are sufficiently credible:
 
-```
+```grafial
 rule PropagateInfluence on SocialBeliefs {
   pattern
     (A:Person)-[friend:FRIENDS]->(B:Person)
@@ -85,7 +85,7 @@ The relationship never has to become an artificial true or false. Rules can reas
 
 A flow makes the analysis reproducible:
 
-```
+```grafial
 flow SocialAnalysis on SocialBeliefs {
   graph observed = from_evidence SocialEvidence
   graph updated = observed |> apply_rule PropagateInfluence
@@ -113,7 +113,7 @@ A program is built from five kinds of declaration:
 
 For example:
 
-```
+```grafial
 schema Network {
   node Entity {
     risk: Real
@@ -151,14 +151,20 @@ Grafial currently includes:
 - intervention audits and inference diagnostics;
 - a CLI, Python bindings, Rust APIs, WebAssembly bindings, an LSP, and a browser-based visual Composer.
 
-Grafial is alpha software. Its probabilistic semantics are intentionally explicit and limited rather than pretending to be a general-purpose inference system. See the language guide and normative probabilistic semantics for the precise behavior.
+Grafial is alpha software. Its probabilistic semantics are intentionally explicit and limited rather than pretending to be a general-purpose inference system. 
+See the [language guide](documentation/LANGUAGE_GUIDE.md) and
+[normative probabilistic semantics](documentation/PROBABILISTIC_SEMANTICS.md)
+for the precise behavior.
 
 ## Install
 
 ### Python
 
-```
+```bash
 pip install grafial
+```
+
+```python
 import pathlib
 import grafial
 
@@ -182,7 +188,7 @@ grafial analysis.grafial --flow Analysis --output json
 
 ### Browser
 
-The [Grafial Composer](https://github.com/iridae-dev/grafial/blob/main/webapp/README.md) runs the WebAssembly engine entirely in the browser. It includes structured editors for schemas, belief models, evidence, rules, and flows, plus posterior graph visualization, metrics, rule audits, and inference diagnostics.
+The [Grafial Composer](https://grafial.iridae.com/) runs the WebAssembly engine entirely in the browser. It includes structured editors for schemas, belief models, evidence, rules, and flows, plus posterior graph visualization, metrics, rule audits, and inference diagnostics.
 
 ### Explore the examples
 
