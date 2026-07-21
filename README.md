@@ -8,7 +8,8 @@ This repository is a monorepo containing the language frontend, IR, execution en
 CLI, Python bindings, WebAssembly bindings, a browser-based visual composer,
 tests, and benchmarks.
 
-[![All Tests](https://github.com/iridae-dev/grafial/actions/workflows/phase6-release-gate.yml/badge.svg)](https://github.com/iridae-dev/grafial/actions/workflows/phase6-release-gate.yml) [![Release](https://github.com/iridae-dev/grafial/actions/workflows/release.yml/badge.svg)](https://github.com/iridae-dev/grafial/actions/workflows/release.yml)
+[![All Tests](https://github.com/iridae-dev/grafial/actions/workflows/phase6-release-gate.yml/badge.svg)](https://github.com/iridae-dev/grafial/actions/workflows/phase6-release-gate.yml) [![Release](https://img.shields.io/github/v/release/iridae-dev/grafial)](
+  https://github.com/iridae-dev/grafial/releases/latest)
 
 
 ## Install
