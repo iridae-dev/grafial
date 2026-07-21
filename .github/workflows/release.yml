@@ -352,6 +352,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    # Optional: set this to match a PyPI trusted-publisher "Environment" name.
+    # Leave unset when publishing with PYPI_API_TOKEN (as in v0.2.0).
+    # environment: pypi
     steps:
       - name: Download wheel artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -363,11 +366,12 @@ jobs:
       - name: List packages to upload
         run: ls -la dist/
 
-      - name: Publish to PyPI (trusted publishing)
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1
         with:
           packages-dir: dist/
           skip-existing: true
-        # Prefer repository trusted-publisher OIDC. If a legacy token is configured,
-        # uncomment and set secrets.PYPI_API_TOKEN instead of (or in addition to) OIDC.
-        # password: ${{ secrets.PYPI_API_TOKEN }}
+          # v0.2.0 published via API token (maturin publish + PYPI_API_TOKEN).
+          # Trusted publishing (OIDC) only works after a matching publisher is
+          # registered on PyPI; until then keep the token path.
+          password: ${{ secrets.PYPI_API_TOKEN }}
