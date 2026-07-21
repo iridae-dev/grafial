@@ -188,7 +188,13 @@ jobs:
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           command: build
-          args: --release --out dist ${{ (matrix.os == 'ubuntu-22.04' && matrix.python-version == '3.11') && '--sdist' || '' }}
+          # manylinux builds are containerized: host setup-python is ignored.
+          # Pin the interpreter explicitly for each matrix cell.
+          args: >-
+            --release
+            --out dist
+            -i python${{ matrix.python-version }}
+            ${{ (matrix.os == 'ubuntu-22.04' && matrix.python-version == '3.11') && '--sdist' || '' }}
           manylinux: ${{ matrix.os == 'ubuntu-22.04' && '2_17' || 'off' }}
           working-directory: crates/grafial-python
           sccache: "true"
