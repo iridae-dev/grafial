@@ -161,6 +161,7 @@ impl FlowCompiler {
         let entry_symbol = format!("flow_{}_execute", sanitize_name(&flow.name));
 
         // Build the function
+        let fe_cfg = self.module.as_ref().unwrap().isa().frontend_config();
         let mut builder = FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
         let entry_block = builder.create_block();
         builder.append_block_params_for_function_params(entry_block);
@@ -173,7 +174,7 @@ impl FlowCompiler {
         let status = self.compile_flow_body(&mut builder, graph_ptr, flow)?;
 
         builder.ins().return_(&[status]);
-        builder.finalize();
+        builder.finalize(fe_cfg);
 
         // Get module reference for declaration and definition
         let module = self.module.as_mut().unwrap();
