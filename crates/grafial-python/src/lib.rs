@@ -785,8 +785,7 @@ pub fn run_flow_with_context(
         prior.exports.insert(alias.clone(), g);
     }
 
-    let result =
-        py.detach(|| grafial_core::run_flow(&program.inner, flow_name, Some(&prior)));
+    let result = py.detach(|| grafial_core::run_flow(&program.inner, flow_name, Some(&prior)));
     match result {
         Ok(fr) => PyContext::from_flow_result(py, fr),
         Err(err) => Err(map_exec_error(err)),
