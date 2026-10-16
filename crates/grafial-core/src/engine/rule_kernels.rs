@@ -19,7 +19,7 @@
 #[cfg(feature = "jit")]
 use cranelift_codegen::ir::condcodes::FloatCC;
 #[cfg(feature = "jit")]
-use cranelift_codegen::ir::{types, AbiParam, InstBuilder, MemFlags, Value};
+use cranelift_codegen::ir::{types, AbiParam, InstBuilder, MemFlagsData, Value};
 #[cfg(feature = "jit")]
 use cranelift_codegen::settings::{self, Configurable};
 #[cfg(feature = "jit")]
@@ -273,6 +273,8 @@ fn compile_predicate_kernel(
     ctx.func.signature.params.push(AbiParam::new(types::I64)); // globals ptr
     ctx.func.signature.returns.push(AbiParam::new(types::I8)); // boolean result
 
+    let fe_cfg = module.isa().frontend_config();
+
     let mut builder = FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
     let entry_block = builder.create_block();
     builder.append_block_params_for_function_params(entry_block);
@@ -303,7 +305,7 @@ fn compile_predicate_kernel(
     let bool_result = builder.ins().select(cmp, one, zero_i8);
 
     builder.ins().return_(&[bool_result]);
-    builder.finalize();
+    builder.finalize(fe_cfg);
 
     // Compile to machine code
     // Use a simple counter for function names
@@ -369,8 +371,8 @@ impl ExprCompileCtx<'_> {
 #[cfg(feature = "jit")]
 fn load_f64_from_ptr(builder: &mut FunctionBuilder<'_>, base_ptr: Value, idx: usize) -> Value {
     let offset = (idx * std::mem::size_of::<f64>()) as i64;
-    let addr = builder.ins().iadd_imm(base_ptr, offset);
-    builder.ins().load(types::F64, MemFlags::new(), addr, 0)
+    let addr = builder.ins().iadd_imm_s(base_ptr, offset);
+    builder.ins().load(types::F64, MemFlagsData::new(), addr, 0)
 }
 
 #[cfg(feature = "jit")]
