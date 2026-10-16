@@ -26,7 +26,7 @@
     "url": "https://github.com/iridae-dev/grafial"
   },
   "dependencies": {
-    "vscode-languageclient": "^9.0.0"
+    "vscode-languageclient": "^10.1.2"
   },
   "contributes": {
     "configuration": {
