@@ -11,7 +11,7 @@ use grafial_core::ExecError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyModule};
-use pyo3::{Bound, PyObject};
+use pyo3::Bound;
 use std::collections::HashMap;
 
 /// FORCE_PRECISION constant from grafial-core (1e6)
@@ -86,7 +86,7 @@ impl PyProgram {
 #[pyfunction]
 pub fn compile(py: Python<'_>, source: &str) -> PyResult<PyProgram> {
     // Release the GIL for potentially heavy parsing/validation
-    let ast_result = py.allow_threads(|| grafial_core::parse_and_validate(source));
+    let ast_result = py.detach(|| grafial_core::parse_and_validate(source));
     match ast_result {
         Ok(ast) => Ok(PyProgram {
             inner: Arc::new(ast),
@@ -136,7 +136,7 @@ struct PyInferenceDiagnostic {
 impl PyContext {
     #[getter]
     pub fn graphs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let d = PyDict::new_bound(py);
+        let d = PyDict::new(py);
         for (k, v) in &self.graphs {
             d.set_item(k, v)?;
         }
@@ -145,7 +145,7 @@ impl PyContext {
 
     #[getter]
     pub fn metrics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let d = PyDict::new_bound(py);
+        let d = PyDict::new(py);
         for (k, v) in &self.metrics {
             d.set_item(k, v)?;
         }
@@ -157,9 +157,9 @@ impl PyContext {
     /// Non-convergence is not an exception; inspect `converged` on each event.
     #[getter]
     pub fn inference_diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let list = PyList::empty_bound(py);
+        let list = PyList::empty(py);
         for d in &self.inference_diagnostics {
-            let item = PyDict::new_bound(py);
+            let item = PyDict::new(py);
             item.set_item("flow", &d.flow)?;
             item.set_item("graph", &d.graph)?;
             item.set_item("transform", &d.transform)?;
@@ -317,9 +317,9 @@ impl PyBeliefGraph {
     }
 
     /// Export to pandas DataFrames: (nodes_df, edges_df)
-    pub fn to_pandas(&self, py: Python<'_>) -> PyResult<(PyObject, PyObject)> {
+    pub fn to_pandas(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
         // Try import pandas
-        let pandas = match PyModule::import_bound(py, "pandas") {
+        let pandas = match PyModule::import(py, "pandas") {
             Ok(m) => m,
             Err(_) => {
                 return Err(PyRuntimeError::new_err(
@@ -337,9 +337,9 @@ impl PyBeliefGraph {
         }
 
         // Build nodes records
-        let nodes_list = PyList::empty_bound(py);
+        let nodes_list = PyList::empty(py);
         for n in self.inner.nodes() {
-            let rec = PyDict::new_bound(py);
+            let rec = PyDict::new(py);
             rec.set_item("id", n.id.0.to_string())?;
             rec.set_item("label", n.label.as_ref())?;
             for k in &attr_keys {
@@ -355,9 +355,9 @@ impl PyBeliefGraph {
         }
 
         // Build edges records
-        let edges_list = PyList::empty_bound(py);
+        let edges_list = PyList::empty(py);
         for e in self.inner.edges() {
-            let rec = PyDict::new_bound(py);
+            let rec = PyDict::new(py);
             rec.set_item("src", e.src.0.to_string())?;
             rec.set_item("dst", e.dst.0.to_string())?;
             rec.set_item("type", e.ty.as_ref())?;
@@ -377,15 +377,15 @@ impl PyBeliefGraph {
         // DataFrames
         let nodes_df = pandas.getattr("DataFrame")?.call1((&nodes_list,))?;
         let edges_df = pandas.getattr("DataFrame")?.call1((&edges_list,))?;
-        Ok((nodes_df.into_py(py), edges_df.into_py(py)))
+        Ok((nodes_df.unbind(), edges_df.unbind()))
     }
 
     /// Export to NetworkX Graph, filtering edges by probability threshold
     #[pyo3(signature = (threshold=None))]
-    pub fn to_networkx(&self, py: Python<'_>, threshold: Option<f64>) -> PyResult<PyObject> {
+    pub fn to_networkx(&self, py: Python<'_>, threshold: Option<f64>) -> PyResult<Py<PyAny>> {
         let threshold = threshold.unwrap_or(0.0);
         // Try import networkx
-        let nx = match PyModule::import_bound(py, "networkx") {
+        let nx = match PyModule::import(py, "networkx") {
             Ok(m) => m,
             Err(_) => {
                 return Err(PyRuntimeError::new_err(
@@ -398,7 +398,7 @@ impl PyBeliefGraph {
 
         // Add nodes with attributes
         for n in self.inner.nodes() {
-            let attrs = PyDict::new_bound(py);
+            let attrs = PyDict::new(py);
             attrs.set_item("label", n.label.as_ref())?;
             for (k, v) in &n.attrs {
                 attrs.set_item(format!("{}_mean", k), v.mean)?;
@@ -413,7 +413,7 @@ impl PyBeliefGraph {
             if prob < threshold {
                 continue;
             }
-            let attrs = PyDict::new_bound(py);
+            let attrs = PyDict::new(py);
             attrs.set_item("type", e.ty.as_ref())?;
             attrs.set_item("prob", prob)?;
             let forced = match &e.exist {
@@ -429,7 +429,7 @@ impl PyBeliefGraph {
             )?;
         }
 
-        Ok(g.into_py(py))
+        Ok(g.unbind())
     }
 
     fn __repr__(&self) -> String {
@@ -755,7 +755,7 @@ impl PyEvidence {
 /// Releases the GIL during execution.
 #[pyfunction]
 pub fn run_flow(py: Python<'_>, program: &PyProgram, flow_name: &str) -> PyResult<PyContext> {
-    let result = py.allow_threads(|| grafial_core::run_flow(&program.inner, flow_name, None));
+    let result = py.detach(|| grafial_core::run_flow(&program.inner, flow_name, None));
     match result {
         Ok(fr) => PyContext::from_flow_result(py, fr),
         Err(err) => Err(map_exec_error(err)),
@@ -785,8 +785,7 @@ pub fn run_flow_with_context(
         prior.exports.insert(alias.clone(), g);
     }
 
-    let result =
-        py.allow_threads(|| grafial_core::run_flow(&program.inner, flow_name, Some(&prior)));
+    let result = py.detach(|| grafial_core::run_flow(&program.inner, flow_name, Some(&prior)));
     match result {
         Ok(fr) => PyContext::from_flow_result(py, fr),
         Err(err) => Err(map_exec_error(err)),
@@ -843,7 +842,7 @@ pub fn run_flow_with_evidence(
         }
     };
 
-    let result = py.allow_threads(|| match &prior {
+    let result = py.detach(|| match &prior {
         Some(p) => grafial_core::engine::flow_exec::run_flow_with_builder(
             &program.inner,
             flow_name,
