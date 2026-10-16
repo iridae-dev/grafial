@@ -33,7 +33,7 @@ use std::sync::Arc;
 
 use cranelift_codegen::ir::condcodes::FloatCC;
 use cranelift_codegen::ir::types::F64;
-use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags};
+use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlagsData};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
@@ -209,6 +209,7 @@ pub fn compile_metric_expr(expr: &ExprIR) -> Option<CompiledMetricFn> {
 
     {
         let mut fb_ctx = FunctionBuilderContext::new();
+        let fe_cfg = module.isa().frontend_config();
         let mut builder = FunctionBuilder::new(&mut ctx.func, &mut fb_ctx);
 
         let entry = builder.create_block();
@@ -222,7 +223,7 @@ pub fn compile_metric_expr(expr: &ExprIR) -> Option<CompiledMetricFn> {
         let result = lower_metric_expr(expr, &var_order, vars_ptr, &mut builder)
             .expect("pre-checked metric expr should lower successfully");
         builder.ins().return_(&[result]);
-        builder.finalize();
+        builder.finalize(fe_cfg);
     }
 
     module.define_function(func_id, &mut ctx).ok()?;
@@ -304,7 +305,7 @@ fn lower_metric_expr(
             let byte_offset = (idx * std::mem::size_of::<f64>()) as i32;
             let val = builder
                 .ins()
-                .load(F64, MemFlags::trusted(), vars_ptr, byte_offset);
+                .load(F64, MemFlagsData::trusted(), vars_ptr, byte_offset);
             Some(val)
         }
         ExprIR::Unary { op, expr } => {
@@ -351,6 +352,7 @@ pub fn compile_prune_expr(expr: &ExprIR) -> Option<CompiledPruneFn> {
 
     {
         let mut fb_ctx = FunctionBuilderContext::new();
+        let fe_cfg = module.isa().frontend_config();
         let mut builder = FunctionBuilder::new(&mut ctx.func, &mut fb_ctx);
 
         let entry = builder.create_block();
@@ -364,7 +366,7 @@ pub fn compile_prune_expr(expr: &ExprIR) -> Option<CompiledPruneFn> {
         let result = lower_prune_expr(expr, edge_prob, &mut builder)
             .expect("pre-checked prune expr should lower successfully");
         builder.ins().return_(&[result]);
-        builder.finalize();
+        builder.finalize(fe_cfg);
     }
 
     module.define_function(func_id, &mut ctx).ok()?;
